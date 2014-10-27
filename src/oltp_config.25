@@ -1,0 +1,60 @@
+# Folder in which `isql` utility must be present
+# (do NOT use final backslash here).
+# If folder contain spaces, enclose in quotes each part 
+# of path that contain spaces, i.e.:
+# fbc=C:\"Program Files"\"Firebird 2.5"\Classic\bin
+
+fbc=C:\MIX\firebird\fb25\bin
+
+# Where to store work and error log:
+# (do NOT use `%` as reference to some env. vars like TEMP)
+tmpdir=!temp!\logs.oltp25
+
+# is_embed=1 - if Firebird runs in embedded mode, otherwise 0
+is_embed=0
+
+# Name of our test database:
+dbnm=oltp25
+
+# Should set transaction command include NO AUTO UNDO clause ?
+no_auto_undo=1
+
+# Do we use mtee.exe utility to provide timestamps for error messages before they
+# are logged in .err files ?
+use_mtee=0
+
+# Add in ISQL logs detailed info for each iteration (select from perf_log...) ?
+detailed_info=0
+
+# Number of documents, total of all types, for initial data population
+# (only new documents creation occurs, no removals).
+# Recommended value: at least 30000 
+init_docs=30000
+
+# Number of pages for usage during init data population ("-c" switch for ISQL),
+# actual only for CS and SC, will be ignored in SS.
+# (check that it is LESS than FileSystemCacheThreshold, which default is 65536)
+init_buff=32768
+
+# Should script be PAUSED after finish creating <init_docs> documents
+# (for making copy of .fdb and restore it on the following runs thus
+# avoiding to make init_docs again):
+wait_for_copy=0
+
+# Time (in minutes) to warm-up database after initial data population
+# will finish and before all following operations will be measured:
+# Recommended value: at least 20 for Firebird 2.5
+warm_time=20
+
+# Limit (in minutes) to measure operations before test autostop itself:
+# Recommended value: at least 60
+test_time=60
+
+# Rest params not needed if embedded mode 
+# but should be non-empty to run batch:
+
+usr=SYSDBA
+pwd=masterke
+host=127.0.0.1
+port=3253
+
