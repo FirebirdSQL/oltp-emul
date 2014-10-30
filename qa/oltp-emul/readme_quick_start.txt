@@ -36,22 +36,22 @@ Copyright (c) 2014 Pavel Zotov, Moscow, Russia.
 
    Pay attention to the following parameters:
    ----------- QUOTE ----------
-	# number of documents, total of all types, for initial data population
-	# (only new documents creation occurs, no removals):
-	# recommended value: at least 30000 
-	init_docs=30000
+        # number of documents, total of all types, for initial data population
+        # (only new documents creation occurs, no removals):
+        # recommended value: at least 30000 
+        init_docs=30000
 
-	# should script be PAUSED after finish creating <init_docs> documents
-	# (for making copy of .fdb and restore it on the following runs thus
-	# avoiding to make init_docs again):
-	wait_for_copy=0
+        # should script be PAUSED after finish creating <init_docs> documents
+        # (for making copy of .fdb and restore it on the following runs thus
+        # avoiding to make init_docs again):
+        wait_for_copy=0
 
-	# time (in minutes) to warm-up database after initial data population
-	# will finish and before all following operations will be measured:
-	warm_time=10
+        # time (in minutes) to warm-up database after initial data population
+        # will finish and before all following operations will be measured:
+        warm_time=10
 
-	# max time (in minutes) to measure operations before test autostop itself:
-	test_time=60
+        # max time (in minutes) to measure operations before test autostop itself:
+        test_time=60
    -------- END OF QUOTE -------
 
    For the first time you can assign to 'init_docs' some low value, e.g. 500 or 1000.
@@ -171,5 +171,3 @@ Copyright (c) 2014 Pavel Zotov, Moscow, Russia.
    Windows host, run Notepad.exe and load this file in editor using Ctrl-O ("Open File" dialog).
 
 9. Full description of test: doc/oltp_emul_test_for_firebird_25_and_30_-_description.doc (rus)
-
-10. Samples of performance analysis see in folder 'reports' (several .xls files for each FB version)
