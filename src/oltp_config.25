@@ -13,7 +13,9 @@ tmpdir=!temp!\logs.oltp25
 # is_embed=1 - if Firebird runs in embedded mode, otherwise 0
 is_embed=0
 
-# Name of our test database:
+# Alias or full path and file name of database.
+# If you want this database be created by test itself, specify it as
+# full path and file name. No spaces or non-latin characters can be here!
 dbnm=oltp25
 
 # Should set transaction command include NO AUTO UNDO clause ?
