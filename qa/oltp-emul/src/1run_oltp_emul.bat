@@ -29,21 +29,17 @@ for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
 if .%err_setenv%.==.1. goto err_setenv
 
 @rem check that result of PREVIOUSLY called batch (1build_oltp_emul_NN.bat) is OK:
-set err=%tmpdir%\1build_oltp_emul_%fb%.err
-for /f "usebackq" %%A in ('%err%') do set size=%%~zA
-if .%size%.==.. set size=0
-if %size% gtr 0 (
-  echo.
-  echo Script for building database objects finished with ERROR!
-  echo.
-  echo Check log: %err%
-  echo.
-  echo Press any key to FINISH this batch. . .
-  pause>nul
-  goto end
-)
+
+set build_err=0
+
+call :chk_build_result build_err
+
+@rem echo build_err=%build_err%
+if .%build_err%.==.1. goto end
 
 if not exist %fbc%\isql.exe goto bad_fbc_path
+if not exist %fbc%\gfix.exe goto bad_fbc_path
+if not exist %fbc%\fbsvcmgr.exe goto bad_fbc_path
 
 
 if .%is_embed%.==.. (
@@ -59,7 +55,51 @@ if .%is_embed%.==.. (
   goto end
 )
 
+
 md %tmpdir%\sql 2>nul
+
+@rem #######################################
+
+@rem Attempt to get server version together with OS: WIndows or LInux)
+
+echo|set /p=Getting Firebird info... 
+set tmplog=%tmpdir%\tmp_get_fb_db_info.log
+set tmperr=%tmpdir%\tmp_get_fb_db_info.err
+if .%is_embed%.==.1. (
+  %fbc%\fbsvcmgr localhost:service_mgr info_server_version 1>%tmplog% 2>%tmperr%
+) else (
+  %fbc%\fbsvcmgr %host%/%port%:service_mgr user %usr% password %pwd% info_server_version 1>%tmplog% 2>%tmperr%
+)
+
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo Could NOT define server version on host=^>%host%^<,   port=^>%port%^<
+  echo.
+  echo Result of trying to do that via fbsvcmgr:
+  echo ------------------------------------------------------------------
+  type %tmperr%
+  echo ------------------------------------------------------------------
+  echo.
+  echo 1. Ensure that Firebird is running on specified host.
+  echo 2. Check settings in %cfg%: host, port, user and password.
+  echo.
+  echo Press any key to FINISH this batch. . .
+  pause>nul
+  goto end
+)
+
+@rem result: log content = "Server version: LI-V2.5.3.26790 Firebird 2.5" etc
+for /f "usebackq tokens=3" %%a in ("%tmplog%") do (
+ set fbb=%%a
+ set fbo=!fbb:~0,2!
+)
+@echo build No ^>%fbb%^<
+del %tmperr% 2>nul
+del %tmplog% 2>nul
+
+@rem #######################################
 
 set tmpsql=%tmpdir%\tmp_init_data_pop.sql
 set tmplog=%tmpdir%\tmp_init_data_pop.log
@@ -67,54 +107,280 @@ set tmpchk=%tmpdir%\tmp_init_data_chk.sql
 set tmpclg=%tmpdir%\tmp_init_data_chk.log
 set tmperr=%tmpdir%\tmp_init_data_chk.err
 
-
-@rem --- check on non-empty stoptest.txt ---
+@echo Check that previous job of building database was finished OK.
 del %tmpchk% 2>nul
 del %tmpclg% 2>nul
 echo set heading off; set list on;>>%tmpchk%
-echo -- check that test now can be run (table 'ext_stoptest' must be EMPTY)>>%tmpchk%
-echo select iif( exists( select * from ext_stoptest ), >>%tmpchk%
-echo                     'TEST_CANCELLATION_FLAG_DETECTED', >>%tmpchk%
-echo                     'ALL_OK_-_TEST_CAN_BE_STARTED'>>%tmpchk%
-echo           ) as ">>> attention_msg >>>" >>%tmpchk%
+echo -- check that all database objects already exist: >>%tmpchk%
+echo select iif( exists( select * from semaphores where task='all_build_ok' ), >>%tmpchk%
+echo                     '1', >>%tmpchk%
+echo                     '0'>>%tmpchk%
+echo           ) as "db_build_finished_ok=" >>%tmpchk%
 echo from rdb$database;>>%tmpchk%
-type %tmpchk%
-@echo on
-if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -i %tmpchk% -nod -n 1>%tmpclg% 2>%tmperr%
-) else (
-  %fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod 1>%tmpclg% 2>%tmperr%
-)
 
-@echo off
-type %tmperr%
+if .%is_embed%.==.1. (
+   set run_isql=%fbc%\isql %dbnm% -i %tmpchk% -nod -n 
+) else (
+   set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod
+)
+@echo Command that now to be run:
+@echo %run_isql%
+echo Content of script %tmpchk%:
+@echo --------------------------
+type %tmpchk%
+@echo --------------------------
+cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
 
 for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
 if %size% gtr 0 (
-  @rem We can occur here if run this batch against EMPTY database.
   echo.
-  echo Script which check data in table 'EXT_STOPTEST' finished with ERROR!
-  echo Name of script: %tmpchk% 
-  echo.
-  echo #####################################################################
-  echo Probably database was not initialized, run 1build_oltp_emul.bat first
-  echo #####################################################################
-  echo.
-  echo Check error log: %tmperr%
-  echo.
-  echo Press any key to FINISH this batch. . .
-  pause>nul
-  goto end
+  echo RESULT: script finished with ERRORS.
+  echo --------------------------
+  type %tmperr%
+  echo --------------------------
+) else (
+  echo RESULT: script finished OK: database exists and online.
 )
 
+@rem NB: first line in error text DEPENDS on server OS!
+@rem win: I/O error during "CreateFile (open)" operation for file "c:\temp\test\badname.fdb"
+@rem      -Error while trying to open file
+@rem nix: I/O error during "open" operation for file "/var/db/fb25/badname.fdb"
+@rem      -Error while trying to open file
+@rem PS. Explanation: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1120390&msg=16689978
+
+@rem Seems that this can be on linux only:
+
+find /c /i "Is a directory" %tmperr% >nul
+if errorlevel 1 goto chk4open
+goto bad_dbnm
+
+:chk4open
+find /c /i "Error while trying to open file" %tmperr% >nul
+if errorlevel 1 goto chk4ods
+goto make_db
+
+:chk4ods
+find /c /i "unsupported on-disk" %tmperr% >nul
+if errorlevel 1 goto chk4online
+goto bad_ods
+
+:chk4online
+find /c /i "shutdown" %tmperr% >nul
+if errorlevel 1 goto chk4fin
+goto db_offline
+
+:chk4fin
+
+@rem database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
+@rem -------------------------------------------------------------------------------------------------------
+
+set db_build_finished_ok=2
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  set db_build_finished_ok=0
+) else (
+  @rem type %tmpclg%
+  for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
+    set /a %%a
+    if errorlevel 1 set err_setenv=1
+  )
+  if .%db_build_finished_ok%.==.. set db_build_finished_ok=0
+)
+echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
+echo.
+if .%db_build_finished_ok%.==.0. (
+  echo.
+  echo Database: ^>%dbnm%^< -- DOES exist but
+  echo its creation process was not completed.
+  echo.
+  echo ################################################################################
+  echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+  echo ################################################################################
+  echo.
+  pause>nul
+  goto :db_build
+) else (
+
+  echo Database ^>%dbnm%^< exists with all needed objects.
+  goto :chk_more
+
+)
+
+:make_db
+
+@rem If we are here than database is absent. Suggest to create it but only in case when
+@rem %dbnm% contains slashes (forwarding for LInux and backward for WIndows)
+if /i .%fbo%.==.LI. (
+  for /f "tokens=1,2 delims=/" %%a in ("%dbnm%") do ( 
+    set w1=%%a
+    set w2=%%b
+  )
+) else (
+  for /f "tokens=1,2 delims=\" %%a in ("%dbnm%") do ( 
+    set w1=%%a
+    set w2=%%b
+  )
+)
+
+if .%w1%.==.. goto bad_dbnm
+if .%w2%.==.. goto bad_dbnm
+
+@echo.
+@echo #########################################################
+@echo Database ^>%dbnm%^< does NOT exist on host ^>%host%^<. 
+@echo.
+@echo Press ENTER for attempt to CREATE it, Ctrl-C to QUIT. . .
+@echo #########################################################
+pause
+
+set tmpsql=%tmpdir%\tmp_create_dbnm.sql
+set tmplog=%tmpdir%\tmp_create_dbnm.log
+set tmperr=%tmpdir%\tmp_create_dbnm.err
+
+@echo Attempt to CREATE database. 
+if .%is_embed%.==.1. (
+   echo create database '%dbnm%' page_size 8192; commit; show database; exit;>%tmpsql%
+   set run_isql=%fbc%\isql -q -i %tmpsql%
+) else (
+   echo create database '%host%/%port%:%dbnm%' page_size 8192 user '%usr%' password '%pwd%'; commit; show database; exit;>%tmpsql%
+   set run_isql=%fbc%\isql -q -i %tmpsql% 
+   @rem 1^>%tmplog% 2^>%tmperr%
+)
+@echo Command to be run:
+@echo %run_isql%
+
+echo Content of script %tmpsql%:
+echo ---------------------------------------
+type %tmpsql% 
+echo ---------------------------------------
+
+cmd /c %run_isql% 1^>%tmplog% 2^>%tmperr%
+
+@rem win: -Error while trying to create file
+@rem nix: -Error while trying to create file
+
+find /c /i "Error while trying to create file" %tmperr% >nul
+if errorlevel 1 goto fill_db
+goto bad_dbnm
+
+:fill_db
+@rem If we are here than database has been just created (auto) and we must call 1build_oltp_emul.bat 
+
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo RESULT: script finished with ERRORS.
+  echo --------------------------
+  type %tmperr%
+  echo --------------------------
+) else (
+  echo RESULT: script finished OK, database has been created now.
+)
+
+:db_build
+
+echo #########################
+echo Call 1build_oltp_emul.bat 
+echo #########################
+
+call 1build_oltp_emul.bat %1 batch
+
+@rem check that result of just called batch (1build_oltp_emul_NN.bat) is OK:
+set build_err=0
+
+call :chk_build_result build_err
+
+@rem echo build_err=%build_err%
+if .%build_err%.==.1. goto end
+
+echo #########################################
+echo RETURN from 1build_oltp_emul.bat - all OK
+echo #########################################
+
+:chk_more
+
+set tmpsql=%tmpdir%\tmp_init_data_pop.sql
+set tmplog=%tmpdir%\tmp_init_data_pop.log
+set tmpchk=%tmpdir%\tmp_init_data_chk.sql
+set tmpclg=%tmpdir%\tmp_init_data_chk.log
+set tmperr=%tmpdir%\tmp_init_data_chk.err
+
+@rem ################### check for non-empty stoptest.txt ################################
 del %tmpchk% 2>nul
-find /c /i "CANCEL" %tmpclg% >nul
-if errorlevel 1 goto chk_init
-goto test_canc
-@rem --- --- --- --- --- --- --- --- --- ---
+del %tmpclg% 2>nul
+echo set heading off; set list on;>>%tmpchk%
+echo -- check that test now can be run: table 'ext_stoptest' must be EMPTY>>%tmpchk%
+echo select iif( exists( select * from ext_stoptest ), >>%tmpchk%
+echo                     '1', >>%tmpchk%
+echo                     '0'>>%tmpchk%
+echo           ) as "cancel_flag=" >>%tmpchk%
+echo from rdb$database;>>%tmpchk%
+@rem type %tmpchk%
+
+if .%is_embed%.==.1. (
+   set run_isql=%fbc%\isql %dbnm% -i %tmpchk% -nod -n 
+) else (
+   set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod
+)
+
+echo.
+echo Check for non-empty external file stoptest.txt. 
+echo Command that now to be run:
+echo %run_isql%
+echo Content of script %tmpchk%:
+echo --------------------------
+type %tmpchk%
+echo --------------------------
+
+cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
+
+set cancel_flag=2
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo RESULT: script finished with ERRORS.
+  echo --------------------------
+  type %tmperr%
+  echo --------------------------
+  echo.
+  echo Probably you have to open firebird.conf and set 'ExternalFileAccess'
+  echo to some folder where 'firebird' account has enough rights.
+  echo.
+  echo Press any key to FINISH. . .
+  pause>nul
+  goto end
+) else (
+  echo RESULT: script finished OK.
+
+  for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
+    set /a %%a
+    if errorlevel 1 set err_setenv=1
+  )
+  if .%cancel_flag%.==.. set cancel_flag=0
+)
+
+echo cancel_flag=^>^>^>%cancel_flag%^<^<^<
+
+del %tmpchk% 2>nul
+
+if .%cancel_flag%.==.1. (
+  goto test_canc
+)
+goto chk_init
+
+@rem --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 
 :chk_init
+
+echo.
+echo Check is the database needs to be filled up with necessary number of documents
+echo ##############################################################################
+
 del %tmpclg% 2>nul
 if /i .%init_docs%.==.. goto more
 if /i .%init_docs%.==.0. goto more
@@ -246,14 +512,15 @@ del %tmplog% 2>nul
 
 if .%fw_can_upd%.==.1. (
   @rem 1. add to perf_log table our intention to FIRST change FW, always to OFF
-  echo insert into perf_log(unit, aux1, dts_beg^) values ('fw_both_changes_done', %fw_current%, 'now'^);>>%tmpsql%
+  echo update or insert into perf_log (unit, aux1, aux2, dts_beg, dts_end^) >>%tmpsql%
+  echo values ('fw_both_changes_done', %fw_current%, null, 'now', null^) >>%tmpsql%
+  echo matching (unit^);>>%tmpsql%
   echo commit;>>%tmpsql%
   if .%is_embed%.==.1. (
     %fbc%\isql %dbnm% -i %tmpsql% -n -m -o %tmplog%
   ) else (
     %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  -m -o %tmplog%
   )
-
   @rem 2. run - perhaps LOCAL - gfix with command line for REMOTE database to set fw = OFF:
   if .%is_embed%.==.1. (
     %fbc%\gfix %dbnm% -w async
@@ -376,6 +643,7 @@ if .%is_embed%.==.1. (
   set /a k = k+1
 if %new_docs% lss %init_docs% goto iter_loop
 
+@rem If we are here than no more init docs should be created
 if %init_docs% gtr 0 (
   del %tmpchk% 2>nul
   del %tmpclg% 2>nul
@@ -398,9 +666,15 @@ if %init_docs% gtr 0 (
   @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
   @rem  R E S T O R E   I N I T    S T A T E    O F     F O R C E D   W R I T E S
   @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+  set tmpfwsql=!tmpdir!\tmp_restore_fw.sql
+  set tmpfwlog=!tmpdir!\tmp_restore_fw.log
+  del !tmpfwsql! 2>nul
+  set run_isql=
   if .%fw_can_upd%.==.1. (
-    @rem RESTORE old value of FW, in revert order
-    @rem 1. run - perhaps LOCAL - gfix with command line for REMOTE database to set fw = OFF:
+
+    echo RESTORE old value of FW.
+    echo.
+    echo %time% 1. Run gfix with command line for REMOTE database to set fw = %fw_mode%. . .
   
     if .%is_embed%.==.1. (
       %fbc%\gfix %dbnm% -w %fw_mode%
@@ -408,14 +682,20 @@ if %init_docs% gtr 0 (
       %fbc%\gfix %host%/%port%:%dbnm% -w %fw_mode% -user %usr% -pas %pwd%
     )
 
-    @rem 2. update in perf_log table our intention to REVERT change FW to its initial state:
-    echo update perf_log g set aux2=%fw_current%, dts_end='now' where g.unit='fw_both_changes_done';>>%tmpsql%
-    echo commit;>>%tmpsql%
+    echo %time% 2. Update in perf_log table our intention to REVERT change FW to its initial state. . .
+
+    echo set stat on; set echo on;>>!tmpfwsql!
+    echo update perf_log g set aux2=%fw_current%, dts_end='now' where g.unit='fw_both_changes_done';>>!tmpfwsql!
+    echo commit;>>!tmpfwsql!
+    echo set stat off;>>!tmpfwsql!
+    echo select aux1, aux2, dts_beg, dts_end from perf_log g where g.unit='fw_both_changes_done';>>!tmpfwsql!
     if .%is_embed%.==.1. (
-      %fbc%\isql %dbnm% -i %tmpsql% -n -m -o %tmplog%
+      set run_isql=%fbc%\isql %dbnm% -i !tmpfwsql! -nod 1^>!tmpfwlog! 2^>&1
     ) else (
-      %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  -m -o %tmplog%
+      set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i !tmpfwsql! -nod -user %usr% -pas %pwd% 1^>!tmpfwlog! 2^>^&1
     )
+    cmd /c !run_isql!
+    echo %time% Done, check log !tmpfwlog!
   )
  @rem echo fw_mode=%fw_mode%
  @rem echo check perf_log and FW after change to INITIAL
@@ -423,7 +703,7 @@ if %init_docs% gtr 0 (
  @rem exit
 
 
-  @echo %time%: FINISH initial data population.
+  @echo %time% FINISH initial data population.
   @echo.
   @echo Job has been done from %t0% to %time%. Count rows in doc_list: !act_docs!
 
@@ -438,6 +718,7 @@ if %init_docs% gtr 0 (
     @echo Press any key to begin WARM-UP and TEST mode. . .
     @pause>nul
   )
+
 )
 
 
@@ -666,9 +947,6 @@ goto end
 
 :no_env
   @echo off
-  cls
-  echo.
-  echo Batch running now: %~f0
   echo.
   echo THERE IS NO FILE WITH LIST OF ENV. VARIABLES TO BE SET.
   echo.
@@ -679,11 +957,67 @@ goto end
 
 :bad_fbc_path  
   @echo off
-  cls
   echo.
-  echo Batch running now: %~f0
+  echo There is NO Firebird command line utilities in the folder defined by 
+  echo variable 'fbc' = ^>^>^>%fbc%^<^<^<
   echo.
-  echo There is NO isql utility in the folder defined by variable 'fbc' = ^>^>^>%fbc%^<^<^<
+  echo This folder has to contain following executeble files: isql, gfix, fbsvcmgr
+  echo.
+  echo Press any key to FINISH. . .
+  echo.
+  @pause>nul
+  @goto end
+
+:bad_dbnm
+  @echo off
+  echo.
+  echo Invalid name for database in %cfg% file: ^>%dbnm%^<
+  echo.
+  echo If you want that database being auto-created:
+  echo 1) ensure that it specified as full path and file name rather than alias;
+  echo 2) ensure that all folders in its path already exists on the host;
+  echo 3) ensure that its name meet requirements of OS where Firebird runs;
+  echo.
+  echo Press any key to FINISH. . .
+  echo.
+  @pause>nul
+  @goto end
+
+:bad_ods
+  @echo off
+  echo.
+  echo Database ^>%dbnm%^< DOES exist but it has been created in later FB version.
+  echo.
+  echo 1. Ensure that you have specified proper value of 1st argument to this batch.
+  echo 2. Check value of 'dbnm' parameter in file %cfg%
+  echo.
+  echo Press any key to FINISH. . .
+  echo.
+  @pause>nul
+  @goto end
+
+:db_offline
+  @echo off
+  echo.
+  echo Database ^>%dbnm%^< DOES exist but is OFFLINE now. Test can not start.
+  echo Run first: 
+  echo            gfix -online %dbnm% -user %usr% -password %pwd%
+  echo.
+  echo Press any key to FINISH. . .
+  @pause>nul
+  goto end
+
+
+:build_not_finished
+  @echo off
+  echo.
+  echo Host: ^>%host%^<
+  echo Port: ^>%port%^<
+  echo Database: ^>%dbnm%^<
+  echo.
+  echo Building of database objects was INTERRUPTED or NOT STARTED.
+  echo Erase this database and try to run again either this batch
+  echo or 1build_oltp_emul.bat with 1st argument = %1
   echo.
   echo Press any key to FINISH. . .
   echo.
@@ -692,9 +1026,6 @@ goto end
 
 :no_script
   @echo off
-  cls
-  echo.
-  echo Batch running now: %~f0
   echo.
   echo THERE IS NO .SQL SCRIPT FOR SPECIFIED SCENARIO ^>^>^>%1^<^<^<
   echo.
@@ -705,9 +1036,6 @@ goto end
 
 :err_setenv
   @echo off
-  cls
-  echo.
-  echo Batch running now: %~f0
   echo.
   echo Config file: %cfg% - could NOT set new environment variables.
   echo.
@@ -718,11 +1046,10 @@ goto end
   
 :test_canc
   @echo off
-  cls
   echo.
-  echo Batch running now: %~f0
-  echo.
+  echo ##################################################################################
   echo FILE 'stoptest.txt' ON SERVER SIDE HAS NON-ZERO SIZE, MAKE IT EMPTY TO START TEST!
+  echo ##################################################################################
   echo.
   echo Press any key to FINISH. . .
   echo.
@@ -1171,4 +1498,29 @@ goto:eof
     )
   endlocal
 goto:eof
+
+:chk_build_result 
+  set err=!tmpdir!\1build_oltp_emul_!fb!.err
+  echo Subroutine :chk_build_result 
+  for /f "usebackq" %%A in ('%err%') do set size=%%~zA
+  if .%size%.==.. set size=0
+  if %size% gtr 0 (
+    echo.
+    echo Script for building database objects finished with ERROR!
+    echo.
+    echo Check log: %err%
+    echo.
+    echo Remove this file before starting again.
+    echo.
+    echo Press any key to FINISH this batch. . .
+    pause>nul
+    @rem endlocal&set build_err=1
+    endlocal&set %~1=1
+    goto end
+  ) else (
+    echo RESULT: no errors for building database objects.
+  )
+goto:eof
+
 :end
+

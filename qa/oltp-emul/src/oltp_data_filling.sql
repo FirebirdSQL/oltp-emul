@@ -15721,6 +15721,8 @@ begin
 end
 ^
 set term ;^
+-- this record is used as 'flag' in 1run_oltp_emul.bat that all completes OK:
+insert into semaphores(id, task) values(-1, 'all_build_ok');
 commit;
 
 drop table tmp$aux;

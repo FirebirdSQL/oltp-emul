@@ -12,23 +12,59 @@ Please READ all this file carefully before making any attempt to run test.
 
 In case of any questions feel free to contact: p519446@yandex.ru
 
-Copyright (c) 2014 Pavel Zotov, Moscow, Russia.
+(C) Pavel Zotov, Moscow, Russia. 2014.
 
 ===============================================================================
 
-0. CREATE database and add its name to aliases.conf (databases.conf in FB 3.0)
+0. Ensure that following Firebird console utilities present on machine from which
+   you are intend to run this test:
+   * isql
+   * gfix
+   * fbsvcmgr
 
-1. Edit your firebird.conf and uncomment setting: ExternalFileAccess 
+1. Create database and add its name to aliases.conf (databases.conf in FB 3.0).
+   You can skip creating database and just specify its name in the test configuration
+   file 'src/oltp_config.NN' (see below item "4" about it) - but in such case:
+   a) it must contain full path (/var/db/firebird/oltptest.fdb etc);
+   b) path and file name can NOT contain spaces or non-latin characters.
+
+2. Edit your firebird.conf and uncomment setting: ExternalFileAccess 
    Set its value to folder where you will create special file 'stoptest.txt'
    to force all attaches to cancel their operations and close ISQL sessions.
 
    Example:
    ExternalFileAccess  = Restrict /var/db/fb30
 
-2. Ensure that you have environment variable 'TEMP' and check that its value
-   does NOT contain spaces or non-latin characters.
+   It is highly recommended to increase values of following parameters:
 
-3. Change directory to 'src'. Open file 'oltp_config.NN' where NN:
+   * DefaultDBCachePages
+   * TempCacheLimit
+   * LockHashSlots 
+
+
+   For medium workload (about 30-40 connects) following values can be set:
+
+   a) for Firebird 3.0:
+
+      DefaultDbCachePages =  64K - for SuperServer; 
+                             512 or 1024 - for Classic and SuperClassic;
+      TempCacheLimit = 1024M
+      LockHashSlots = 22111
+
+   b) for Firebird 2.5:
+
+      DefaultDbCachePages = 65536 - for SuperServer; 
+                            512 or 1024 - for SuperClassic
+      TempCacheLimit = 1073741824
+      LockHashSlots = 22111
+
+
+3. Ensure that you have environment variable 'TEMP' and check that its value
+   does NOT contain spaces or non-latin characters. Test command script will
+   create folder with name 'logs.oltpNN' under your %TEMP% directory and this
+   folder will contain different logs of work.
+
+4. Change directory to 'src'. Open file 'oltp_config.NN' where NN:
    25 - for create database and run test on Firebird 2.5
    30 - the same for Firebird 3.0
 
@@ -36,22 +72,22 @@ Copyright (c) 2014 Pavel Zotov, Moscow, Russia.
 
    Pay attention to the following parameters:
    ----------- QUOTE ----------
-        # number of documents, total of all types, for initial data population
-        # (only new documents creation occurs, no removals):
-        # recommended value: at least 30000 
-        init_docs=30000
+	# number of documents, total of all types, for initial data population
+	# (only new documents creation occurs, no removals):
+	# recommended value: at least 30000 
+	init_docs=30000
 
-        # should script be PAUSED after finish creating <init_docs> documents
-        # (for making copy of .fdb and restore it on the following runs thus
-        # avoiding to make init_docs again):
-        wait_for_copy=0
+	# should script be PAUSED after finish creating <init_docs> documents
+	# (for making copy of .fdb and restore it on the following runs thus
+	# avoiding to make init_docs again):
+	wait_for_copy=0
 
-        # time (in minutes) to warm-up database after initial data population
-        # will finish and before all following operations will be measured:
-        warm_time=10
+	# time (in minutes) to warm-up database after initial data population
+	# will finish and before all following operations will be measured:
+	warm_time=10
 
-        # max time (in minutes) to measure operations before test autostop itself:
-        test_time=60
+	# max time (in minutes) to measure operations before test autostop itself:
+	test_time=60
    -------- END OF QUOTE -------
 
    For the first time you can assign to 'init_docs' some low value, e.g. 500 or 1000.
@@ -61,77 +97,21 @@ Copyright (c) 2014 Pavel Zotov, Moscow, Russia.
    2) measurement of further business actions during <test_time> minutes.
    
 
-4. STOP ANY ANTIVIRUS otherwise it can block creation of scripts and logs filling on client machine!
+5. STOP ANY ANTIVIRUS on that machine when you will run command scenario, otherwise 
+   it can block creation of scripts and logs filling!
 
-5. Open command interpreter ("Start/Run/cmd.exe"), change to 'src' directory and run:
+6. Open command interpreter ("Start/Run/cmd.exe"), change to 'src' directory and run:
 
-   1build_oltp_emul.bat NN
-   
-   where:
-      NN = 25 - for create database against Firebird 2.5
-      - or -
-      NN = 30 - the same for Firebird 3.0
-
-   Do *NOT* insert dot character ('.') between '2' and '5' (or '3' and '0').
-
-   Ensure that after it finish NO message about errors will be on the screen.
-   This batch first checks that connection to FB can be established and displays messages which
-   ends with rows like these:
-
-   ----------- QUOTE ----------
-   All checks of isql temp log messages PASSED OK.
-
-   #################################################
-   Database will be created for FB >>> 25 <<<
-   #################################################
-   ------- END OF QUOTE -------
-   
-   Press enter to start creation of database objects ("Build test database. Please wait. . .").
-   After database objects will be created you should see something like this:
-
-   ----------- QUOTE ----------
-   Result: all OK.
-
-
-   PAGE_SIZE PAGE_BUFFERS FW            SWEEP DB_NAME
-   ========= ============ ====== ============ ========================
-        8192         4096 ON                0 /var/db/fb25/oltp25.fdb
-
-
-   SETTING_NAME                             SETTING_VALUE
-   ======================================== ===============
-   WORKING_MODE                             SMALL_03
-   C_WARES_MAX_ID                           400
-   C_CUSTOMER_DOC_MAX_ROWS                  10
-   C_SUPPLIER_DOC_MAX_ROWS                  50
-   C_CUSTOMER_DOC_MAX_QTY                   15
-   C_SUPPLIER_DOC_MAX_QTY                   50
-   C_NUMBER_OF_AGENTS                       50
-   ENABLE_MON_QUERY                         0
-   TRACED_UNITS                             ,,
-   HALT_TEST_ON_ERRORS                      ,CK,
-   C_CATCH_MISM_BITSET                      1
-   C_MAKE_QTY_STORNO_MODE                   DEL_INS
-   ENABLE_RESERVES_WHEN_ADD_INVOICE         1
-   RANDOM_SEEK_VIA_ROWS_LIMIT               0
-   C_MIN_COST_TO_BE_SPLITTED                1000
-   C_ROWS_TO_MULTIPLY                       10
-
-   -----------------------------------------------
-   Now run:
-
-            1run_oltp_emul.bat 25 <N>
-   ...
-   ------- END OF QUOTE -------
-
-
-6. Run batch:
-   
    1run_oltp_emul.bat NN KK
 
    where:
      NN = 25 or 30 (version of FB, see above)
      KK = number of ISQL sessions which should be launched.
+
+
+   If database that is specified in oltp_config.NN does not exist, script will attempt
+   to create it for you.
+  
 
 7. After time which is calculated as: warm_time + test_time test will stop itself.
 

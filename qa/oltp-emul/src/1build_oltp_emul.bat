@@ -4,6 +4,9 @@ setlocal enabledelayedexpansion enableextensions
 
 if .%1.==.. goto no_arg1
 
+set batch_mode=0
+if /i .%2.==.batch. set batch_mode=1
+
 set fb=%1
 if .%fb%.==.25. goto ok
 if .%fb%.==.30. goto ok
@@ -124,10 +127,12 @@ echo.
 echo Database will be created for FB ^>^>^> %fb% ^<^<^<
 @echo #################################################
 echo.
-echo Press any key to START building database objects. . .
-del %err% 2>nul
-@pause>nul
+if .%batch_mode%.==.0. (
+  echo Press any key to START building database objects. . .
+  @pause>nul
+)
 
+del %err% 2>nul
 
 @echo off
 del %bld% 2>nul
@@ -252,19 +257,21 @@ del %tmp% 2>nul
 @echo.
 @echo %date% %time% 
 @echo Result: all OK. 
-@echo.
-type %log%
-@echo -----------------------------------------------
-@echo Now run:
-@echo.
-@echo          1run_oltp_emul.bat %fb% ^<N^>
-@echo.
-@echo where:
-@echo.
-@echo        %fb% - version of Firebird for which test database has been created now;
-@echo        ^<N^> - number of ISQL-sessions to be opened.
-echo.
-pause
+if .%batch_mode%.==.0. (
+  @echo.
+  type %log%
+  @echo -----------------------------------------------
+  @echo Now run:
+  @echo.
+  @echo          1run_oltp_emul.bat %fb% ^<N^>
+  @echo.
+  @echo where:
+  @echo.
+  @echo        %fb% - version of Firebird for which test database has been created now;
+  @echo        ^<N^> - number of ISQL-sessions to be opened.
+  echo.
+  pause
+)
 goto end
 
 :no_arg1

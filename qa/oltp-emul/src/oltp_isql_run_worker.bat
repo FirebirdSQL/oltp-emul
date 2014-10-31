@@ -61,12 +61,12 @@ if .%is_embed%.==.. (
   goto fin
 )
 
-if .%fbc%.==.. (
+if "%fbc%"==.. (
   echo %~f0: not defined arg: fbc
   goto fin
 )
 
-if .%dbnm%.==.. (
+if "%dbnm%"==.. (
   echo %~f0: not defined arg: dbnm
   goto fin
 )
@@ -142,6 +142,7 @@ echo Start at: %date% %time%>>%sts%
   @set /a k=k+1
   @echo ------------------------------------------
   @echo Start isql, packet # %k% at %date% %time%
+  @echo Command: !run_isql!
   @echo ------------------------------------------
   @echo on
   cmd /c !run_isql!
