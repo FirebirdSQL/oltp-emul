@@ -21,12 +21,81 @@ if not .%k%. gtr .0. goto no_arg1
 :ok
 
 set cfg=oltp_config.%fb%
+echo Parsing config file ^>%cfg%^<:
 set err_setenv=0
-for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
-  set %%a
-  if errorlevel 1 set err_setenv=1
+@rem Extract only non-empty lines with only names of parameters:
+for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
+  if "%%a" neq "" (
+    @rem Detect whether new var contain quotes or no. 
+    @rem If yes than delimiter must be only ONE '=',
+    @rem otherwise it will be <tab><equal_sign><space> or <tab><space><equal_sign>
+    echo %%a|find """">nul
+    if errorlevel 1 ( 
+      @rem @echo ^|%%a^| - does NOT contain quotes
+      for /F "tokens=1-2 delims=	= " %%i in ("%%a") do (
+        @rem echo Parsed-1: param="%%i" val="%%j"
+        if "%%j"=="" (
+          set err_setenv=1
+          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+        ) else (
+          set %%i=%%j
+          @rem echo param=^|%%i^| val=^|%%j^|
+        )
+      )
+    ) else (
+      @rem @echo ^|%%a^| - DOES contain quotes
+      for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+        @rem echo Parsed-1: param="%%i" val="%%j"
+        if "%%j"=="" (
+          set err_setenv=1
+          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+        ) else (
+          set %%i=%%j
+          @rem echo param=^|%%i^| val=^|%%j^|
+        )
+      )
+    )
+  )
 )
+
+@rem echo err_setenv=.%err_setenv%.
 if .%err_setenv%.==.1. goto err_setenv
+
+echo %date% %time% - starting %~f0
+echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
+echo Config has been parsed OK. Result:
+
+for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_docs,init_buff,wait_for_copy,warm_time,test_time) do (
+  if "!%%v!"=="" (
+    echo ### MISSED: %%v ###
+    set err_setenv=1
+  ) else (
+    echo %%v = ^|!%%v!^|
+  )
+
+)
+if .%is_embed%.==.0. (
+  for %%v in (usr,pwd,host,port) do (
+    if "!%%v!"=="" (
+      echo ### MISSED: %%v ###
+      set err_setenv=1
+    ) else (
+      echo %%v = ^|!%%v!^|
+    )
+  )
+)
+if .%1.==.30. (
+  for %%v in (mon_unit_perf) do (
+    if "!%%v!"=="" (
+      echo ### MISSED: %%v ###
+      set err_setenv=1
+    ) else (
+      echo %%v = ^|!%%v!^|
+    )
+  )
+)
+if .%err_setenv%.==.1. goto no_env
+
 
 @rem check that result of PREVIOUSLY called batch (1build_oltp_emul_NN.bat) is OK:
 
@@ -34,13 +103,14 @@ set build_err=0
 
 call :chk_build_result build_err
 
-@rem echo build_err=%build_err%
+echo build_err=%build_err%
+
 if .%build_err%.==.1. goto end
 
 if not exist %fbc%\isql.exe goto bad_fbc_path
 if not exist %fbc%\gfix.exe goto bad_fbc_path
 if not exist %fbc%\fbsvcmgr.exe goto bad_fbc_path
-
+echo All necessary FB utilities found in %fbc%
 
 if .%is_embed%.==.. (
   echo 
@@ -63,6 +133,7 @@ md %tmpdir%\sql 2>nul
 @rem Attempt to get server version together with OS: WIndows or LInux)
 
 echo|set /p=Getting Firebird info... 
+
 set tmplog=%tmpdir%\tmp_get_fb_db_info.log
 set tmperr=%tmpdir%\tmp_get_fb_db_info.err
 if .%is_embed%.==.1. (
@@ -158,8 +229,13 @@ goto bad_dbnm
 
 :chk4open
 find /c /i "Error while trying to open file" %tmperr% >nul
+if errorlevel 1 goto chk4unav
+goto bad_dbnm
+
+:chk4unav
+find /c /i "unavailable database" %tmperr% >nul
 if errorlevel 1 goto chk4ods
-goto make_db
+goto bad_dbnm
 
 :chk4ods
 find /c /i "unsupported on-disk" %tmperr% >nul
@@ -948,7 +1024,11 @@ goto end
 :no_env
   @echo off
   echo.
-  echo THERE IS NO FILE WITH LIST OF ENV. VARIABLES TO BE SET.
+  echo #######################################################
+  echo Missed at least one of necessary environment variables.
+  echo #######################################################
+  echo,
+  echo Check %cfg% file!
   echo.
   echo Press any key to FINISH. . .
   echo.
@@ -1037,7 +1117,8 @@ goto end
 :err_setenv
   @echo off
   echo.
-  echo Config file: %cfg% - could NOT set new environment variables.
+  echo Config file: %cfg% - can NOT set some of environment variables.
+  echo Perhaps, there is no equal sign ("=") between name and value in some line.
   echo.
   echo Press any key to FINISH. . .
   echo.
@@ -1521,6 +1602,15 @@ goto:eof
     echo RESULT: no errors for building database objects.
   )
 goto:eof
+
+:trim
+  setLocal 
+  @rem EnableDelayedExpansion
+  set Params=%*
+  for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
+goto:eof
+@rem exit /b
+
 
 :end
 
