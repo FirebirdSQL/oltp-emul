@@ -19,16 +19,21 @@ In case of any questions feel free to contact: p519446@yandex.ru
 0. Ensure that following Firebird console utilities present on machine from which
    you are intend to run this test:
    * isql
-   * gfix
    * fbsvcmgr
+   * gfix
+   * gstat
 
 1. Create database and add its name to aliases.conf (databases.conf in FB 3.0).
    You can skip creating database and just specify its name in the test configuration
-   file 'src/oltp_config.NN' (see below item "4" about it) - but in such case:
+   file 'src/oltp{fb_version}_config.{os_name}' (see below item "4" about it) 
+   - but in such case:
    a) it must contain full path (/var/db/firebird/oltptest.fdb etc);
    b) path and file name can NOT contain spaces or non-latin characters.
 
-2. Edit your firebird.conf and uncomment setting: ExternalFileAccess 
+2. Edit your firebird.conf and UNCOMMENT setting: 
+
+                             ExternalFileAccess 
+
    Set its value to folder where you will create special file 'stoptest.txt'
    to force all attaches to cancel their operations and close ISQL sessions.
 
@@ -59,15 +64,28 @@ In case of any questions feel free to contact: p519446@yandex.ru
       LockHashSlots = 22111
 
 
-3. Ensure that you have environment variable 'TEMP' and check that its value
-   does NOT contain spaces or non-latin characters. Test command script will
-   create folder with name 'logs.oltpNN' under your %TEMP% directory and this
-   folder will contain different logs of work.
+3. For Windows users: ensure that you have environment variable 'TEMP' and 
+   verify that its value does NOT contain spaces or non-latin characters. 
+   Test command script will create folder with name 'logs.oltpNN' under your 
+   %TEMP% directory and this folder will contain different logs of work.
 
-4. Change directory to 'src'. Open file 'oltp_config.NN' where NN:
-   25 - for create database and run test on Firebird 2.5
-   30 - the same for Firebird 3.0
+4. Change directory to 'src'. 
 
+   Main command scenario (which creates database, fill it with documents and 
+   finally open multiple ISQL sessions) has name '1run_oltp_emul'.
+
+   Its extension depends on your OS:
+   * '.sh' - for running this scenario under Linux
+   * '.bat' - for running this scenario under Windows
+
+   This script will parse following plain text files that serve to store test
+   configuration parameters:
+   * oltp25_config.nix - if scenario runs under Linux and tests Firebird 2.5
+   * oltp30_config.nix - if scenario runs under Linux and tests Firebird 3.0
+   * oltp25_config.win - if scenario runs under Windows and tests Firebird 2.5
+   * oltp30_config.win - if scenario runs under Windows and tests Firebird 3.0
+
+   Open config file which is suitable for your environment.
    Change settings in this file according to your ones: host, port, dbnm etc
 
    Pay attention to the following parameters:
@@ -95,31 +113,35 @@ In case of any questions feel free to contact: p519446@yandex.ru
    two phases will begin to perform:
    1) database warm-up during <warm_time> minutes;
    2) measurement of further business actions during <test_time> minutes.
-   
+  
 
 5. STOP ANY ANTIVIRUS on that machine when you will run command scenario, otherwise 
    it can block creation of scripts and logs filling!
 
-6. Open command interpreter ("Start/Run/cmd.exe"), change to 'src' directory and run:
+6. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
 
-   1run_oltp_emul.bat NN KK
+   1run_oltp_emul.os NN KK
 
    where:
+     os = .bat or .sh (for Windows or Linux accordingly)
      NN = 25 or 30 (version of FB, see above)
      KK = number of ISQL sessions which should be launched.
 
 
-   If database that is specified in oltp_config.NN does not exist, script will attempt
+   If database that is specified in config file does not exist, script will attempt
    to create it for you.
+   If database DOES exists but is empty or with not all needed objects than test will
+   recreate all objects. Be careful in such case: do NOT make any connects to test DB
+   until building process finishes.
   
 
 7. After time which is calculated as: warm_time + test_time test will stop itself.
 
-   Change to folder %TEMP%\logs.oltpNN.
+   Change to folder with name defined by parameter 'tmpdir' in your oltpNN_config file.
 
    The file with name like this: 
 
-       oltp_NN_%COMPUTERNAME%_001_performance_report.txt 
+       oltpNN_%COMPUTERNAME%-001.performance_report.txt // (or $HOSTNAME for Linux)
 
    - will contain overall performance results: dynamic in 10 time intervals and total for 
    last three hours or time of actual work (minimal of these two values is taken in account).
@@ -144,7 +166,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
    Look for the file with name 'stoptest.txt': it will have some non-zero size.
 
    You have to make this file EMPTY (size = 0) before you can run this test again otherwise 
-   you will get messages about this when attempt to run batch '1run_oltp_emul.bat'
+   you will get messages about this when attempt to run batch scenario ('1run_oltp_emul.{os}')
 
    You can force to stop all working ISQLs at any time (i.e. beforehand) by opening 'stoptest.txt' 
    and type any single character in it followed by newline. In case when this file (and FB) is on 

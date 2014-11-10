@@ -19,8 +19,10 @@ set /a k = %2
 if not .%k%. gtr .0. goto no_arg1
 
 :ok
+echo %date% %time% - starting %~f0
+echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 
-set cfg=oltp_config.%fb%
+set cfg=oltp%fb%_config.win
 echo Parsing config file ^>%cfg%^<:
 set err_setenv=0
 @rem Extract only non-empty lines with only names of parameters:
@@ -61,8 +63,6 @@ for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
 @rem echo err_setenv=.%err_setenv%.
 if .%err_setenv%.==.1. goto err_setenv
 
-echo %date% %time% - starting %~f0
-echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 echo Config has been parsed OK. Result:
 
 for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_docs,init_buff,wait_for_copy,warm_time,test_time) do (
@@ -96,7 +96,6 @@ if .%1.==.30. (
 )
 if .%err_setenv%.==.1. goto no_env
 
-
 @rem check that result of PREVIOUSLY called batch (1build_oltp_emul_NN.bat) is OK:
 
 set build_err=0
@@ -124,7 +123,6 @@ if .%is_embed%.==.. (
   pause
   goto end
 )
-
 
 md %tmpdir%\sql 2>nul
 
@@ -184,9 +182,9 @@ del %tmpclg% 2>nul
 echo set heading off; set list on;>>%tmpchk%
 echo -- check that all database objects already exist: >>%tmpchk%
 echo select iif( exists( select * from semaphores where task='all_build_ok' ), >>%tmpchk%
-echo                     '1', >>%tmpchk%
-echo                     '0'>>%tmpchk%
-echo           ) as "db_build_finished_ok=" >>%tmpchk%
+echo                     'all_dbo_exists', >>%tmpchk%
+echo                     'some_dbo_absent'>>%tmpchk%
+echo           ) as "build_result=" >>%tmpchk%
 echo from rdb$database;>>%tmpchk%
 
 if .%is_embed%.==.1. (
@@ -201,6 +199,7 @@ echo Content of script %tmpchk%:
 type %tmpchk%
 @echo --------------------------
 cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
+set db_build_finished_ok=2
 
 for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
@@ -224,11 +223,6 @@ if %size% gtr 0 (
 @rem Seems that this can be on linux only:
 
 find /c /i "Is a directory" %tmperr% >nul
-if errorlevel 1 goto chk4open
-goto bad_dbnm
-
-:chk4open
-find /c /i "Error while trying to open file" %tmperr% >nul
 if errorlevel 1 goto chk4unav
 goto bad_dbnm
 
@@ -244,117 +238,44 @@ goto bad_ods
 
 :chk4online
 find /c /i "shutdown" %tmperr% >nul
-if errorlevel 1 goto chk4fin
+if errorlevel 1 goto chk4open
 goto db_offline
 
-:chk4fin
+:chk4open
+find /c /i "Error while trying to open file" %tmperr% >nul
 
-@rem database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
-@rem -------------------------------------------------------------------------------------------------------
-
-set db_build_finished_ok=2
-for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
-if .%size%.==.. set size=0
-if %size% gtr 0 (
-  set db_build_finished_ok=0
-) else (
-  @rem type %tmpclg%
-  for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
-    set /a %%a
-    if errorlevel 1 set err_setenv=1
+if errorlevel 1 (
+  @rem database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
+  @rem -------------------------------------------------------------------------------------------------------
+  for /f "usebackq" %%A in ('!tmperr!') do set size=%%~zA
+  if .%size%.==.. set size=0
+  if %size% gtr 0 (
+    set db_build_finished_ok=0
+  ) else (
+    set db_build_finished_ok=1
+    find /c /i "all_dbo_exists" !tmpclg! >nul
+    if errorlevel 1 set db_build_finished_ok=0
+    @rem type !tmpclg!
   )
-  if .%db_build_finished_ok%.==.. set db_build_finished_ok=0
-)
-echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
-echo.
-if .%db_build_finished_ok%.==.0. (
+  echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
   echo.
-  echo Database: ^>%dbnm%^< -- DOES exist but
-  echo its creation process was not completed.
-  echo.
-  echo ################################################################################
-  echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
-  echo ################################################################################
-  echo.
-  pause>nul
-  goto :db_build
-) else (
-
-  echo Database ^>%dbnm%^< exists with all needed objects.
-  goto :chk_more
-
-)
-
-:make_db
-
-@rem If we are here than database is absent. Suggest to create it but only in case when
-@rem %dbnm% contains slashes (forwarding for LInux and backward for WIndows)
-if /i .%fbo%.==.LI. (
-  for /f "tokens=1,2 delims=/" %%a in ("%dbnm%") do ( 
-    set w1=%%a
-    set w2=%%b
+  if .!db_build_finished_ok!.==.0. (
+    echo.
+    echo Database: ^>%dbnm%^< -- DOES exist but
+    echo its creation process was not completed.
+    echo.
+    echo ################################################################################
+    echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+    echo ################################################################################
+    echo.
+    pause>nul
+    goto :db_build
+  ) else (
+    echo Database ^>%dbnm%^< exists with all needed objects.
+    goto :chk_more
   )
 ) else (
-  for /f "tokens=1,2 delims=\" %%a in ("%dbnm%") do ( 
-    set w1=%%a
-    set w2=%%b
-  )
-)
-
-if .%w1%.==.. goto bad_dbnm
-if .%w2%.==.. goto bad_dbnm
-
-@echo.
-@echo #########################################################
-@echo Database ^>%dbnm%^< does NOT exist on host ^>%host%^<. 
-@echo.
-@echo Press ENTER for attempt to CREATE it, Ctrl-C to QUIT. . .
-@echo #########################################################
-pause
-
-set tmpsql=%tmpdir%\tmp_create_dbnm.sql
-set tmplog=%tmpdir%\tmp_create_dbnm.log
-set tmperr=%tmpdir%\tmp_create_dbnm.err
-
-@echo Attempt to CREATE database. 
-if .%is_embed%.==.1. (
-   echo create database '%dbnm%' page_size 8192; commit; show database; exit;>%tmpsql%
-   set run_isql=%fbc%\isql -q -i %tmpsql%
-) else (
-   echo create database '%host%/%port%:%dbnm%' page_size 8192 user '%usr%' password '%pwd%'; commit; show database; exit;>%tmpsql%
-   set run_isql=%fbc%\isql -q -i %tmpsql% 
-   @rem 1^>%tmplog% 2^>%tmperr%
-)
-@echo Command to be run:
-@echo %run_isql%
-
-echo Content of script %tmpsql%:
-echo ---------------------------------------
-type %tmpsql% 
-echo ---------------------------------------
-
-cmd /c %run_isql% 1^>%tmplog% 2^>%tmperr%
-
-@rem win: -Error while trying to create file
-@rem nix: -Error while trying to create file
-
-find /c /i "Error while trying to create file" %tmperr% >nul
-if errorlevel 1 goto fill_db
-goto bad_dbnm
-
-:fill_db
-@rem If we are here than database has been just created (auto) and we must call 1build_oltp_emul.bat 
-
-for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
-if .%size%.==.. set size=0
-if %size% gtr 0 (
-  echo.
-  echo RESULT: script finished with ERRORS.
-  echo --------------------------
-  type %tmperr%
-  echo --------------------------
-) else (
-  echo RESULT: script finished OK, database has been created now.
+  call :try_create_db
 )
 
 :db_build
@@ -714,7 +635,7 @@ if .%is_embed%.==.1. (
   for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
     set /a %%a
   )
-  echo  %time%, packet #%k% finish: docs created ^>^>^> %new_docs% ^<^<^<, limit = ^>^>^> %init_docs% ^<^<^<
+  echo  %time%, packet #%k% finish: docs created ^>^>^> %new_docs% ^<^<^<, limit = %init_docs%
 
   set /a k = k+1
 if %new_docs% lss %init_docs% goto iter_loop
@@ -808,7 +729,8 @@ set mode=oltp_%1
 set winq=%2
 
 set sql=%tmpdir%\sql\tmp_random_run.sql
-set logbase=%mode%_%computername%
+@rem set logbase=%mode%_%computername%
+set logbase=oltp%1_%computername%
 
 @rem Make comparison of TIMESTAMPS: this batch vs %sql%.
 @rem If this batch is OLDER that %sql% than we can SKIP recreating %sql%
@@ -955,7 +877,7 @@ type %tmplog%
 @echo Performance report will be in file:
 @echo ###################################
 @echo.
-@echo %tmpdir%\%logbase%_001_performance_report.txt
+@echo %tmpdir%\oltp%fb%_performance_report.txt
 @echo.
 
 del %tmpsql% 2>nul
@@ -989,9 +911,12 @@ for /l %%i in (1, 1, %winq%) do (
   echo   start /min oltp_isql_run_worker.bat             >>%tmpdir%\%~n0.log
   echo              %fb% ^<-- version of FB              >>%tmpdir%\%~n0.log
   echo              %sql% ^<-- sql                       >>%tmpdir%\%~n0.log
-  echo              %tmpdir%\%logbase%_!k:~1,3! ^<-- log >>%tmpdir%\%~n0.log
-  
-  @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%_!k:~1,3!
+  echo              %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%tmpdir%\%~n0.log
+  echo              %%i  ^<-- SID                        >>%tmpdir%\%~n0.log
+ 
+  @rem Sample of %tmpdir%\%logbase%-!k:~1,3!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
+  @rem =========
+  @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%-!k:~1,3! %%i
 
   @rem %is_embed% %fbc% %dbnm% %sql% %tmpdir%\%logbase%_!k:~1,3! %host% %port% %usr% %pwd%
   @rem @start /min oltp_isql_run_worker.bat %is_embed% %fbc% %dbnm% %sql% %tmpdir%\%logbase%_!k:~1,3! %host% %port% %usr% %pwd%
@@ -1601,6 +1526,82 @@ goto:eof
   ) else (
     echo RESULT: no errors for building database objects.
   )
+goto:eof
+
+:try_create_db
+  setlocal
+  @rem If we are here than database is absent. Suggest to create it but only in case when
+  @rem %dbnm% contains slashes (forwarding for LInux and backward for WIndows)
+  if /i .%fbo%.==.LI. (
+    for /f "tokens=1,2 delims=/" %%a in ("%dbnm%") do ( 
+      set w1=%%a
+      set w2=%%b
+    )
+  ) else (
+    for /f "tokens=1,2 delims=\" %%a in ("%dbnm%") do ( 
+      set w1=%%a
+      set w2=%%b
+    )
+  )
+
+  if .%w1%.==.. goto bad_dbnm
+  if .%w2%.==.. goto bad_dbnm
+
+  @echo.
+  @echo #########################################################
+  @echo Database ^>%dbnm%^< does NOT exist on host ^>%host%^<. 
+  @echo.
+  @echo Press ENTER for attempt to CREATE it, Ctrl-C to QUIT. . .
+  @echo #########################################################
+  pause
+
+  set tmpsql=%tmpdir%\tmp_create_dbnm.sql
+  set tmplog=%tmpdir%\tmp_create_dbnm.log
+  set tmperr=%tmpdir%\tmp_create_dbnm.err
+
+  @echo Attempt to CREATE database. 
+  if .%is_embed%.==.1. (
+     echo create database '%dbnm%' page_size 8192; commit; show database; exit;>%tmpsql%
+     set run_isql=%fbc%\isql -q -i %tmpsql%
+  ) else (
+     echo create database '%host%/%port%:%dbnm%' page_size 8192 user '%usr%' password '%pwd%'; commit; show database; exit;>%tmpsql%
+     set run_isql=%fbc%\isql -q -i %tmpsql% 
+     @rem 1^>%tmplog% 2^>%tmperr%
+  )
+  @echo Command to be run:
+  @echo %run_isql%
+
+  echo Content of script %tmpsql%:
+  echo ---------------------------------------
+  type %tmpsql% 
+  echo ---------------------------------------
+
+  cmd /c %run_isql% 1^>%tmplog% 2^>%tmperr%
+
+  @rem win: -Error while trying to create file
+  @rem nix: -Error while trying to create file
+
+  find /c /i "Error while trying to create file" %tmperr% >nul
+  if errorlevel 1 goto fill_db
+  goto bad_dbnm
+
+  :fill_db
+  @rem If we are here than database has been just created (auto) and we must call 1build_oltp_emul.bat 
+
+  for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+  if .%size%.==.. set size=0
+  if %size% gtr 0 (
+    echo.
+    echo RESULT: script of CREATING database finished with ERRORS.
+    echo --------------------------
+    type %tmperr%
+    echo --------------------------
+    pause
+  ) else (
+    echo RESULT: script finished OK, database has been created now.
+    type %tmplog%
+  )
+  endlocal
 goto:eof
 
 :trim

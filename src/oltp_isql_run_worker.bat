@@ -15,6 +15,7 @@ path=..\util;%path%
 set fb=%1
 set sql=%2
 set lognm=%3
+set sid=%4
 
 if .%fb%.==.. (
   echo %~f0: not defined arg: fbc
@@ -30,7 +31,7 @@ if .%lognm%.==.. (
   goto fin
 )
 
-set cfg=oltp_config.%fb%
+set cfg=oltp%fb%_config.win
 
 @rem log where current acitvity of this ISQL will be:
 set log=%lognm%.log
@@ -39,12 +40,12 @@ set log=%lognm%.log
 set err=%lognm%.err
 
 @rem cumulative log with brief info about running process state:
-set sts=%lognm%_running_state.txt
+set sts=%lognm%.running_state.txt
 
 del %err% 2>nul
 set err_setenv=0
 @echo on
-set cfg=oltp_config.%fb%
+
 for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
   @echo Read line from %cfg% and try to execute: set %%a>>%log%
   set %%a>nul 2>>%err%
@@ -85,7 +86,6 @@ if .%is_embed%.==.1. (
 
 set initdelay=
 
-
 if .%use_mtee%.==.1. (
   set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 2^>^&1 1^>^>%log% ^| mtee /t/+ %err% ^>nul
 ) else (
@@ -100,13 +100,17 @@ echo --- end of command for launch isql --->>%sts%
 echo.>>%sts%
 @rem echo %fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 2^>^&1 1^>^>%log% ^|mtee /t/+ %err% ^> nul >>%sts%
 
-@rem log_after=1 -- this window must call srv_mon_perf_total after job will ends
-set log_after=0
-@rem extract last six characters from log file name and set log_after=1 only for 1st log:
-if .%log:~-8%.==._001.log. set log_after=1
-if .%log_after%.==.1. (
+if .%sid%.==.1. (
   echo This window *WILL* do performance report after test make selfstop.>>%sts%
 )
+
+@rem log_after=1 -- this window must call srv_mon_perf_total after job will ends
+@rem set log_after=0
+@rem @rem extract last six characters from log file name and set log_after=1 only for 1st log:
+@rem if .%log:~-8%.==._001.log. set log_after=1
+@rem if .%log_after%.==.1. (
+@rem   echo This window *WILL* do performance report after test make selfstop.>>%sts%
+@rem )
 
 @set k=0
 @echo off
@@ -184,12 +188,12 @@ echo Start at: %date% %time%>>%sts%
 
   @rem ---------------------------------------
 
-  if .%log_after%.==.1. (
+  if .%sid%.==.1. (
     set msg=Making final performance analysys. . .
     echo %date% %time% %msg% >>%sts%
 
-    set psql=%lognm%_performance_report.tmp
-    set plog=%lognm%_performance_report.txt
+    set psql=%lognm%.performance_report.tmp
+    set plog=%lognm%.performance_report.txt
     del !psql! 2>nul
     del !plog! 2>nul
     echo set width business_action 24;>>!psql!

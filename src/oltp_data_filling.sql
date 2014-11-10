@@ -2,9 +2,10 @@
 -- Begin of script oltp_data_filling.sql
 -- #####################################
 -- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0
-
-commit;
 set bail on;
+set list on;
+select 'oltp_data_filling.sql start' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
 
 set term ^;
@@ -15728,6 +15729,11 @@ commit;
 drop table tmp$aux;
 drop table tmp$agents;
 drop table tmp$names;
+
+set list on;
+select 'oltp_data_filling.sql finish' as msg, current_timestamp from rdb$database;
+set list off;
+
 commit;
 --dis 30.09.2014!
 --alter sequence g_common restart with 0;
