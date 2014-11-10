@@ -7,16 +7,50 @@
 -- ##############################
 -- ::: nb-1 ::: Required FB version: 3.0 and above.
 -- ::: nb-2 ::: Use '-nod' switch when run this script from isql
-recreate exception ex_not_suitable_fb_version 'This script can`t run on this FB version';
-commit;
 set bail on;
 set autoddl off;
+set list on;
+select 'oltp30_DDL.sql start' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
+
 set term ^;
 execute block as
 begin
-  if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '3.' ) then
-    exception ex_not_suitable_fb_version;
+  begin
+    execute statement 'recreate exception ex_exclusive_required ''At least one concurrent connection detected.''';
+    when any do begin end
+  end
+  begin
+    execute statement 'recreate exception ex_not_suitable_fb_version ''This script requires at least Firebird 3.x version''';
+    when any do begin end
+  end
+end
+^
+set term ;^
+commit;
+
+set term ^;
+execute block as
+begin
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '3.' ) then
+    begin
+        exception ex_not_suitable_fb_version;
+    end
+
+    -- NB. From doc/README.monitoring_tables:
+    -- columns MON$REMOTE_PID and MON$REMOTE_PROCESS contains non-NULL values
+    -- only if the client library has version 2.1 or higher
+    -- column MON$REMOTE_PROCESS can contain a non-pathname value
+    -- if an application has specified a custom process name via DPB
+    if ( exists( select * from mon$attachments a 
+                 where a.mon$attachment_id<>current_connection 
+                 and a.mon$remote_protocol is not null
+                ) 
+       ) then
+    begin
+        exception ex_exclusive_required;
+    end
 end
 ^
 set term ;^
@@ -7155,7 +7189,9 @@ begin
                     ,v_cq_trn_id,v_cq_dts;
 
             if ( row_count = 0 ) then leave;
-            v_inserting_info =  'fetch '||iif( v_storno_sub = 1, 'c_make_amount_distr_1', 'c_make_amount_distr_2')||', v_cq_id='||v_cq_id;
+            v_inserting_info =  'fetch '
+                ||iif( v_storno_sub = 1, 'c_make_amount_distr_1', 'c_make_amount_distr_2')
+                ||', qd.id='||v_cq_id;
             v_rows = v_rows + 1; -- total number of ATTEMPTS to lock record (4log)
 -- WRONG! dups in doc_data PK!
 --            if ( v_storno_sub = 1 and v_qty_storned_acc = 0) then
@@ -7212,7 +7248,12 @@ begin
 
                         v_inserting_table = 'qdistr';
                         v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
-                        v_inserting_info = v_inserting_info||', try ins qd: '||v_inserting_id;
+                        v_inserting_info = v_inserting_info
+                            ||', try ins QD: id='||v_inserting_id
+                            ||', g_last='||v_gen_inc_last_qd
+                            ||', g_step='||c_gen_inc_step_qd
+                            ||', g_iter='||v_gen_inc_iter_qd
+                            ;
                         insert into qdistr(
                             id,
                             doc_id,
@@ -7235,13 +7276,13 @@ begin
                             :v_cq_snd_retail
                         );
                         v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
-
+                        v_inserting_info = v_inserting_info || ' - ok';
                     end --  v_storno_sub = 1
                 end -- v_internal_qty_storno_mode = 'DEL_INS' (better performance vs 'UPD_ROW'!)
 
             v_inserting_table = 'qstorned';
             v_inserting_id =  v_cq_id;
-            v_inserting_info = v_inserting_info||', try ins qs: '||:v_cq_id;
+            v_inserting_info = v_inserting_info||', try ins QS: id='||:v_inserting_id;
             insert into qstorned(
                 id,
                 doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
@@ -7257,6 +7298,7 @@ begin
                 ,:v_dd_new_id
                 ,:v_cq_snd_purchase,:v_cq_snd_retail
             );
+            v_inserting_info = v_inserting_info || ' - ok';
 
             v_qty_storned_acc = v_qty_storned_acc + v_cq_snd_qty; -- ==> will be written in doc_data.qty (actual amount that could be gathered)
             v_lock = v_lock + 1; -- total number of SUCCESSFULY locked records
@@ -8289,6 +8331,10 @@ end
 ^ -- zdump4dbg
 
 set term ;^
+commit;
+set list on;
+select 'oltp30_DDL.sql finish' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
 
 -- ###########################################################

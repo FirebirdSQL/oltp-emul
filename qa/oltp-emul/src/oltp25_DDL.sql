@@ -7,16 +7,50 @@
 -- ##############################
 -- ::: nb-1 ::: Required FB version: 2.5 only.
 -- ::: nb-2 ::: Use '-nod' switch when run this script from isql
-recreate exception ex_not_suitable_fb_version 'This script can`t run on this FB version';
-commit;
 set bail on;
---set autoddl off;
+set autoddl off;
+set list on;
+select 'oltp25_DDL.sql start' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
+
 set term ^;
 execute block as
 begin
-  if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' ) then
-    exception ex_not_suitable_fb_version;
+  begin
+    execute statement 'recreate exception ex_exclusive_required ''At least one concurrent connection detected.''';
+    when any do begin end
+  end
+  begin
+    execute statement 'recreate exception ex_not_suitable_fb_version ''This script can be run only in Firebird 2.5''';
+    when any do begin end
+  end
+end
+^
+set term ;^
+commit;
+
+set term ^;
+execute block as
+begin
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' ) then
+    begin
+        exception ex_not_suitable_fb_version;
+    end
+
+    -- NB. From doc/README.monitoring_tables:
+    -- columns MON$REMOTE_PID and MON$REMOTE_PROCESS contains non-NULL values
+    -- only if the client library has version 2.1 or higher
+    -- column MON$REMOTE_PROCESS can contain a non-pathname value
+    -- if an application has specified a custom process name via DPB
+    if ( exists( select * from mon$attachments a 
+                 where a.mon$attachment_id<>current_connection 
+                 and a.mon$remote_protocol is not null
+                ) 
+       ) then
+    begin
+        exception ex_exclusive_required;
+    end
 end
 ^
 set term ;^
@@ -8289,6 +8323,11 @@ end
 
 set term ;^
 commit; 
+set list on;
+select 'oltp25_DDL.sql finish' as msg, current_timestamp from rdb$database;
+set list off;
+commit;
+
 -- ###########################################################
 -- End of script oltp25_DDL.sql; next to be run: oltp25_SP.sql
 -- ###########################################################

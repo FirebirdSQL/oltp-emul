@@ -4,6 +4,9 @@
 -- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0
 
 set bail on;
+set list on;
+select 'oltp_main_filling.sql start' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
 set term ^;
 execute block as
@@ -222,6 +225,8 @@ insert into settings(working_mode, mcode,                  svalue)
 -- 'CK,PK,FK' - halt if CHECK or PK or FK violation occurs
 -- default: 'CK'
 -- See calls of fn_halt_sign(gdscode):
+-- update settings set svalue=',NONE,' where mcode='HALT_TEST_ON_ERRORS';
+-- update settings set svalue=',CK,' where mcode='HALT_TEST_ON_ERRORS';
 insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
@@ -1267,6 +1272,10 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-92
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-924, 335544648, 'conn_lost', 'Connection lost to pipe server.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-926, 335544447, 'no_rollback', 'No rollback performed.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-999, 335544689, 'ib_error', 'Firebird error.');
+
+set list on;
+select 'oltp_main_filling.sql finish' as msg, current_timestamp from rdb$database;
+set list off;
 commit;
 -- #############################################################################
 -- End of script oltp_main_filling.sql; next to be run: oltp_data_filling.sql
