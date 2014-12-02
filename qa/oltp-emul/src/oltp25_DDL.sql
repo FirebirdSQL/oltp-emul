@@ -8,7 +8,7 @@
 -- ::: nb-1 ::: Required FB version: 2.5 only.
 -- ::: nb-2 ::: Use '-nod' switch when run this script from isql
 set bail on;
-set autoddl off;
+--set autoddl off;
 set list on;
 select 'oltp25_DDL.sql start' as msg, current_timestamp from rdb$database;
 set list off;
@@ -312,6 +312,7 @@ commit;
 
 -- create collations:
 create collation name_coll for utf8 from unicode case insensitive;
+commit;
 create collation nums_coll for utf8 from unicode case insensitive 'NUMERIC-SORT=1';
 commit;
 
@@ -5036,9 +5037,13 @@ where a.is_our_firm=1
 
 create or alter view v_all_wares as
 -- source for random choose ware_id in SP_CLIENT_ORDER => SP_FILL_SHOPPING_CART
+-- plan in 2.5 (checked 02.12.2014):
+-- (C INDEX (TMP_SHOPCART_UNQ))
+-- (A NATURAL)
 select a.id
 from wares a
-where not exists(select * from tmp$shopping_cart c where c.id = a.id order by c.id) -- 19.09.2014
+where not exists(select * from tmp$shopping_cart c where c.id = a.id)
+-- 02.12.2014 wrong in 2.5 (use only in 3.0): "order by c.id)"
 ;
 
 ------------------------------
@@ -5053,20 +5058,20 @@ as
 -- source for random choose ware_id in sp_customer_reserve => sp_fill_shopping_cart:
 -- take record from invoice which has been added to stock and add it to set for
 -- new customer reserve - from avaliable remainders (not linked with client order)
--- Checked 12.09.2014:
---PLAN (V TMP$SHOPPING_CART INDEX (TMP_SHOPCART_UNQ))
---PLAN (V QDISTR ORDER QDISTR_WARE_SNDOP_RCVOP) -- ::: NB ::: no bitmap here (speed!)
---PLAN (V W ORDER WARES_ID_DESC)
+-- plan in 2.5 (checked 02.12.2014):
+-- (C INDEX (TMP_SHOPCART_UNQ))
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W NATURAL)
 select w.id
 from wares w
 where
-    not exists(select * from tmp$shopping_cart c where c.id = w.id order by c.id)
+    not exists(select * from tmp$shopping_cart c where c.id = w.id) -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by c.id)
     and exists(
         select * from qdistr q
         where q.ware_id = w.id
         and q.snd_optype_id = 2100
         and q.rcv_optype_id = 3300
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     );
 
 create or alter view v_min_id_avl_res
@@ -5075,6 +5080,9 @@ as
 -- source for random choose ware_id in sp_customer_reserve => sp_fill_shopping_cart:
 -- take record from invoice which has been added to stock and add it to set for
 -- new customer reserve - from ***AVALIABLE*** remainders (not linked with client order)
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER PK_WARES)
 select w.id
 from wares w
 where
@@ -5083,7 +5091,7 @@ where
         where q.ware_id = w.id
         and q.snd_optype_id = 2100
         and q.rcv_optype_id = 3300
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by w.id
 rows 1;
@@ -5095,6 +5103,9 @@ as
 -- source for random choose ware_id in sp_customer_reserve => sp_fill_shopping_cart:
 -- take record from invoice which has been added to stock and add it to set for
 -- new customer reserve - from avaliable remainders
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER WARES_ID_DESC)
 select w.id
 from wares w
 where
@@ -5103,7 +5114,7 @@ where
         where q.ware_id = w.id
         and q.snd_optype_id = 2100
         and q.rcv_optype_id = 3300
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by w.id desc
 rows 1;
@@ -5112,25 +5123,28 @@ rows 1;
 create or alter view v_random_find_clo_ord as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from client order to be added into supplier order
--- Checked 12.09.2014
---PLAN (V TMP$SHOPPING_CART INDEX (TMP_SHOPCART_UNQ))
---PLAN (V QDISTR ORDER QDISTR_WARE_SNDOP_RCVOP) -- ::: NB ::: no bitmap here (speed!)
---PLAN (V W ORDER WARES_ID_DESC)
+-- plan in 2.5 (checked 02.12.2014):
+-- (C INDEX (TMP_SHOPCART_UNQ))
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W NATURAL)
 select w.id
 from wares w
 where
-    not exists(select * from tmp$shopping_cart c where c.id = w.id order by c.id)
+    not exists(select * from tmp$shopping_cart c where c.id = w.id) -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by c.id)
     and exists(
         select * from qdistr q
         where q.ware_id = w.id
         and q.snd_optype_id = 1000
         and q.rcv_optype_id = 1200
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     );
 
 create or alter view v_min_id_clo_ord as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from client order to be added into supplier order
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER PK_WARES)
 select w.id
 from wares w
 where
@@ -5139,7 +5153,7 @@ where
         where q.ware_id = w.id
         and q.snd_optype_id = 1000
         and q.rcv_optype_id = 1200
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by w.id
 rows 1;
@@ -5147,6 +5161,9 @@ rows 1;
 create or alter view v_max_id_clo_ord as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from client order to be added into supplier order
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER WARES_ID_DESC)
 select w.id
 from wares w
     where exists(
@@ -5154,35 +5171,39 @@ from wares w
         where q.ware_id = w.id
         and q.snd_optype_id = 1000
         and q.rcv_optype_id = 1200
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by w.id desc
 rows 1;
+
 
 -------------
 
 create or alter view v_random_find_ord_sup as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from supplier order to be added into invoice by him
--- Checked 12.09.2014:
---PLAN (V TMP$SHOPPING_CART INDEX (TMP_SHOPCART_UNQ))
---PLAN (V QDISTR ORDER QDISTR_WARE_SNDOP_RCVOP) -- ::: NB ::: no bitmap here (speed!)
---PLAN (V W ORDER WARES_ID_DESC)
+-- plan in 2.5 (checked 02.12.2014):
+-- (C INDEX (TMP_SHOPCART_UNQ))
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W NATURAL)
 select w.id
 from wares w
 where
-    not exists(select * from tmp$shopping_cart c where c.id = w.id order by c.id)
+    not exists(select * from tmp$shopping_cart c where c.id = w.id) -- 02.12.2014 wrong in 2.5 (use only in 3.0):  order by c.id)
     and exists(
         select * from qdistr q
         where q.ware_id = w.id
         and q.snd_optype_id = 1200 -- fn_oper_order_for_supplier()
         and q.rcv_optype_id = 2000
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     );
 
 create or alter view v_min_id_ord_sup as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from supplier order to be added into invoice by him
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER PK_WARES)
 select w.id
 from wares w
 where
@@ -5191,7 +5212,7 @@ where
         where q.ware_id = w.id
         and q.snd_optype_id = 1200 -- fn_oper_order_for_supplier()
         and q.rcv_optype_id = 2000
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by id
 rows 1;
@@ -5199,6 +5220,9 @@ rows 1;
 create or alter view v_max_id_ord_sup as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from supplier order to be added into invoice by him
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_WARE_SNDOP_RCVOP))
+-- (W ORDER WARES_ID_DESC)
 select w.id
 from wares w
 where
@@ -5207,7 +5231,7 @@ where
         where q.ware_id = w.id
         and q.snd_optype_id = 1200 -- fn_oper_order_for_supplier()
         and q.rcv_optype_id = 2000
-        order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
+        -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     )
 order by id desc
 rows 1;
@@ -5215,7 +5239,9 @@ rows 1;
 --------------------------
 
 create or alter view v_random_find_clo_res as
--- 22.09.2014
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC))
+-- JOIN (H NATURAL, D INDEX (FK_DOC_DATA_DOC_LIST))
 select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
@@ -5227,15 +5253,15 @@ and exists(
         q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
         and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
         and q.snd_id = d.id
-    order by q.snd_optype_id desc, q.rcv_optype_id desc, q.snd_id desc
+    -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by q.snd_optype_id desc, q.rcv_optype_id desc, q.snd_id desc
 )
 ;
 
 -------------------------------------------------------------------------------
 create or alter view v_min_id_clo_res as
--- 22.09.2014
---PLAN (Q ORDER QDISTR_SNDOP_RCVOP_SNDID_DESC)
---PLAN JOIN (H ORDER PK_DOC_LIST, D INDEX (FK_DOC_DATA_DOC_LIST))
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC))
+-- JOIN (H ORDER PK_DOC_LIST, D INDEX (FK_DOC_DATA_DOC_LIST))
 select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
@@ -5247,7 +5273,7 @@ and exists(
         q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
         and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
         and q.snd_id = d.id
-    order by q.snd_optype_id desc, q.rcv_optype_id desc
+    -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by q.snd_optype_id desc, q.rcv_optype_id desc
 )
 order by h.id
 rows 1
@@ -5256,9 +5282,9 @@ rows 1
 -------------------------------------------------------------------------------
 
 create or alter view v_max_id_clo_res as
--- 22.09.2014
---PLAN (Q ORDER QDISTR_SNDOP_RCVOP_SNDID_DESC)
---PLAN JOIN (H ORDER DOC_LIST_ID_DESC, D INDEX (FK_DOC_DATA_DOC_LIST))
+-- plan in 2.5 (checked 02.12.2014):
+-- (Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC))
+-- JOIN (H ORDER DOC_LIST_ID_DESC, D INDEX (FK_DOC_DATA_DOC_LIST))
 select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
@@ -5270,7 +5296,7 @@ and exists(
         q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
         and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
         and q.snd_id = d.id
-    order by q.snd_optype_id desc, q.rcv_optype_id desc, q.snd_id desc
+    -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by q.snd_optype_id desc, q.rcv_optype_id desc, q.snd_id desc
 )
 order by h.id desc
 rows 1
