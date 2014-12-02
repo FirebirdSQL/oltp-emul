@@ -25,7 +25,7 @@ is_embed=0
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. No spaces or non-latin characters can be here!
-dbnm=/var/db/fb25/oltp25c.fdb
+dbnm=/var/db/fb25/oltp25.fdb
 
 # Should 'SET TRANSACTION' command include NO AUTO UNDO clause ?
 # Recommended value: 1

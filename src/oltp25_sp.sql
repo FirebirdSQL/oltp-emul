@@ -3465,7 +3465,8 @@ begin
         (
             select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
             from perf_log p
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+            -- nb: do NOT use inner join here (bad plan with sort)
+            where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
             order by p.dts_beg desc
             rows 1
         ) y
@@ -3612,7 +3613,8 @@ begin
                 ,i.intervals_number
             from perf_log p
             join i on 1=1
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+            -- nb: do NOT use inner join here (bad plan with sort)
+            where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
             order by p.dts_beg desc
             rows 1
         ) y on 1=1
@@ -3810,7 +3812,8 @@ begin
         (
             select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
             from perf_log p
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+            -- nb: do NOT use inner join here (bad plan with sort)
+            where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
             order by p.dts_beg desc
             rows 1
         ) y
@@ -4034,7 +4037,8 @@ begin
             (
                 select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
                 from perf_log p
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+                -- nb: do NOT use inner join here (bad plan with sort)
+                where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
                 order by p.dts_beg desc
                 rows 1
             ) y
