@@ -23,7 +23,7 @@ echo %date% %time% - starting %~f0
 echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 
 set cfg=oltp%fb%_config.win
-echo Parsing config file ^>%cfg%^<:
+echo Parsing config file ^>%cfg%^<. Please wait. . .
 set err_setenv=0
 @rem Extract only non-empty lines with only names of parameters:
 for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
@@ -95,6 +95,14 @@ if .%1.==.30. (
   )
 )
 if .%err_setenv%.==.1. goto no_env
+
+@rem removing trailing backslash from %fbc% and %tmpdif% if any:
+if .%fbc:~-1%.==.\. (
+  set fbc=%fbc:~0,-1%
+)
+if .%tmpdir:~-1%.==.\. (
+  set tmpdir=%tmpdir:~0,-1%
+)
 
 @rem check that result of PREVIOUSLY called batch (1build_oltp_emul_NN.bat) is OK:
 

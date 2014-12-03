@@ -6,17 +6,17 @@
 # Do *NOT* remove or make empty (undefined) any of these parameters.
 ####################################################################
 
-# Folder with Firebird console utilities (do NOT use final backslash here).
+# Folder with Firebird console utilities, with or w/o trailing backslash.
 # If folder contain spaces, enclose in quotes each part 
 # of path that contain spaces, i.e.:
-# fbc=C:\"Program Files"\"Firebird 3.x"\snapshot
-# fbc=C:\"Program Files"\"Spybot - Search & Destroy"\"bim bom"\bin
+# fbc=C:\"Program Files"\"Firebird 2.5.x"\bin
+# fbc=C:\"Program Files"\"Firebird 3.0.x"
 
-fbc=C:\MIX\firebird\fb25\bin
+fbc= C:\MIX\firebird\fb25\bin
 
-# Folder where to store work and error logs (do NOT use final backslash here).
-# Do NOT use "%" character for referencing to some environment variables like TEMP,
-# use "!" instead:
+# Folder where to store work and error logs, with or w/o trailing backslash.
+# Do NOT use "%" character for referencing to some windows environment
+# variables like TEMP, use "!" instead, or specify absolute path:
 tmpdir=!temp!\logs.oltp25
 
 # is_embed=1 - if Firebird runs in embedded mode, otherwise 0
@@ -24,7 +24,7 @@ is_embed=0
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
-# FULL PATH and file name. No spaces or non-latin characters can be here!
+# FULL PATH and file name. No spaces or non-latin characters can be here.
 dbnm=/var/db/fb25/oltp25.fdb
 
 # Should 'SET TRANSACTION' command include NO AUTO UNDO clause ?
@@ -65,7 +65,7 @@ warm_time=20
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
-test_time=60
+test_time=180
 
 # Rest params are not needed if embedded mode but should be non-empty 
 # for this command scenario:
