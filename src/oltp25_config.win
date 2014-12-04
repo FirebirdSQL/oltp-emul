@@ -1,8 +1,8 @@
-# Configuration parameters for OLTP-EMUL test for parsing by
-# WINDOWS command scenario '1run_oltp_emul.bat' and launching
-# test against Firebird 2.5
-
 ####################################################################
+# OLTP-EMUL test for Firebird 2.5 & 3.0 - configuration parameters.
+# This file is used for running ISQL sessions on WINDOWS machine
+# and test Firebird 2.5.
+# Parameters are extracted by '1run_oltp_emul.bat' command batch.
 # Do *NOT* remove or make empty (undefined) any of these parameters.
 ####################################################################
 

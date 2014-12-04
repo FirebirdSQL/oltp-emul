@@ -1162,6 +1162,10 @@ do
     fi
 done<$cfg
 
+# Remove trailing slash from variables which store PATHs:
+fbc=${fbc%/}
+tmpdir=${tmpdir%/}
+
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
 echo -ne "Check that all necessary environment variables have values. . . "
 vars=(tmpdir fbc is_embed dbnm no_auto_undo use_mtee detailed_info init_docs init_buff wait_for_copy warm_time test_time)

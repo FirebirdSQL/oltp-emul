@@ -170,6 +170,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
 
    You can force to stop all working ISQLs at any time (i.e. beforehand) by opening 'stoptest.txt' 
    and type any single character in it followed by newline. In case when this file (and FB) is on 
-   Windows host, run Notepad.exe and load this file in editor using Ctrl-O ("Open File" dialog).
+   Windows host, run Notepad.exe, add some letter and press CR/LF, than save this new file to 
+   'stoptest.txt' in the folder {ExternalFileAccess}.
 
 9. Full description of test: doc/oltp_emul_test_for_firebird_25_and_30_-_description.doc (rus)
