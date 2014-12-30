@@ -7,6 +7,12 @@
 # # #                                                                   # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
+To get last version: 
+
+svn checkout svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/ .
+
+===============================================================================
+
 This is Quick-Start guide for test that emulates OLTP workload on FB 2.5 & 3.0.
 Please READ all this file carefully before making any attempt to run test.
 
