@@ -285,6 +285,14 @@ insert into settings(working_mode, mcode,                   svalue)
 insert into settings(working_mode, mcode,                      svalue)
               values('COMMON',       'RANDOM_SEEK_VIA_ROWS_LIMIT', '0') ; -- '10000');
 
+
+-- Used only in THIS script: '1' ==> do NOT add PK+indices for tables which
+-- actually do NOT need them: perf_log,money_turnover_log,invnt_turnover_log
+-- Prevent PK for: qdistr,qstorned,pdistr,pstorned - only if setting
+-- 'HALT_TEST_ON_ERRORS' containing 'PK'
+insert into settings(working_mode, mcode,                      svalue,  init_on)
+              values('COMMON',     'C_MINIMAL_PK_CREATION',   '1',     'db_prepare');
+
 -- Used only in script oltp_data_filling.sql that fills wares table:
 -- min/max cost of purchasing for qty, max profit percent - common for all working_modes:
 insert into settings(working_mode, mcode,                      svalue,  init_on)
@@ -1272,6 +1280,58 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-92
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-924, 335544648, 'conn_lost', 'Connection lost to pipe server.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-926, 335544447, 'no_rollback', 'No rollback performed.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-999, 335544689, 'ib_error', 'Firebird error.');
+commit;
+
+-- REMOVE unneeded indices on field 'ID' for some tables if setting 'C_MINIMAL_PK_CREATION' = '1'
+-- Prevent PK for: qdistr,qstorned,pdistr,pstorned - only if setting
+-- 'HALT_TEST_ON_ERRORS' containing 'PK'
+set term ^;
+execute block as
+    declare v_tab_name dm_dbobj;
+    declare v_idx_name dm_dbobj;
+    declare v_ctr_type dm_dbobj;
+    declare v_ctr_name dm_dbobj;
+    declare v_run_ddl varchar(128);
+    declare v_rel_list varchar(255) = '';
+begin
+    if ( exists(select * from settings s where s.working_mode='COMMON' and s.mcode='C_MINIMAL_PK_CREATION' and s.svalue='1' ) ) then
+    begin
+        v_rel_list = 'perf_log,money_turnover_log,invnt_turnover_log,doc_data';
+        if ( NOT exists(select * from settings s where s.working_mode='COMMON' and s.mcode='HALT_TEST_ON_ERRORS' and s.svalue containing ',PK,' ) )
+        then
+            v_rel_list = v_rel_list || ',qdistr,qstorned,pdistr,pstorned';
+
+        for
+            -- get only PK or ASCENDING UNIQUE indices on field 'ID'
+            -- for tables from :v_rel_list
+            select
+                --ri.*,'#'l,rs.*,'#'ll,rc.*
+                ri.rdb$relation_name tab_name, ri.rdb$index_name idx_name,
+                rc.rdb$constraint_type ctr_type, rc.rdb$constraint_name ctr_name
+            from rdb$indices ri
+            join rdb$index_segments rs on ri.rdb$index_name = rs.rdb$index_name
+            left join rdb$relation_constraints rc on
+                ri.rdb$relation_name=rc.rdb$relation_name
+                and ri.rdb$index_name = rc.rdb$index_name
+            and lower(rc.rdb$constraint_type) in ('primary key','unique')
+                        where
+                            ri.rdb$index_type is distinct from 1 -- only asc indices or PK
+                            and position( ','||lower(trim(ri.rdb$relation_name))||',' in ','|| :v_rel_list ||',') > 0
+                            and lower(rs.rdb$field_name)='id'
+        into v_tab_name, v_idx_name, v_ctr_type, v_ctr_name
+        do begin
+            v_run_ddl =
+                iif( v_ctr_name is not null,
+                    'alter table '||trim(v_tab_name)||' drop constraint '||trim(v_ctr_name),
+                    'drop index '||trim(v_idx_name)
+                );
+            execute statement(v_run_ddl) with autonomous transaction;
+        end
+    end
+end
+^
+set term ;^
+commit;
 
 set list on;
 select 'oltp_main_filling.sql finish' as msg, current_timestamp from rdb$database;
