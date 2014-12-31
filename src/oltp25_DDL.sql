@@ -883,7 +883,7 @@ commit;
 -- (these rows will be moved from this table to QStorned during every storning
 -- operation, see s`p_make_qty_storno):
 recreate table qdistr(
-   id dm_ids
+   id dm_ids not null
   ,doc_id dm_ids -- denorm for speed, also 4debug
   ,ware_id dm_ids
   ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
@@ -912,7 +912,7 @@ commit;
 -- 22.05.2014: storage for records which are removed from Qdistr when they are 'storned'
 -- (will returns back into qdistr when cancel operation or delete document, see s`p_kill_qty_storno):
 recreate table qstorned(
-   id dm_ids
+   id dm_ids not null
   ,doc_id dm_ids -- denorm for speed
   ,ware_id dm_ids
   ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
