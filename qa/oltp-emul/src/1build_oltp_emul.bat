@@ -14,7 +14,7 @@ goto no_arg1
 
 :ok
 
-set cfg=oltp_config.%fb%
+set cfg=oltp%fb%_config.win
 for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
   set %%a
 )

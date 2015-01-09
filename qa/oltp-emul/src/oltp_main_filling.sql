@@ -197,6 +197,12 @@ insert into settings(working_mode, mcode,           svalue)
               values('INIT',       'WORKING_MODE',  'SMALL_03'); -- DEFAULT: 'SMALL_03'
 -- DEBUG_01 DEBUG_1A DEBUG_02 DEBUG_03 DEBUG_04 SMALL_01  SMALL_02 SMALL_03 MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
 
+
+-- List of units for which we want to gather info from mon$table_stats
+-- (only for performance analysis in 3.0 when run from IBE, not from isql!):
+insert into settings(working_mode, mcode,                  svalue)
+              values('COMMON',       'TRACED_UNITS', ',,');
+
 -- do we ALLOW to query mon$-tables in ALL cases (not only when some blocking bug encountered) ?
 -- update settings set svalue='0' where mcode='ENABLE_MON_QUERY';
 -- update settings set svalue='1' where mcode='ENABLE_MON_QUERY';
@@ -209,11 +215,6 @@ insert into settings(working_mode, mcode, svalue)
                              ,'0'
                             )
                     );
-
--- List of units for which we want to gather info from mon$table_stats
--- (only for performance analysis in 3.0 when run from IBE, not from isql!):
-insert into settings(working_mode, mcode,                  svalue)
-              values('COMMON',       'TRACED_UNITS', ',,');
 
 -- Should test STOP itself if exceptions like PK/FK or check violation occur ?
 -- (these exceptions can appear only under heavy load):
@@ -231,11 +232,21 @@ insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
                       decode( rdb$get_context('SYSTEM','ENGINE_VERSION')
-                             ,'3.0.0', ',CK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - to be tested
+                             ,'3.0.0', ',CK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
                              ,'2.5.3', ',CK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
                              ,',NONE,'
                             )
                     );
+
+-- LOG_PK_VIOLATION:
+-- = '0' ==> REMOVE primary keys from tables qdistr, qstorned, pdistr & pstorned
+-- in order to increase performance (but only if HALT_TEST_ON_ERRORS does NOT
+-- containing ',PK,');
+-- = '1' ==> do NOT remove PK from some tables where these constraints actually
+-- NOT needed (they were added in early stage of test implementation)
+-- Logging of PK violations see in sp SRV_LOG_DUPS_QD_QS
+insert into settings(working_mode, mcode,                      svalue,  init_on)
+              values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
 
 -- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
 -- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
@@ -285,13 +296,6 @@ insert into settings(working_mode, mcode,                   svalue)
 insert into settings(working_mode, mcode,                      svalue)
               values('COMMON',       'RANDOM_SEEK_VIA_ROWS_LIMIT', '0') ; -- '10000');
 
-
--- Used only in THIS script: '1' ==> do NOT add PK+indices for tables which
--- actually do NOT need them: perf_log,money_turnover_log,invnt_turnover_log
--- Prevent PK for: qdistr,qstorned,pdistr,pstorned - only if setting
--- 'HALT_TEST_ON_ERRORS' containing 'PK'
-insert into settings(working_mode, mcode,                      svalue,  init_on)
-              values('COMMON',     'C_MINIMAL_PK_CREATION',   '1',     'db_prepare');
 
 -- Used only in script oltp_data_filling.sql that fills wares table:
 -- min/max cost of purchasing for qty, max profit percent - common for all working_modes:
@@ -1292,42 +1296,55 @@ execute block as
     declare v_ctr_type dm_dbobj;
     declare v_ctr_name dm_dbobj;
     declare v_run_ddl varchar(128);
-    declare v_rel_list varchar(255) = '';
+    declare v_rel_list varchar(255);
+    declare v_halt_on_err_list dm_setting_value = ',,';
+    declare v_log_pk_violation dm_setting_value = '1';
 begin
-    if ( exists(select * from settings s where s.working_mode='COMMON' and s.mcode='C_MINIMAL_PK_CREATION' and s.svalue='1' ) ) then
-    begin
-        v_rel_list = 'perf_log,money_turnover_log,invnt_turnover_log,doc_data';
-        if ( NOT exists(select * from settings s where s.working_mode='COMMON' and s.mcode='HALT_TEST_ON_ERRORS' and s.svalue containing ',PK,' ) )
-        then
-            v_rel_list = v_rel_list || ',qdistr,qstorned,pdistr,pstorned';
+    select s.svalue from settings s where s.mcode='HALT_TEST_ON_ERRORS'
+    into v_halt_on_err_list; -- ',CK,'; ',CK,PK,'
 
-        for
-            -- get only PK or ASCENDING UNIQUE indices on field 'ID'
-            -- for tables from :v_rel_list
-            select
-                --ri.*,'#'l,rs.*,'#'ll,rc.*
-                ri.rdb$relation_name tab_name, ri.rdb$index_name idx_name,
-                rc.rdb$constraint_type ctr_type, rc.rdb$constraint_name ctr_name
-            from rdb$indices ri
-            join rdb$index_segments rs on ri.rdb$index_name = rs.rdb$index_name
-            left join rdb$relation_constraints rc on
-                ri.rdb$relation_name=rc.rdb$relation_name
-                and ri.rdb$index_name = rc.rdb$index_name
-            and lower(rc.rdb$constraint_type) in ('primary key','unique')
-                        where
-                            ri.rdb$index_type is distinct from 1 -- only asc indices or PK
-                            and position( ','||lower(trim(ri.rdb$relation_name))||',' in ','|| :v_rel_list ||',') > 0
-                            and lower(rs.rdb$field_name)='id'
-        into v_tab_name, v_idx_name, v_ctr_type, v_ctr_name
-        do begin
-            v_run_ddl =
-                iif( v_ctr_name is not null,
-                    'alter table '||trim(v_tab_name)||' drop constraint '||trim(v_ctr_name),
-                    'drop index '||trim(v_idx_name)
-                );
-            execute statement(v_run_ddl) with autonomous transaction;
-        end
+    select s.svalue from settings s where s.mcode='LOG_PK_VIOLATION'
+    into v_log_pk_violation; -- '1' or '0'
+
+    if ( v_log_pk_violation = '1' or v_halt_on_err_list containing ',PK,'
+       ) then
+      --#####
+        exit; -- PRESERVE PKs!
+      --#####
+
+    -- PK violation can occur only in these tables.
+    -- If we have decided do not watch for PK violations than corresp. constraints
+    -- can be removed now because actually there are no PK index from these tables
+    -- which participates in any search/join etc:
+    v_rel_list = 'qdistr,qstorned,pdistr,pstorned';
+    ------------------------------------------------------------------------
+    for
+        -- get only PK or ASCENDING UNIQUE indices on field 'ID'
+        -- for tables from :v_rel_list
+        select
+            --ri.*,'#'l,rs.*,'#'ll,rc.*
+            ri.rdb$relation_name tab_name, ri.rdb$index_name idx_name,
+            rc.rdb$constraint_type ctr_type, rc.rdb$constraint_name ctr_name
+        from rdb$indices ri
+        join rdb$index_segments rs on ri.rdb$index_name = rs.rdb$index_name
+        left join rdb$relation_constraints rc on
+            ri.rdb$relation_name=rc.rdb$relation_name
+            and ri.rdb$index_name = rc.rdb$index_name
+        and lower(rc.rdb$constraint_type) in ('primary key','unique')
+                    where
+                        ri.rdb$index_type is distinct from 1 -- only asc indices or PK
+                        and position( ','||lower(trim(ri.rdb$relation_name))||',' in ','|| :v_rel_list ||',') > 0
+                        and lower(rs.rdb$field_name)='id'
+    into v_tab_name, v_idx_name, v_ctr_type, v_ctr_name
+    do begin
+        v_run_ddl =
+            iif( v_ctr_name is not null,
+                'alter table '||trim(v_tab_name)||' drop constraint '||trim(v_ctr_name),
+                'drop index '||trim(v_idx_name)
+            );
+        execute statement(v_run_ddl) with autonomous transaction;
     end
+
 end
 ^
 set term ;^
