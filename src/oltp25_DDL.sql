@@ -392,6 +392,9 @@ recreate global temporary table tmp$shopping_cart(
    constraint tmp_shopcart_unq unique(id, snd_id) using index tmp_shopcart_unq
 ) on commit delete rows;
 commit;
+-- 08.01.2014, see sp make_qty_storno, investigatin perf. for NL vs MERGE
+--create index tmp_shopcart_rcv_op on tmp$shopping_cart(rcv_optype_id);
+--commit;
 
 recreate global temporary table tmp$dep_docs(
   base_doc_id dm_ids,
@@ -792,14 +795,14 @@ commit;
 
 -- doc detailization (child for doc_list):
 recreate table doc_data(
-   id dm_ids
+   id dm_ids not null
   ,doc_id dm_ids
   ,ware_id dm_ids
   ,qty dm_qty
   ,cost_purchase dm_cost
   ,cost_retail dm_cost default 0
   ,dts_edit timestamp -- last modification timestamp; do NOT use `default 'now'` here!
-  ,constraint pk_doc_data primary key(id) using index pk_doc_data
+  -- finally dis 09.01.2015, not needed for this table: ,constraint pk_doc_data primary key(id) using index pk_doc_data
   ,constraint doc_data_doc_ware_unq unique(doc_id, ware_id) using index doc_data_doc_ware_unq
   ,constraint doc_data_qty_cost_both check ( qty>0 and cost_purchase>0 and cost_retail>0 or qty = 0 and cost_purchase = 0 and cost_retail=0 )
 );
@@ -809,7 +812,7 @@ commit;
 -- (will be agregated in sp_make_cost_storno, with serialized access to this SP)
 -- (NB: *not* all operations add rows in this table)
 recreate table money_turnover_log(
-    id dm_ids constraint pk_money_turnover_log primary key using index pk_money_turnover_log
+    id dm_ids not null
    ,doc_id dm_ids -- FK, ref to doc_list, here may be MORE THAN 1 record
    ,agent_id dm_ids
    ,optype_id dm_ids
@@ -817,6 +820,10 @@ recreate table money_turnover_log(
    ,cost_retail dm_vals -- can be < 0 when deleting records in doc_xxx
    ,dts timestamp default 'now'
 );
+-- finally dis 09.01.2015, not needed for this table:
+-- alter table constraint money_turnover_log
+-- add constraint pk_money_turnover_log primary key(id)
+-- using index pk_money_turnover_log;
 
 -- Result of data aggregation of table money_turnover_log in sp_make_cost_storno
 -- This table is updated only in 'serialized' mode by SINGLE attach at a time.
@@ -1049,11 +1056,11 @@ recreate table invnt_turnover_log(
    ,doc_pref dm_mcode
    ,doc_data_id bigint
    ,optype_id bigint
-   ,id dm_ids
+   ,id dm_ids not null
    ,dts_edit timestamp default 'now' -- last modification timestamp
    ,att_id int default current_connection
    ,trn_id int default current_transaction
-   ,constraint pk_invnt_turnover_log primary key(id) using index pk_invnt_turnover_log
+   -- finally dis 09.01.2015, not needed for this table: ,constraint pk_invnt_turnover_log primary key(id) using index pk_invnt_turnover_log
 );
 create index invnt_turnover_log_ware_dd_id on invnt_turnover_log(ware_id, doc_data_id);
 
@@ -1101,7 +1108,7 @@ recreate table perf_log(
   ,dump_trn bigint default current_transaction
   -- dis: constraint pk_perf_log primary key using index pk_perflog_log, see s`p_add_to_perf_log // 04.07.2014
 );
-create index perf_log_id on perf_log(id);
+-- finally dis 09.01.2015, not needed for this table: create index perf_log_id on perf_log(id);
 create descending index perf_log_dts_beg_desc on perf_log(dts_beg);
 create descending index perf_log_unit on perf_log(unit, elapsed_ms);
 -- 4 some analysis, added 25.06.2014:
@@ -7145,8 +7152,9 @@ as
                 from tmp$shopping_cart c
                 INNER join rules_for_qdistr r
                   on :a_client_order_id is NOT null
-                     -- only in 3.0: hash join (todo: check perf when NL, create indices)
-                     and c.rcv_optype_id +0 = r.rcv_optype_id + 0
+                     -- ...= r.rcv_optype_id + 0 ==> PLAN MERGE (SORT (R NATURAL), SORT (C NATURAL))
+                     -- ...= r.rcv_optype_id  ==> PLAN JOIN (C NATURAL, R INDEX (RULES_FOR_QDISTR_RCVOP))
+                     and c.rcv_optype_id = r.rcv_optype_id
                      and r.storno_sub = 2
         ) u
         order by id, storno_sub
