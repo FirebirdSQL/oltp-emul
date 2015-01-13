@@ -245,6 +245,8 @@ insert into settings(working_mode, mcode, svalue)
 -- = '1' ==> do NOT remove PK from some tables where these constraints actually
 -- NOT needed (they were added in early stage of test implementation)
 -- Logging of PK violations see in sp SRV_LOG_DUPS_QD_QS
+-- update settings set svalue='0' where mcode='LOG_PK_VIOLATION';
+-- update settings set svalue='1' where mcode='LOG_PK_VIOLATION';
 insert into settings(working_mode, mcode,                      svalue,  init_on)
               values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
 

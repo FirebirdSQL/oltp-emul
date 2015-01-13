@@ -925,7 +925,7 @@ recreate table qstorned(
   ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
   ,snd_id dm_ids -- ==> doc_data.id of "sender"
   ,snd_qty dm_qty
-  ,rcv_doc_id dm_ids -- 30.12.2014, for enable to remove PK on doc_data, see SP_LOCK_DEPENDENT_DOCS
+  ,rcv_doc_id dm_ids -- 30.12.2014, for enable to remove PK on doc_data, see S`P_LOCK_DEPENDENT_DOCS
   ,rcv_optype_id dm_ids
   ,rcv_id dm_ids
   ,rcv_qty dm_qty
@@ -1092,7 +1092,7 @@ recreate table perf_log(
    id dm_ids -- value from sequence where record has been added into GTT tmp$perf_log
   ,id2 bigint -- value from sequence where record has been written from tmp$perf_log into fixed table perf_log (need for debug)
   ,unit dm_unit -- name of executed SP
-  ,exc_unit char(1) -- was THIS unit the place where exception raised ?
+  ,exc_unit char(1) -- was THIS unit the place where exception raised ? yes ==> '#'
   ,fb_gdscode int -- how did finish this unit (0 = OK)
   ,trn_id bigint default current_transaction
   ,att_id int default current_connection
@@ -1823,7 +1823,6 @@ begin
     do
     begin
         v_line = trim(obj_name)||'('||src_row||':'||src_col||') ==> ';
-        --rdb$set_context('USER_TRANSACTION','DBG_STACK_LINE_'||v_call_level, v_line);
         if ( char_length(result) + char_length(v_line) >= 512 )
         then
             exit;
@@ -1835,7 +1834,6 @@ begin
     end
     if ( result > '' ) then
        result = substring( result from 1 for char_length(result)-5 );
-    --rdb$set_context('USER_TRANSACTION','DBG_STACK_FULL', result);
 
     suspend;
 end
@@ -1878,6 +1876,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_flush_tmpperf_in_auton_tx(
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
     a_context_rows_cnt int, -- how many 'records' with context vars need to be processed
     a_gdscode int default null
 )
@@ -1887,30 +1886,40 @@ as
     declare v_curr_tx int;
     declare v_exc_unit type of column perf_log.exc_unit;
     declare v_stack dm_stack;
+    declare v_dbkey dm_dbkey;
+
 begin
     -- Flushes all data from context variables with names 'PERF_LOG_xxx'
-    -- which have been set in sp_flush_perf_log_on_abend for saving uncommitted
+    -- which have been set in sp_f`lush_perf_log_on_abend for saving uncommitted
     -- data in tmp$perf_log in case of error. Frees namespace USER_SESSION from
     -- all such vars (allowing them to store values from other records in tmp$perf_log)
     -- Called only from sp_abend_flush_perf_log
     v_curr_tx = current_transaction;
+
     -- 13.08.2014: we have to get full call_stack in AUTONOMOUS trn!
     -- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1109867&msg=16422273
     in autonomous transaction do -- *****  A U T O N O M O U S    T x, due to call fn_get_stack *****
     begin
+        -- 11.01.2015: decided to profile this:
+        insert into perf_log(unit, dts_beg, trn_id, ip)
+        values( 't$perf-abend:' || :a_starter,
+                'now',
+                :v_curr_tx,
+                rdb$get_context('SYSTEM','CLIENT_ADDRESS')
+              )
+        returning rdb$db_key into v_dbkey; -- will return to this row after loop
+
         i=0;
         while (i < a_context_rows_cnt) do
         begin
-            v_id = rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID');
-            v_exc_unit =  rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI'); -- '#' ==> this is unit where exception occured
-            if ( v_exc_unit = '#' ) then
+            v_exc_unit =  rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI');
+            if ( v_exc_unit = '#' ) then -- ==> call from unit <U> where exception occured (not from callers of <U>)
                 select result from fn_get_stack( (select result from fn_halt_sign(:a_gdscode)) ) into v_stack;
             else
                 v_stack = null;
 
             insert into perf_log(
                 id,
-                id2,
                 unit,
                 fb_gdscode,
                 info,
@@ -1926,8 +1935,7 @@ begin
                 stack
             )
             values(
-                :v_id, -- <<< from tmp$perf_log
-                gen_id(g_perf_log, 1),
+                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID'),
                 rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_UNIT'),
                 rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_GDS'),
                 rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_INFO'),
@@ -1939,7 +1947,7 @@ begin
                 rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX1'),
                 rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX2'),
                 :v_curr_tx,
-                rdb$get_context('SYSTEM', 'CLIENT_ADDRESS'),
+                rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
                 :v_stack
             );
 
@@ -1958,6 +1966,14 @@ begin
     
             i = i + 1;
         end -- while (i < v_cnt)
+
+        update perf_log g
+        set info = 'gds='|| :a_gdscode||', autonomous Tx: ' ||:i||' rows',
+            dts_end = 'now',
+            elapsed_ms = datediff( millisecond from dts_beg to cast('now' as timestamp) ),
+            aux1 = :i
+        where g.rdb$db_key = :v_dbkey;
+
     end -- in autonom. tx
 end
 
@@ -1972,6 +1988,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_flush_perf_log_on_abend(
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
     a_unit dm_unit, -- name of module where trouble occured
     a_gdscode int default null,
     a_info dm_info default null, -- additional info for debug
@@ -1995,6 +2012,10 @@ as
     declare v_dts_end timestamp;
     declare v_aux1 type of column perf_log.aux1;
     declare v_aux2 type of column perf_log.aux2;
+    declare c_gen_inc_step_pf int = 20; -- size of `batch` for get at once new IDs for perf_log (reduce lock-contention of gen page)
+    declare v_gen_inc_iter_pf int; -- increments from 1  up to c_gen_inc_step_pf and then restarts again from 1
+    declare v_gen_inc_last_pf dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_pf)
+    declare v_pf_new_id dm_ids;
 begin
 
     -- called only if ***ABEND*** occurs (from sp`_add_to_abend_log)
@@ -2002,31 +2023,38 @@ begin
     then
         exit; -- we already done this (just after unit where exc`exption occured)
 
-    -- First, calculate (approx) avaliable limit for creating new ctx vars:
-    -- limitation of Firebird: not more than 1000 context variables; take twise less than this limit
-    select :c_max_context_var_cnt - sum(c)
-    from (
-        select count(*) c
-        from settings s
-        where s.working_mode in(
-            'COMMON',
-            rdb$get_context('USER_SESSION','WORKING_MODE') -- fixed 05.10.2014, letter by Simonov Denis
+    v_ctx_lim = cast( rdb$get_context('USER_SESSION', 'CTX_LIMIT_FOR_FLUSH_PERF_LOG') as smallint );
+    if ( v_ctx_lim is null ) then
+    begin
+        -- First, calculate (approx) avaliable limit for creating new ctx vars:
+        -- limitation of Firebird: not more than 1000 context variables; take twise less than this limit
+        select :c_max_context_var_cnt - sum(c)
+        from (
+            select count(*) c
+            from settings s
+            where s.working_mode in(
+                'COMMON',
+                rdb$get_context('USER_SESSION','WORKING_MODE')
+            )
+            union all
+            select count(*) from optypes    -- look at fn_oper_xxx stored funcs
+            union all
+            select count(*) from doc_states -- look at fn_doc_xxx_state stored funcs
+            union all
+            select count(*) from rules_for_qdistr -- look at sp_cache_rules_for_distr('QDISTR')
+            union all
+            select count(*) from rules_for_pdistr -- look at sp_cache_rules_for_distr('PDISTR')
         )
-        union all
-        select count(*) from optypes    -- look at fn_oper_xxx stored funcs
-        union all
-        select count(*) from doc_states -- look at fn_doc_xxx_state stored funcs
-        union all
-        select count(*) from rules_for_qdistr -- look at sp_cache_rules_for_distr('QDISTR')
-        union all
-        select count(*) from rules_for_pdistr -- look at sp_cache_rules_for_distr('PDISTR')
-    )
-    into v_ctx_lim;
+        into v_ctx_lim;
+        -- Get number of ROWS from tmp$perf_log to start flush data after reaching it:
+        -- "0.8*" - to be sure that we won`t reach limit;
+        -- "/12" - number of context vars for each record of tmp$perf_log (see below)
+        v_ctx_lim = cast( (0.8 * v_ctx_lim) / 12.0 as smallint);
+        rdb$set_context('USER_SESSION', 'CTX_LIMIT_FOR_FLUSH_PERF_LOG', v_ctx_lim);
+    end
 
-    -- Get number of ROWS from tmp$perf_log to start flush data after reaching it:
-    -- "0.8*" - to be sure that we won`t reach limit;
-    -- "/12" - number of context vars for each record of tmp$perf_log (see below)
-    v_ctx_lim = cast( (0.8 * v_ctx_lim) / 12.0 as smallint);
+    c_gen_inc_step_pf = v_ctx_lim; -- value to increment IDs in PERF_LOG at one call of gen_id
+    v_gen_inc_iter_pf = c_gen_inc_step_pf;
 
     -- Then, perform transfer from tmp$perf_log to 'fixed' perf_log table
     -- in auton. tx, saving fields data in context vars:
@@ -2038,7 +2066,7 @@ begin
             ,unit
             ,coalesce( fb_gdscode, :a_gdscode, :c_std_user_exc ) as fb_gdscode
             ,info
-            ,exc_unit -- '#' ==> exceptiopn occurs in the module = tmp$perf_log.unit
+            ,exc_unit -- '#' ==> exception occured in the module with name = tmp$perf_log.unit
             ,iif( exc_unit is not null, coalesce( exc_info, :a_exc_info), null ) as exc_info -- fill exc_info only for unit where exc`eption really occured (NOT for unit that calls this 'problem' unit)
             ,dts_beg
             ,coalesce(dts_end, :v_dts) as dts_end
@@ -2051,13 +2079,23 @@ begin
     do
     begin
         if ( v_cnt < v_ctx_lim ) then
+            -- there is enough place in namespace to create new context vars
+            -- instead of starting auton. tx (performance!)
             begin
                 v_info = coalesce(v_info, '');
                 if (v_unit = :a_unit) then
                   v_info = left(v_info || trim(iif( v_info>'', '; ', '')) || coalesce(a_info,''), 255);
-                -- there is enough place in namespace to create new context vars
-                -- instead of starting auton. tx (performance!)
-                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_ID', :v_id);           --  1
+
+                if ( v_gen_inc_iter_pf = c_gen_inc_step_pf ) then -- its time to get another batch of IDs
+                begin
+                    v_gen_inc_iter_pf = 1;
+                    -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
+                    v_gen_inc_last_pf = gen_id( g_perf_log, :c_gen_inc_step_pf );
+                end
+                v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
+                v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
+
+                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_ID', :v_pf_new_id);    -- 1
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_UNIT', :v_unit);       --  2
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_GDS', :v_fb_gdscode ); --  3
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_INFO', :v_info);       --  4
@@ -2073,8 +2111,7 @@ begin
         else -- it's time to "flush" data from context vars to fixed table pref_log using auton tx
             begin
                 -- namespace usage should be reduced ==> flush data from context vars
-                --rdb$set_context('USER_SESSION', 'DEBUG_BEFO_FLUSH__IN_LUP', v_cnt );
-                execute procedure sp_flush_tmpperf_in_auton_tx( v_cnt, a_gdscode);
+                execute procedure sp_flush_tmpperf_in_auton_tx(a_starter, v_cnt, a_gdscode);
                 v_cnt = 0;
             end
     end -- cursor for all rows of tmp$perf_log
@@ -2082,9 +2119,8 @@ begin
     if (v_cnt > 0) then
     begin
         -- flush (again!) to perf_log data from rest of context vars (v_cnt now can be >0 and < c_limit):
-        execute procedure sp_flush_tmpperf_in_auton_tx( v_cnt, a_gdscode);
+        execute procedure sp_flush_tmpperf_in_auton_tx( a_starter, v_cnt, a_gdscode);
     end
-    -- !!! useless!! will be cancelled on next level of stack! >>> delete from tmp$perf_log; (core-4483)
 
     -- create new ctx in order to prevent repeat of transfer on next-level stack:
     rdb$set_context('USER_TRANSACTION', 'DONE_FLUSH_PERF_LOG_ON_ABEND','1');
@@ -2204,6 +2240,9 @@ create or alter procedure sp_add_perf_log ( -- 28.09.2014, instead sp_add_TO_per
 as
     declare v_curr_tx bigint;
     declare v_dts timestamp;
+    declare v_save_dts_beg timestamp;
+    declare v_save_dts_end timestamp;
+    declare v_save_gtt_cnt int;
     declare c_tmp_perf_log cursor for (
         select
             id, id2, unit, exc_unit
@@ -2216,6 +2255,10 @@ as
     declare v_id dm_ids;
     declare v_id2 dm_ids;
     declare v_unit dm_unit;
+    declare c_gen_inc_step_pf int = 20; -- size of `batch` for get at once new IDs for perf_log (reduce lock-contention of gen page)
+    declare v_gen_inc_iter_pf int; -- increments from 1  up to c_gen_inc_step_pf and then restarts again from 1
+    declare v_gen_inc_last_pf dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_pf)
+    declare v_pf_new_id dm_ids;
     declare v_exc_unit char(1);
     declare v_fb_gdscode int;
     declare v_trn_id dm_ids;
@@ -2247,10 +2290,9 @@ begin
        a_is_unit_beginning = 1;
     end
 
-    if ( a_is_unit_beginning = 1 ) then
+    if ( a_is_unit_beginning = 1 ) then -- this is call from ENTRY of :a_unit
         begin
             insert into tmp$perf_log(
-                 id,
                  unit,
                  info,
                  ip,
@@ -2258,7 +2300,6 @@ begin
                  dts_beg
             )
             values(
-                 gen_id(g_perf_log,1),
                  :a_unit,
                  :a_info,
                  rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
@@ -2267,15 +2308,15 @@ begin
             );
             -- save info about last started unit (which can raise exc):
             rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', a_unit);
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_INFO', v_info);
             rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', v_dts);
+            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_INFO', v_info);
         end
-    else -- a_is_unit_beginning = 0
+    else -- a_is_unit_beginning = 0 ==> this is _NORMAL_ finish of :a_unit (i.e. w/o exception)
         begin
             update tmp$perf_log t set
                 info = left(coalesce( info, '' ) || coalesce( trim(iif( info>'', '; ', '') || :a_info), ''), 255),
                 dts_end = :v_dts,
-                id2 = gen_id(g_perf_log,1), -- 4 debug! 28.09.2014
+                -- dis 12.01.2015, not need more: id2 = gen_id(g_perf_log, 1), -- 4 debug! 28.09.2014
                 elapsed_ms = datediff(millisecond from dts_beg to :v_dts),
                 aux1 = :a_aux1,
                 aux2 = :a_aux2
@@ -2283,20 +2324,18 @@ begin
                 t.unit = :a_unit
                 and t.trn_id = :v_curr_tx
                 and dts_end is NULL -- we are looking for record that was added at the BEG of this unit call
-            ; -- returning id, dts_end, info
+            ;
 
-            -- set last added values to NULL in order not to dup them
-            -- in new rows of tmp$perf_log when exc`eption will come
-            -- in upper level(s) from SP which has fault:
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_INFO', null);
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', null);
-
-    
             if ( a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY') ) then
             begin
+                v_gen_inc_iter_pf = c_gen_inc_step_pf;
+
                 -- Finish of top-level unit (which start business op.):
-                -- MOVE data currently stored in GTT tmp$perf_log to fixed table perf_log
+                -- MOVE *ALL* data currently stored in GTT tmp$perf_log to fixed table perf_log
+
+                v_save_dts_beg = 'now'; -- for logging time and number of moved records
+                v_save_gtt_cnt = 0;
+
                 open c_tmp_perf_log;
                 while (1=1) do
                 begin
@@ -2319,24 +2358,53 @@ begin
                         ,v_aux2;
                     if (row_count = 0) then leave;
 
+                    if ( v_gen_inc_iter_pf = c_gen_inc_step_pf ) then -- its time to get another batch of IDs
+                    begin
+                        v_gen_inc_iter_pf = 1;
+                        -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
+                        v_gen_inc_last_pf = gen_id( g_perf_log, :c_gen_inc_step_pf );
+                    end
+                    v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
+                    v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
+
                     insert into perf_log(
-                        id, id2, unit,exc_unit
+                        id
+                        ,unit, exc_unit
                         ,fb_gdscode, trn_id, att_id, elapsed_ms
                         ,info, exc_info, stack
                         ,ip, dts_beg, dts_end
                         ,aux1, aux2
                     ) values (
-                        :v_id, :v_id2, :v_unit, :v_exc_unit
+                        :v_pf_new_id
+                        ,:v_unit, :v_exc_unit
                         ,:v_fb_gdscode, :v_trn_id, :v_att_id, :v_elapsed_ms
                         ,:v_info, :v_exc_info, :v_stack
                         ,:v_ip, :v_dts_beg, :v_dts_end
                         ,:v_aux1, :v_aux2
                     );
+                    v_save_gtt_cnt = v_save_gtt_cnt + 1;
+
                     delete from tmp$perf_log where current of c_tmp_perf_log;
-                end -- loop moving rows from GTT tmp$perf_log to fixed perf_log
+                end -- end of loop moving rows from GTT tmp$perf_log to fixed perf_log
                 close c_tmp_perf_log;
-            end
-        end
+
+                v_save_dts_end = 'now';
+
+                -- Add info about timing and num. of record (tmp$ --> fixed):
+                insert into perf_log(
+                        id,
+                        unit, info, dts_beg, dts_end, elapsed_ms, ip, aux1)
+                values( iif( :v_gen_inc_iter_pf < :c_gen_inc_step_pf, :v_pf_new_id+1, gen_id( g_perf_log, 1 )  ),
+                        't$perf-norm:'||:a_unit,
+                        'ok saved '||:v_save_gtt_cnt||' rows',
+                        :v_save_dts_beg,
+                        :v_save_dts_end,
+                        datediff( millisecond from :v_save_dts_beg to :v_save_dts_end ),
+                        rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
+                        :v_save_gtt_cnt
+                      );
+            end --  a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
+        end -- a_is_unit_beginning = 0
 end
 
 ^ -- sp_add_perf_log
@@ -2376,15 +2444,15 @@ create or alter procedure sp_add_to_abend_log(
        a_caller dm_unit default null,
        a_halt_due_to_error smallint default 0 --  1 ==> forcely extract FULL STACK ignoring settings, because of error + halt test
 ) as
+    declare v_last_unit dm_unit;
+    declare v_last_beg timestamp;
 begin
-
     -- SP for register info about e`xception occured in application module.
     -- When each module starts, it call sp_add_to_perf_log and creates record in
     -- perf_log table for this event. If some e`xception occurs in that module
     -- than code jumps into when_any section with call of this SP.
     -- Now we have to call sp_add_to_perf_log with special argument ('!abend!')
     -- signalling that all data from GTT tmp$perf_log should be saved now via ATx.
-
     if ( a_gdscode is NOT null and nullif(a_exc_info, '') is null ) then -- this is standard error
     begin
         select :a_gdscode||': '||coalesce(f.fb_mnemona||'. ', ' <no-mnemona>. ')||coalesce(f.fb_errtext,'')
@@ -2393,36 +2461,59 @@ begin
         into a_exc_info;
     end
 
-    if ( a_caller = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT') ) then
+    v_last_unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT');
+
+    if ( a_caller = v_last_unit ) then
     begin
-        update tmp$perf_log t
-        set
-            fb_gdscode = :a_gdscode,
-            info = coalesce(rdb$get_context('USER_TRANSACTION','TPLOG_LAST_INFO'),''),
-            exc_unit = '#', -- exc_unit: this module is the source of raised exception
-            dts_end = 'now',
-            elapsed_ms =  datediff(millisecond from dts_beg to cast('now' as timestamp))
-        where
-            t.unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT')
-            and t.trn_id = current_transaction
-            and dts_end is NULL;
+        -- CORE-4483. "Changed data not visible in WHEN-section if exception
+        -- occured inside SP that has been called from this code" ==> last record
+        -- in tmp$perf_log that has been added in SP_ADD_PERF_LOG which has been
+        -- called at the START point of this SP CALLER, will be backed out (REMOVED!)
+        -- when exception occurs later in the intermediate point of caller, so
+        -- HERE we get tmp$perf_log WITHOUT last record!
+        -- 10.01.2015: replaced 'update' with 'update or insert': record in
+        -- tmp$perf_log can be 'lost' in case of exc in caller before we come
+        -- in this SP (sp_cancel_client_order => sp_lock_selected_doc).
+        v_last_beg = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG');
+        update or insert into tmp$perf_log(
+             unit
+            ,fb_gdscode
+            ,info
+            ,exc_unit
+            ,dts_beg
+            ,dts_end
+            ,elapsed_ms
+            ,trn_id
+        ) values (
+             :a_caller
+            ,:a_gdscode
+            ,coalesce(rdb$get_context('USER_TRANSACTION','TPLOG_LAST_INFO'),'')
+            ,'#' -- ==> module :a_caller IS the source of raised exception
+            ,:v_last_beg
+            ,'now'
+            ,datediff(millisecond from :v_last_beg to cast('now' as timestamp))
+            ,current_transaction
+        ) matching ( unit, trn_id ); -- index key: UNIT,TRN_ID,DTS_END
+        -- before 10.01.2015:
+        -- update tmp$perf_log set ... where t.unit = :a_caller and and t.trn_id = current_transaction and and dts_end is NULL;
+        -- rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
 
-        rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
+        -- Save uncommitted data from tmp$perf_log to perf_log (via autonom. tx):
+        -- NB: All records in GTT tmp$perf_log are visible ONLY at the "deepest" point
+        -- when exc` occured. If SP_03 add records to tmp$perf_log and then raises exc
+        -- then all its callers (SP_00==>SP_01==>SP_02) will NOT see these record because
+        -- these changes will be rolled back when exc. comes into these caller.
+        -- So, we must flush records from GTT to fixed table only in the "deepest" point,
+        -- i.e. just in that SP where exc raises.
+        execute procedure sp_flush_perf_log_on_abend(
+            rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY'), -- unit which start this job
+            a_caller,
+            a_gdscode,
+            a_info, -- info for analysis
+            a_exc_info -- info about user-defined or standard e`xception which occured now
+        );
 
-    end
-    -- save uncommitted data from tmp$perf_log to perf_log (via autonom. tx):
-    -- NB: All records in GTT tmp$perf_log are visible ONLY at the "deepest" point
-    -- when exc` occured. If SP_03 add records to tmp$perf_log and then raises exc
-    -- then all its callers (SP_00==>SP_01==>SP_02) will NOT see these record because
-    -- these changes will be rolled back when exc. comes into these caller.
-    -- So, we must flush records from GTT to fixed table only in the "deepest" point,
-    -- i.e. just in that SP where exc raises.
-    execute procedure sp_flush_perf_log_on_abend(
-        a_caller,
-        a_gdscode,
-        a_info, -- info for analysis
-        a_exc_info -- info about user-defined or standard e`xception which occured now
-    );
+    end --  a_caller = v_last_unit 
 
     -- ########################   H A L T   T E S T   ######################
     if ( a_halt_due_to_error = 1 ) then
@@ -2670,14 +2761,12 @@ create or alter procedure fn_get_random_id (
 returns (result bigint)
 as
     declare i smallint;
-    declare v_pass smallint;
-    declare stt varchar(255);
+    declare v_stt varchar(255) = '';
     declare id_min double precision;
     declare id_max double precision;
     declare v_rows int;
     declare id_random bigint;
     declare id_selected bigint = null;
-    declare msg dm_info;
     declare v_info dm_info;
     declare v_this dm_dbobj = 'fn_get_random_id';
 
@@ -2699,6 +2788,14 @@ begin
     --   (==> it will use "where id <= :r order by id DESC" rather than "where id >= :r order by id ASC")
     -- [only when TIL = RC] Repeats <fn_internal_retry_count()> times if result is null
     -- (possible if bounds of IDs has been changed since previous call)
+
+    v_this = trim(a_view_for_search) || ' (' || v_this||')';
+
+    if ( a_raise_exc = 1 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit:
+        execute procedure sp_add_perf_log(1, v_this);
+    end
 
     -- max difference b`etween min_id and max_id to allow scan random id via
     -- select id from <a_view_for_search> rows :x to :y, where x = y = random_int
@@ -2741,104 +2838,106 @@ begin
     a_view_for_min_id = coalesce( a_view_for_min_id, a_view_for_search );
     a_view_for_max_id = coalesce( a_view_for_max_id, a_view_for_min_id, a_view_for_search );
 
-    -- number of probes to search ID in view (for SNAPSHOT always = 1):
-    v_pass = iif( (select result from fn_is_snapshot)=1, 1, 2);
-    while (v_pass > 0) do
+    if ( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) is null
+       or
+       rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) is null
+     ) then
+    begin
+        v_stt='select min(id)-0.5 from '|| a_view_for_min_id;
+        execute statement (:v_stt) into id_min;
+
+        if ( id_min is NOT null ) then -- ==> source <a_view_for_min_id> is NOT empty
+        begin
+            v_stt='select max(id)+0.5 from '|| a_view_for_max_id;
+            execute statement (:v_stt) into id_max;
+            if ( id_max is NOT null  ) then -- ==> source <a_view_for_max_id> is NOT empty
+            begin
+                -- Save values for subsequent calls of this func in this tx (minimize DB access)
+                -- (limit will never change in SNAPSHOT and can change with low probability in RC):
+                rdb$set_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN', :id_min);
+                rdb$set_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX', :id_max);
+        
+                if ( id_max - id_min < fn_internal_max_rows_usage ) then
+                begin
+                    -- when difference b`etween id_min and id_max is not too high, we can simple count rows:
+                    execute statement 'select count(*) from '||a_view_for_search into v_rows;
+                    rdb$set_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT', v_rows );
+                end
+            end -- id_max is NOT null 
+        end -- id_min is NOT null
+    end
+    else begin
+        -- minimize database access! Performance on 10'000 loops: 1485 ==> 590 ms
+        id_min=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) as double precision);
+        id_max=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) as double precision);
+        v_rows=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT') as int);
+    end
+
+    if ( id_max - id_min < fn_internal_max_rows_usage ) then
+        begin
+            v_stt='select id from '||a_view_for_search||' rows :x to :y'; -- ::: nb ::: `ORDER` clause not needed here!
+            --id_random = cast( 1 + rand() * (v_rows - 1) as int); -- WRONG when data skewed to low values; 30.07.2014
+            id_random = ceiling( rand() * (v_rows) );
+            execute statement (:v_stt) (x := id_random, y := id_random) into id_selected;
+        end
+    else
+        begin
+            -- 17.07.2014: for some cases it is ALLOWED to query random ID without "ORDER BY"
+            -- clause because this ID will be handled in such manner that it will be REMOVED
+            -- after this handling from the scope of view! Samples of such cases are:
+            -- sp_cancel_supplier_order, sp_cancel_supplier_invoice, sp_cancel_customer_reserve
+            v_stt='select id from '
+                ||a_view_for_search
+                ||iif(a_find_using_desc_index = 0, ' where id >= :x', ' where id <= :x');
+            if ( a_can_skip_order_clause = 0 ) then
+                v_stt = v_stt || iif(a_find_using_desc_index = 0, ' order by id     ', ' order by id desc');
+            v_stt = v_stt || ' rows 1';
+            id_random = cast( id_min + rand() * (id_max - id_min) as bigint);
+            execute statement (:v_stt) (x := id_random) into id_selected;
+        end
+
+    if ( id_selected is null and coalesce(a_raise_exc, 1) = 1 ) then
     begin
 
-        -- Check that table `ext_stoptest` (external text file) is EMPTY,
-        -- otherwise raises ex`ception to stop test:
-
-        if ( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) is null
-           or
-           rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) is null
-         ) then
-        begin
-            stt='select min(id)-0.5 from '|| a_view_for_min_id;
-            execute statement (:stt) into id_min;
-            if (id_min is null) then
-               leave; -- ###   L E A V E: source is empty, nothing to select ###
-
-            stt='select max(id)+0.5 from '|| a_view_for_max_id;
-            execute statement (:stt) into id_max;
-            if (id_max is null) then
-               leave; -- ###   L E A V E: source is empty, nothing to select ###
-
-            -- Save values for subsequent calls of this func in this tx (minimize DB access)
-            -- (limit will never change in SNAPSHOT and can change with low probability in RC):
-            rdb$set_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN', :id_min);
-            rdb$set_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX', :id_max);
-
-            if ( id_max - id_min < fn_internal_max_rows_usage ) then
-            begin
-                -- when difference b`etween id_min and id_max is not too high, we can simple count rows:
-                execute statement 'select count(*) from '||a_view_for_search into v_rows;
-                rdb$set_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT', v_rows );
-            end
-        end
-        else begin
-            -- minimize database access! Performance on 10'000 loops: 1485 ==> 590 ms
-            id_min=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) as double precision);
-            id_max=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) as double precision);
-            v_rows=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT') as int);
-        end
-
-        if ( id_max - id_min < fn_internal_max_rows_usage ) then
-            begin
-                stt='select id from '||a_view_for_search||' rows :x to :y'; -- ::: nb ::: `ORDER` clause not needed here!
-                --id_random = cast( 1 + rand() * (v_rows - 1) as int); -- WRONG when data skewed to low values; 30.07.2014
-                id_random = ceiling( rand() * (v_rows) );
-                execute statement (:stt) (x := id_random, y := id_random) into id_selected;
-            end
-        else
-            begin
-                -- 17.07.2014: for some cases it is ALLOWED to query random ID without "ORDER BY"
-                -- clause because this ID will be handled in such manner that it will be REMOVED
-                -- after this handling from the scope of view! Samples of such cases are:
-                -- sp_cancel_supplier_order, sp_cancel_supplier_invoice, sp_cancel_customer_reserve
-                stt='select id from '
-                    ||a_view_for_search
-                    ||iif(a_find_using_desc_index = 0, ' where id >= :x', ' where id <= :x');
-                if ( a_can_skip_order_clause = 0 ) then
-                    stt = stt || iif(a_find_using_desc_index = 0, ' order by id     ', ' order by id desc');
-                stt = stt || ' rows 1';
-                id_random = cast( id_min + rand() * (id_max - id_min) as bigint);
-                execute statement (:stt) (x := id_random) into id_selected;
-            end
-
-        if (id_selected is NOT null) then
-             leave; --  ###   L E A V E    ###
-
-        if (id_selected is null and v_pass=2) then
-        begin
-            -- Only to RC: it's time to refresh our knowledge about actual limits (max/min)
-            -- of IDs in <a_view_for_search> because they significantly changed:
-            rdb$set_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN', NULL);
-            rdb$set_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MAX', NULL);
-            -- then loop will continue and make again select min(id), max(id) from <a_view_for_search>
-        end
-
-        v_pass = v_pass - 1;
-    end -- v_pass=2..1
-
-    if ( id_selected is null and coalesce(a_raise_exc,1) = 1 ) then
-    begin
-        msg = 'ex_can_not_select_random_id in '
-              ||trim(iif(id_min is null, 'EMPTY ', ''))||' '||:a_view_for_search;
-
-        v_info='id_rnd='||coalesce(id_random,'<null>');
+        v_info = 'view: '||:a_view_for_search;
         if ( id_min is NOT null ) then
-           v_info = v_info || ', id_min=' || id_min || ', id_max='|| id_max||', ';
+           v_info = v_info || ', id_min=' || id_min || ', id_max='||id_max;
+        else
+           v_info = v_info || ' - EMPTY';
 
-        execute procedure sp_add_to_abend_log(msg,null,v_info, v_this);
+        v_info = v_info ||', id_rnd='||coalesce(id_random,'<null>');
 
         -- 19.07.2014: 'no id>=@1 in @2 found within scope @3 ... @4'
-        --rdb$set_context('USER_TRANSACTION','DEBUG_TSHOP_WARES', (select list(c.id) from tmp$shopping_cart c) );
         exception ex_can_not_select_random_id;
     end
 
     result = id_selected;
+
+    if ( a_raise_exc = 1 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit
+        -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
+        execute procedure sp_add_perf_log(0, v_this, null);
+    end
+
     suspend;
+
+when any do
+    begin
+        -- in a`utonomous tx:
+        -- 1) add to tmp$perf_log error info + timestamp,
+        -- 2) move records from tmp$perf_log to perf_log
+        execute procedure sp_add_to_abend_log(
+            v_stt,
+            gdscode,
+            v_info,
+            v_this,
+            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
 
 end
 
@@ -2877,7 +2976,6 @@ begin
     if ( v_dbkey is null ) then
     begin
         -- no document found for handling in datasource = ''@1'' with id=@2';
-        v_exc_info = 'no_doc_found_for_handling';
         exception ex_no_doc_found_for_handling;
     end
     rdb$set_context('USER_SESSION','ADD_INFO','doc='||v_id||': try to lock'); -- to be displayed in log of 1run_oltp_emul.bat
@@ -2892,11 +2990,10 @@ begin
 
 when any do
     begin
-        v_exc_info = iif( (select result from fn_is_lock_trouble(gdscode)) = 1, 'lk_confl', v_exc_info);
         -- in a`utonomous tx:
         -- 1) add to tmp$perf_log error info + timestamp,
         -- 2) move records from tmp$perf_log to perf_log
-        execute procedure sp_add_to_abend_log( v_exc_info, gdscode, null, v_this );
+        execute procedure sp_add_to_abend_log( '', gdscode, v_info, v_this );
         --########
         exception; -- all number of retries exceeded: raise concurrent_transaction OR deadlock
         --########
@@ -2923,7 +3020,7 @@ as
 begin
     if ( upper(coalesce(a_table,'')) not in ( upper('QDISTR'), upper('PDISTR') ) )
     then
-      exception ex_bad_argument;--  'argument @1 passed to unit @2 is invalid';
+      exception ex_bad_argument; --  'argument @1 passed to unit @2 is invalid';
 
     -- cache records from rules_for_Qdistr and rules_for_Pdistr in context variables
     -- for fast output of them (without database access)
@@ -4635,27 +4732,6 @@ begin
         ) x
         join doc_list h on x.dependend_doc_id = h.id
         into v_dependend_doc_id, v_dependend_doc_state, v_dbkey
-
---        select x.dependend_doc_id, h.state_id, h.rdb$db_key
---        from (
---            select d.doc_id dependend_doc_id --, h.state_id dependend_doc_state
---            from
---            (
---                -- Checked plan 13.07.2014:
---                -- PLAN (Q ORDER QSTORNED_RCV_ID INDEX (QSTORNED_DOC_ID))
---                select q.rcv_id dependend_doc_data_id
---                from qstorned q
---                where
---                    q.doc_id = :a_base_doc_id -- choosen invoice which is to be re-opened
---                    and q.snd_optype_id = :a_base_doc_oper_id
---                    and q.rcv_optype_id = :v_rcv_optype_id
---                group by 1
---            ) r
---            join doc_data d on r.dependend_doc_data_id = d.id
---            group by d.doc_id 
---        ) x
---        join doc_list h on x.dependend_doc_id = h.id
---        into v_dependend_doc_id, v_dependend_doc_state, v_dbkey
     do begin
         -- immediatelly try to lock record in order to avoid wast handling
         -- of 99 docs and get fault on 100th one!
@@ -7041,7 +7117,7 @@ end
 
 create or alter procedure fn_get_random_customer returns (result bigint) as
 begin
-    select result from fn_get_random_id('v_all_customers') into result;
+    select result from fn_get_random_id('v_all_customers', null, null, 0) into result;
     suspend;
 end
 
@@ -7049,7 +7125,7 @@ end
 
 create or alter procedure fn_get_random_supplier returns (result bigint) as
 begin
-     select result from fn_get_random_id('v_all_suppliers') into result;
+     select result from fn_get_random_id('v_all_suppliers', null, null, 0) into result;
      suspend;
 end
 
@@ -7920,7 +7996,6 @@ begin
     into v_perf_semaphore_id;
     if ( v_perf_semaphore_id is null ) then
     begin
-        rdb$set_context('USER_SESSION','DBG_ZDUMP4DBG','SEMAPHORE_RECORD_NOT_FOUND');
         exit;
     end
 
@@ -7935,11 +8010,8 @@ begin
     -- jump to when-section if lock_conflict, see below --
     if ( row_count = 0 ) then -- ==> this job was already done by another attach
     begin
-        rdb$set_context('USER_SESSION','DBG_ZDUMP4DBG','SEMAPHORE_RECORD_IS_LOCKED');
         exit;
     end
-
-    rdb$set_context('USER_SESSION','DBG_ZDUMP4DBG','SEMAPHORE_RECORD_CAPTURED_OK');
 
     -- record for show progress in case of watching from IBE etc:
     in autonomous transaction do
