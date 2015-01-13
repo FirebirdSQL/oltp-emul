@@ -153,6 +153,7 @@ begin
     -- suppress ex`ception in such situation:
     v_raise_exc_on_nofind =
         decode( a_optype_id,
+                fn_oper_order_by_customer,  0,
                 fn_oper_order_for_supplier, 0,
                 fn_oper_invoice_get,        0,
                 fn_oper_retail_reserve,     0,
@@ -196,7 +197,7 @@ begin
                         -- search using preliminary generated patterns
                         -- (generation of them see in oltp_fill_data.sql):
                         select p.pattern from phrases p
-                        where p.id = (select result from fn_get_random_id('phrases'))
+                        where p.id = (select result from fn_get_random_id('phrases',null,null,:v_raise_exc_on_nofind))
                         into v_pattern;
                         v_stt = 'select id from wares where '||v_pattern||' rows 1';
                         execute statement(v_stt) into v_ware_id;
@@ -204,7 +205,13 @@ begin
                           exception ex_record_not_found; -- using ('wares', v_pattern);
                     end
                 else
-                    select result from fn_get_random_id( :v_source_for_random_id ) into v_ware_id; -- <<< take random ware from price list
+                    select result from
+                    fn_get_random_id(
+                       :v_source_for_random_id,
+                       null,
+                       null,
+                       :v_raise_exc_on_nofind
+                    ) into v_ware_id; -- <<< take random ware from price list
 
                 -- Define cost of ware being added in customer order,
                 -- in purchasing and retailing prices (allow them to vary):
@@ -374,7 +381,7 @@ begin
     if ( rand()*100 <= cast(rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT') as int) ) then
         begin
             v_clo_for_our_firm = 1;
-            select result from fn_get_random_id('v_our_firm') into agent_id;
+            select result from fn_get_random_id('v_our_firm', null, null, 0) into agent_id;
         end
     else
         select result from fn_get_random_customer into agent_id;
@@ -2544,7 +2551,7 @@ begin
         end
     else -- source_doc_id is null
         begin
-            agent_id = (select result from fn_get_random_id( :view_to_search_agent ));
+            agent_id = (select result from fn_get_random_id( :view_to_search_agent, null, null, 0 ));
             if ( a_total_pay is null ) then
                 begin
                     if (a_payment_oper = fn_oper_pay_from_customer) then
@@ -3552,7 +3559,7 @@ create or alter procedure srv_mon_perf_dynamic(
 returns (
      business_action dm_info
     ,interval_no smallint
-    ,cnt_ok_per_minute numeric(12,2)
+    ,cnt_ok_per_minute int
     ,cnt_all int
     ,cnt_ok int
     ,cnt_err int
@@ -3692,7 +3699,7 @@ begin
                 ,id as interval_no
                 ,min(dts_beg) as interval_beg
                 ,min(dts_end) as interval_end
-                ,sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0) cnt_ok_per_minute
+                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0),0) cnt_ok_per_minute
                 ,sum(aux1 + aux2) as cnt_all
                 ,sum(aux1) as cnt_ok
                 ,sum(aux2) as cnt_err
@@ -4050,6 +4057,7 @@ begin
         join fb_errors e on p.fb_gdscode = e.fb_gdscode
         where
             p.fb_gdscode > 0
+            and p.exc_unit='#' -- 10.01.2015, see sp_add_to_abend_log: take in account only those units where exception occured, and skip callers of them
         group by 1,2,3
     into
        fb_gdscode, fb_mnemona, unit, cnt, dts_min, dts_max

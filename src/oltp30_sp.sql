@@ -137,11 +137,13 @@ begin
     v_can_skip_order_clause = 0;
 
     -- 19.07.2014, see DDL of views v_random_find_xxx:
-    -- they have where not exists(select * from tmp$shop_cart c where ...)
-    -- so it can be such case when random_id will be NOT found, and we must
-    -- suppress ex`ception in such situation:
+    -- they have `where not exists(select * from ... c id >= :id_rand_selected)`,
+    -- so it can be that search will NOT found any ID due to unhappy result of random
+    -- selection of 'anchor-ID' (no IDs will be found in 'where id >= :id_selected'
+    -- due to all of them have been removed etc) ==> we suppress e`xc in such case!
     v_raise_exc_on_nofind =
         decode( a_optype_id,
+                fn_oper_order_by_customer(),  0,
                 fn_oper_order_for_supplier(), 0,
                 fn_oper_invoice_get(),        0,
                 fn_oper_retail_reserve(),     0,
@@ -185,7 +187,7 @@ begin
                         -- search using preliminary generated patterns
                         -- (generation of them see in oltp_fill_data.sql):
                         select p.pattern from phrases p
-                        where p.id = (select fn_get_random_id('phrases') from rdb$database)
+                        where p.id = (select fn_get_random_id('phrases',null,null, :v_raise_exc_on_nofind) from rdb$database)
                         into v_pattern;
                         v_stt = 'select id from wares where '||v_pattern||' rows 1';
                         execute statement(v_stt) into v_ware_id;
@@ -193,7 +195,7 @@ begin
                           exception ex_record_not_found using ('wares', v_pattern);
                     end
                 else
-                    v_ware_id = fn_get_random_id(v_source_for_random_id); -- <<< take random ware from price list
+                    v_ware_id = fn_get_random_id(v_source_for_random_id, null, null, :v_raise_exc_on_nofind); -- <<< take random ware from price list
 
                 -- Define cost of ware being added in customer order,
                 -- in purchasing and retailing prices (allow them to vary):
@@ -360,7 +362,7 @@ begin
     if ( rand()*100 <= cast(rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT') as int) ) then
         begin
             v_clo_for_our_firm = 1;
-            agent_id = fn_get_random_id('v_our_firm');
+            agent_id = fn_get_random_id('v_our_firm', null, null, 0);
         end
     else
         agent_id = fn_get_random_customer();
@@ -2545,7 +2547,7 @@ begin
         end
     else -- source_doc_id is null
         begin
-            agent_id = fn_get_random_id( view_to_search_agent );
+            agent_id = fn_get_random_id( view_to_search_agent, null, null, 0 );
             if ( a_total_pay is null ) then
                 begin
                     if (a_payment_oper = fn_oper_pay_from_customer() ) then
@@ -3544,7 +3546,7 @@ create or alter procedure srv_mon_perf_dynamic(
 returns (
      business_action dm_info
     ,interval_no smallint
-    ,cnt_ok_per_minute numeric(12,2)
+    ,cnt_ok_per_minute int
     ,cnt_all int
     ,cnt_ok int
     ,cnt_err int
@@ -3683,7 +3685,7 @@ begin
                 ,id as interval_no
                 ,min(dts_beg) as interval_beg
                 ,min(dts_end) as interval_end
-                ,sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0) cnt_ok_per_minute
+                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0), 0) cnt_ok_per_minute
                 ,sum(aux1 + aux2) as cnt_all
                 ,sum(aux1) as cnt_ok
                 ,sum(aux2) as cnt_err
@@ -4039,6 +4041,7 @@ begin
         join fb_errors e on p.fb_gdscode = e.fb_gdscode
         where
             p.fb_gdscode > 0
+            and p.exc_unit='#' -- 10.01.2015, see sp_add_to_abend_log: take in account only those units where exception occured, and skip callers of them
         group by 1,2,3
     into
        fb_gdscode, fb_mnemona, unit, cnt, dts_min, dts_max
