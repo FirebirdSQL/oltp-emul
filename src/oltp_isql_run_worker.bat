@@ -50,6 +50,10 @@ del %err% 2>nul
 set err_setenv=0
 
 @echo off
+if .%sid%.==.1. (
+  echo Intro %~f0
+  echo Parsing config %cfg%...>>%log4all%
+)
 for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
   if "%%a" neq "" (
     @rem Detect whether new var contain quotes or no. 
@@ -57,34 +61,35 @@ for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
     @rem otherwise it will be <tab><equal_sign><space> or <tab><space><equal_sign>
     echo %%a|find """">nul
     if errorlevel 1 ( 
-      @rem @echo ^|%%a^| - does NOT contain quotes
+      @rem if .%sid%.==.1. echo Line: ^|%%a^| - does NOT contain quotes>>%log4all%
       for /F "tokens=1-2 delims=	= " %%i in ("%%a") do (
         @rem echo Parsed-1: param="%%i" val="%%j"
         if "%%j"=="" (
           set err_setenv=1
-          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+          rem if .%sid%.==.1. echo ### NO VALUE found for parameter "%%i" ###>>%log4all%
         ) else (
           set %%i=%%j
-          @rem echo param=^|%%i^| val=^|%%j^|
+          rem if .%sid%.==.1. echo param=^|%%i^| val=^|%%j^|>>%log4all%
         )
       )
     ) else (
-      @rem @echo ^|%%a^| - DOES contain quotes
+      @rem if .%sid%.==.1. echo ^|%%a^| - DOES contain quotes>>%log4all%
       for /F "tokens=1-2 delims==" %%i in ("%%a") do (
         @rem echo Parsed-1: param="%%i" val="%%j"
         if "%%j"=="" (
           set err_setenv=1
-          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+          rem if .%sid%.==.1. echo ### NO VALUE found for parameter "%%i" ###>>%log4all%
         ) else (
           set %%i=%%j
-          @rem echo param=^|%%i^| val=^|%%j^|
+          rem if .%sid%.==.1. echo param=^|%%i^| val=^|%%j^|>>%log4all%
         )
       )
     )
   )
 )
 
-@echo Result of setting environment variables: err_setenv=%err_setenv%>>%log%
+if .%sid%.==.1. echo Was errors while parsing config  ? =^> %err_setenv% >>%log4all%
+
 if .%err_setenv%.==.1. (
   @echo Check error log:
   type %err%

@@ -737,7 +737,6 @@ set mode=oltp_%1
 set winq=%2
 
 set sql=%tmpdir%\sql\tmp_random_run.sql
-@rem set logbase=%mode%_%computername%
 set logbase=oltp%1_%computername%
 
 @rem Make comparison of TIMESTAMPS: this batch vs %sql%.
@@ -884,7 +883,8 @@ if .%is_embed%.==.1. (
 echo Record in PERF_LOG table that will be checked by attachments to stop their work:
 type %tmplog%
 
-set log4all=%tmpdir%\%logbase%-001.performance_report.txt
+@rem set log4all=%tmpdir%\%logbase%-001.performance_report.txt
+set log4all=%tmpdir%\oltp%1.report.txt
 
 @rem INITIATE OVERALL REPORT FILE "...001.performance_report.txt":
 @REM ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -898,47 +898,50 @@ findstr /i /c:dts_measure %tmplog% >%log4all%
 
 
 del %tmpsql% 2>nul
-@echo launch %winq% isqls. . .
-@echo ---------------------
-
+@echo Launching %winq% ISQL sessions:
 @echo off
-del %tmpdir%\%~n0.log 2>nul
 for /l %%i in (1, 1, %winq%) do (
 
   @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @rem +++    l a u n c h   w o r k i n g     I S Q L s    +++
   @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
+  echo|set /p=.
+
   set /a k=1000+%%i
   if .%%i.==.1. (
-    echo Check parameters for oltp_isql_run_worker.bat:>>%tmpdir%\%~n0.log
-    echo ---------------------------------------------->>%tmpdir%\%~n0.log
-    echo is_embed=^>%is_embed%^<   >>%tmpdir%\%~n0.log
-    echo fbc=^>%fbc%^<             >>%tmpdir%\%~n0.log
-    echo dbnm=^>%dbnm%^<           >>%tmpdir%\%~n0.log
-    echo sql=^>%sql%^<             >>%tmpdir%\%~n0.log
-    echo logbase=^>%logbase%^<     >>%tmpdir%\%~n0.log
-    echo log4all=^>%log4all%^<     >>%tmpdir%\%~n0.log
-    echo host=^>%host%^<           >>%tmpdir%\%~n0.log
-    echo port=^>%port%^<           >>%tmpdir%\%~n0.log
-    echo usr=^>%usr%^<             >>%tmpdir%\%~n0.log
-    echo pwd=^>%pwd%^<             >>%tmpdir%\%~n0.log
-    echo.                          >>%tmpdir%\%~n0.log
+    echo Check parameters for oltp_isql_run_worker.bat:>>%log4all%
+    echo ---------------------------------------------->>%log4all%
+    echo is_embed=^>%is_embed%^<   >>%log4all%
+    echo fbc=^>%fbc%^<             >>%log4all%
+    echo dbnm=^>%dbnm%^<           >>%log4all%
+    echo sql=^>%sql%^<             >>%log4all%
+    echo logbase=^>%logbase%^<     >>%log4all%
+    echo log4all=^>%log4all%^<     >>%log4all%
+    echo host=^>%host%^<           >>%log4all%
+    echo port=^>%port%^<           >>%log4all%
+    echo usr=^>%usr%^<             >>%log4all%
+    echo pwd=^>%pwd%^<             >>%log4all%
+    echo.                          >>%log4all%
+    echo run window #%%i:                                  >>%log4all%
+    echo   start /min oltp_isql_run_worker.bat             >>%log4all%
+    echo           1: %fb% ^<-- version of FB              >>%log4all%
+    echo           2: %sql% ^<-- sql                       >>%log4all%
+    echo           3: %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%log4all%
+    echo           4: %%i  ^<-- SID                        >>%log4all%
+    echo           5: %log4all% ^<-- log for overall rpt   >>%log4all%
+    echo.>>%log4all%
+    echo All subsequent windows are launched similarly.  >>%log4all%
   )
-  echo run window #%%i:                                  >>%tmpdir%\%~n0.log
-  echo   start /min oltp_isql_run_worker.bat             >>%tmpdir%\%~n0.log
-  echo           1: %fb% ^<-- version of FB              >>%tmpdir%\%~n0.log
-  echo           2: %sql% ^<-- sql                       >>%tmpdir%\%~n0.log
-  echo           3: %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%tmpdir%\%~n0.log
-  echo           4: %%i  ^<-- SID                        >>%tmpdir%\%~n0.log
-  echo           5: %log4all% ^<-- log for overall rpt   >>%tmpdir%\%~n0.log
  
   @rem Sample of %tmpdir%\%logbase%-!k:~1,3!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
   @rem =========
   @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%-!k:~1,3! %%i %log4all%
 
 )
-echo ISQL launch command see in file : %tmpdir%\%~n0.log
+echo. && echo Done.
+echo Config params, running commands and results see in file: %log4all%
+
 goto end
 
 :no_arg1
