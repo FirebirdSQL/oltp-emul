@@ -17,6 +17,10 @@ set sql=%2
 set lognm=%3
 set sid=%4
 
+rem %tmpdir%\%logbase%-001.performance_report.txt - name of file for overall performance report
+rem (do NOT overwrite it here, it has already some info that was added there in 1run*.bat):
+set log4all=%5
+
 if .%fb%.==.. (
   echo %~f0: not defined arg: fbc
   goto fin
@@ -44,12 +48,42 @@ set sts=%lognm%.running_state.txt
 
 del %err% 2>nul
 set err_setenv=0
-@echo on
 
-for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
-  @echo Read line from %cfg% and try to execute: set %%a>>%log%
-  set %%a>nul 2>>%err%
+@echo off
+for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
+  if "%%a" neq "" (
+    @rem Detect whether new var contain quotes or no. 
+    @rem If yes than delimiter must be only ONE '=',
+    @rem otherwise it will be <tab><equal_sign><space> or <tab><space><equal_sign>
+    echo %%a|find """">nul
+    if errorlevel 1 ( 
+      @rem @echo ^|%%a^| - does NOT contain quotes
+      for /F "tokens=1-2 delims=	= " %%i in ("%%a") do (
+        @rem echo Parsed-1: param="%%i" val="%%j"
+        if "%%j"=="" (
+          set err_setenv=1
+          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+        ) else (
+          set %%i=%%j
+          @rem echo param=^|%%i^| val=^|%%j^|
+        )
+      )
+    ) else (
+      @rem @echo ^|%%a^| - DOES contain quotes
+      for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+        @rem echo Parsed-1: param="%%i" val="%%j"
+        if "%%j"=="" (
+          set err_setenv=1
+          echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+        ) else (
+          set %%i=%%j
+          @rem echo param=^|%%i^| val=^|%%j^|
+        )
+      )
+    )
+  )
 )
+
 @echo Result of setting environment variables: err_setenv=%err_setenv%>>%log%
 if .%err_setenv%.==.1. (
   @echo Check error log:
@@ -123,6 +157,7 @@ echo %msg%>>%sts%
 echo %msg%
 echo Delay at: %date% %time%>>%sts%
 ping -n %initdelay% 127.0.0.1 >nul
+::set dts_beg=%date% %time%
 echo Start at: %date% %time%>>%sts%
 
 :start
@@ -149,8 +184,11 @@ echo Start at: %date% %time%>>%sts%
   @echo Command: !run_isql!
   @echo ------------------------------------------
   @echo on
+
+  @rem #############################    R U N     I S Q L    ##############################
   cmd /c !run_isql!
-  @rem %fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i %sql% -user %usr% -pas %pwd% 2>&1 1>>%log% |mtee /t/+ %err% > nul
+  @rem ####################################################################################
+
   @echo off
   @echo ---------------------------------------
   @echo finish packet # %k% at %date% %time%
@@ -193,15 +231,15 @@ echo Start at: %date% %time%>>%sts%
     echo %date% %time% %msg% >>%sts%
 
     set psql=%lognm%.performance_report.tmp
-    set plog=%lognm%.performance_report.txt
     del !psql! 2>nul
-    del !plog! 2>nul
+    set plog=%log4all%
+
     echo set width business_action 24;>>!psql!
     echo set width itrv_beg 8;>>!psql!
     echo set width itrv_end 8;>>!psql!
     echo.>>!psql!
     echo -- 1. Get performance report with splitting data to 10 equal time intervals,>>!psql!
-    echo --    for last three hours of activity:>>!psql!
+    echo --    for last 3 hours of activity:>>!psql!
     echo select business_action,interval_no,cnt_ok_per_minute,cnt_all,cnt_ok,cnt_err,err_prc >>!psql!
     echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg >>!psql!
     echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end >>!psql!
@@ -209,7 +247,7 @@ echo Start at: %date% %time%>>%sts%
     echo where p.business_action containing 'interval' and p.business_action containing 'overall';>>!psql!
     echo commit;>>!psql!
     echo.>>!psql!
-    echo -- 2. Get overall performance report for last three hours of activity:>>!psql!
+    echo -- 2. Get overall performance report for last 3 hours of activity:>>!psql!
     echo --    Value in column "avg_times_per_minute" in 1st row is overall performance index.>>!psql!
     echo set width business_action 35;>>!psql!
     echo select business_action, avg_times_per_minute, avg_elapsed_ms, successful_times_done, job_beg, job_end>>!psql!
@@ -218,12 +256,13 @@ echo Start at: %date% %time%>>%sts%
     echo set list on; select * from mon$database; set list off;>>!psql!
     echo show version;>>!psql!
 
-    echo analyze performance log table. . .
-    echo psql=!psql!
-    echo plog=!plog!
-    @echo !fbc!\isql !host!/!port!:!dbnm! -now -q -n -pag 9999 -i !psql! -user !usr! -pas !pwd! -m -o !plog! 1>>!plog!
-    @echo on
-    !fbc!\isql !host!/!port!:!dbnm! -now -q -n -pag 9999 -i !psql! -user !usr! -pas !pwd! -m -o !plog!
+    echo.>>!plog!
+    echo I. Analyze performance log:>>!plog!
+    echo.>>!plog!
+    set run_isql=%fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i !psql! -user %usr% -pas %pwd% -m
+    echo !run_isql! >>!plog!
+    cmd /c !run_isql! 1>>!plog! 2>>&1
+
     @echo off
     echo.>>!plog!
     echo.>>!plog!
@@ -231,7 +270,17 @@ echo Start at: %date% %time%>>%sts%
     type !psql!>>!plog!
     del !psql! 2>nul
 
+    echo.>>!plog!
+    echo II. Obtain database statistics:>>!plog!
+    echo.>>!plog!
+    set run_fbs=%fbc%\fbsvcmgr %host%/%port%:service_mgr -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname %dbnm%
+    echo !run_fbs!>>!plog!
+    cmd /c !run_fbs! 1>>!plog! 2>>&1
+    echo.>>!plog!
+    echo %date% %time% - end of file !plog!>>!plog!
+    echo.>>!plog!
     echo %date% %time% Done. >>%sts%
+
   )
 
   goto end

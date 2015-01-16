@@ -868,9 +868,11 @@ echo set width dts_measure_end 24;>>%tmpsql%
 echo set list on;>>%tmpsql%
 echo.>>%tmpsql%
 echo select p.unit, p.exc_info as add_info,                   >>%tmpsql%
-echo        cast(p.dts_beg as varchar(24)) as dts_measure_beg,>>%tmpsql%
-echo        cast(p.dts_end as varchar(24)) as dts_measure_end >>%tmpsql%
-echo from perf_log p order by dts_beg desc rows 1;>>%tmpsql%
+echo        replace(cast(p.dts_beg as varchar(24)),' ','_') as dts_measure_beg,>>%tmpsql%
+echo        replace(cast(p.dts_end as varchar(24)),' ','_') as dts_measure_end >>%tmpsql%
+echo from perf_log p                       >>%tmpsql%
+echo where p.unit = 'perf_watch_interval'  >>%tmpsql%
+echo order by dts_beg desc rows 1;         >>%tmpsql%
 echo.>>%tmpsql%
 echo set list off;>>%tmpsql%
 
@@ -882,11 +884,18 @@ if .%is_embed%.==.1. (
 echo Record in PERF_LOG table that will be checked by attachments to stop their work:
 type %tmplog%
 
-@echo Performance report will be in file:
-@echo ###################################
+set log4all=%tmpdir%\%logbase%-001.performance_report.txt
+
+@rem INITIATE OVERALL REPORT FILE "...001.performance_report.txt":
+@REM ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+findstr /i /c:dts_measure %tmplog% >%log4all%
+
+@echo Final report will be written in file:
+@echo #####################################
 @echo.
-@echo %tmpdir%\oltp%fb%_performance_report.txt
+@echo %log4all%
 @echo.
+
 
 del %tmpsql% 2>nul
 @echo launch %winq% isqls. . .
@@ -909,6 +918,7 @@ for /l %%i in (1, 1, %winq%) do (
     echo dbnm=^>%dbnm%^<           >>%tmpdir%\%~n0.log
     echo sql=^>%sql%^<             >>%tmpdir%\%~n0.log
     echo logbase=^>%logbase%^<     >>%tmpdir%\%~n0.log
+    echo log4all=^>%log4all%^<     >>%tmpdir%\%~n0.log
     echo host=^>%host%^<           >>%tmpdir%\%~n0.log
     echo port=^>%port%^<           >>%tmpdir%\%~n0.log
     echo usr=^>%usr%^<             >>%tmpdir%\%~n0.log
@@ -917,17 +927,15 @@ for /l %%i in (1, 1, %winq%) do (
   )
   echo run window #%%i:                                  >>%tmpdir%\%~n0.log
   echo   start /min oltp_isql_run_worker.bat             >>%tmpdir%\%~n0.log
-  echo              %fb% ^<-- version of FB              >>%tmpdir%\%~n0.log
-  echo              %sql% ^<-- sql                       >>%tmpdir%\%~n0.log
-  echo              %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%tmpdir%\%~n0.log
-  echo              %%i  ^<-- SID                        >>%tmpdir%\%~n0.log
+  echo           1: %fb% ^<-- version of FB              >>%tmpdir%\%~n0.log
+  echo           2: %sql% ^<-- sql                       >>%tmpdir%\%~n0.log
+  echo           3: %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%tmpdir%\%~n0.log
+  echo           4: %%i  ^<-- SID                        >>%tmpdir%\%~n0.log
+  echo           5: %log4all% ^<-- log for overall rpt   >>%tmpdir%\%~n0.log
  
   @rem Sample of %tmpdir%\%logbase%-!k:~1,3!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
   @rem =========
-  @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%-!k:~1,3! %%i
-
-  @rem %is_embed% %fbc% %dbnm% %sql% %tmpdir%\%logbase%_!k:~1,3! %host% %port% %usr% %pwd%
-  @rem @start /min oltp_isql_run_worker.bat %is_embed% %fbc% %dbnm% %sql% %tmpdir%\%logbase%_!k:~1,3! %host% %port% %usr% %pwd%
+  @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%-!k:~1,3! %%i %log4all%
 
 )
 echo ISQL launch command see in file : %tmpdir%\%~n0.log
