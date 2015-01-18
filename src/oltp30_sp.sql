@@ -4363,61 +4363,60 @@ begin
             -----------------------------------------
             -- 29.08.2014: gather data from tmp$mon_log_table_stats to mon_log_table_stats
             insert into mon_log_table_stats(
-                 rowset
+                 rowset                     --  1
+                ,table_name
                 ,att_id
                 ,table_id
-                ,table_name
-                ,is_system_table
+                ,is_system_table            --  5
                 ,rel_type
                 ,unit
                 ,fb_gdscode
                 ,rec_inserts
-                ,rec_updates
+                ,rec_updates                -- 10
                 ,rec_deletes
                 ,rec_backouts
                 ,rec_purges
                 ,rec_expunges
-                ,rec_seq_reads
+                ,rec_seq_reads              -- 15
                 ,rec_idx_reads
                 ,rec_rpt_reads
                 ,bkv_reads
                 ,frg_reads
-                ,rec_locks
+                ,rec_locks                  -- 20
                 ,rec_waits
                 ,rec_confl
                 ,trn_id
-                ,stat_id
+                ,stat_id                    -- 24
             )
             select
-                 s.rowset
-                ,current_connection
-                ,s.table_id
-                ,max( r.rdb$relation_name ) as rel_name
-                ,max( r.rdb$system_flag )
+                 s.rowset                                      --  1
+                ,s.table_name as tab_name -- :: NB :: mon$table_stats has field mon$table_NAME rather than mon$table_ID
+                ,current_connection as att_id
+                ,max( r.rdb$relation_id ) as tab_id
+                ,max( r.rdb$system_flag ) as sys_flag          --  5
                 ,max( r.rdb$relation_type ) as rel_type
                 ,max( s.unit ) -- can be NULL before random choise of app unit!
-                ,sum( s.mult * s.fb_gdscode )   -- t.mult = -1 for first meause, +1 for second -- see srv_fill_tmp_mon
+                ,sum( s.mult * s.fb_gdscode )   -- t.mult = -1 for first measure, +1 for second -- see srv_fill_tmp_mon
                 ,sum( s.mult * s.rec_inserts )
-                ,sum( s.mult * s.rec_updates )
+                ,sum( s.mult * s.rec_updates )                 -- 10
                 ,sum( s.mult * s.rec_deletes )
                 ,sum( s.mult * s.rec_backouts )
                 ,sum( s.mult * s.rec_purges )
                 ,sum( s.mult * s.rec_expunges )
-                ,sum( s.mult * s.rec_seq_reads )
+                ,sum( s.mult * s.rec_seq_reads )               -- 15
                 ,sum( s.mult * s.rec_idx_reads )
                 ,sum( s.mult * s.rec_rpt_reads )
                 ,sum( s.mult * s.bkv_reads )
                 ,sum( s.mult * s.frg_reads )
-                ,sum( s.mult * s.rec_locks )
+                ,sum( s.mult * s.rec_locks )                   -- 20
                 ,sum( s.mult * s.rec_waits )
                 ,sum( s.mult * s.rec_confl )
                 ,max( s.trn_id )
-                ,max( s.stat_id )
+                ,max( s.stat_id )                              -- 24
             from tmp$mon_log_table_stats s
-            join rdb$relations r on s.table_id = r.rdb$relation_id
+            join rdb$relations r on s.table_name = r.rdb$relation_name
             where s.rowset = :a_rowset
-            group by s.rowset, s.table_id
-            order by rel_type, rel_name;
+            group by s.rowset, s.table_name;
 
             v_table_stat_added_rows = row_count;
 
