@@ -471,8 +471,6 @@ create index tmp_result_set_doc on tmp$result_set(doc_id);
 commit;
 
 recreate global temporary table tmp$perf_mon(
-    dy smallint,
-    hr smallint,
     unit dm_name,
     cnt_all int,
     cnt_ok int,
@@ -494,7 +492,9 @@ recreate global temporary table tmp$perf_mon(
     cnt_other_exc int,
     first_done timestamp,
     last_done timestamp,
-    rollup_level smallint
+    rollup_level smallint,
+    dts_beg timestamp,
+    dts_end timestamp
 ) on commit delete rows;
 commit;
 
