@@ -3730,31 +3730,29 @@ end
 
 ^ -- srv_mon_perf_dynamic
 
-create or alter procedure srv_mon_perf_detailed(
+create or alter procedure srv_mon_perf_detailed (
     a_last_hours smallint default 3,
     a_last_mins smallint default 0,
-    a_show_detl smallint default 0
-)
+    a_show_detl smallint default 0)
 returns (
     unit type of dm_unit,
-    cnt_all int,
-    cnt_ok int,
-    cnt_err int,
+    cnt_all integer,
+    cnt_ok integer,
+    cnt_err integer,
     err_prc numeric(6,2),
-    ok_min_ms int,
-    ok_max_ms int,
-    ok_avg_ms int,
-    cnt_lk_confl int,
-    cnt_user_exc int,
-    cnt_chk_viol int,
-    cnt_unq_viol int,
-    cnt_fk_viol int,
-    cnt_stack_trc int, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
-    cnt_zero_gds int, -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
-    cnt_other_exc int,
-    dts timestamp,
-    dy smallint,
-    hr smallint
+    ok_min_ms integer,
+    ok_max_ms integer,
+    ok_avg_ms integer,
+    cnt_lk_confl integer,
+    cnt_user_exc integer,
+    cnt_chk_viol integer,
+    cnt_unq_viol integer,
+    cnt_fk_viol integer,
+    cnt_stack_trc integer, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
+    cnt_zero_gds integer,  -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
+    cnt_other_exc integer,
+    dts_beg timestamp,
+    dts_end timestamp
 )
 as
 begin
@@ -3768,8 +3766,8 @@ begin
     delete from tmp$perf_mon where 1=1;
 
     insert into tmp$perf_mon(
-        dy                           -- 1
-        ,hr
+         dts_beg                     -- 1
+        ,dts_end
         ,unit
         ,cnt_all
         ,cnt_ok                       -- 5
@@ -3818,44 +3816,47 @@ begin
           join a on p.dts_beg >= a.last_job_start_dts
     )
     ,c as (
-    select
-         extract( day from pg.dts_beg ) dy                                             -- 1
-        ,extract( hour from pg.dts_beg ) hr
-        ,pg.unit
-        ,count(*) cnt_all
-        ,count( iif( nullif(pg.fb_gdscode,0) is null, 1, null) ) cnt_ok                -- 5
-        ,count( nullif(pg.fb_gdscode,0) ) cnt_err
-        ,100.00 * count( nullif(pg.fb_gdscode,0) ) / count(*) err_prc
-        ,min( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_min_ms
-        ,max( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_max_ms
-        ,avg( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_avg_ms
-        ,count( iif(pg.fb_gdscode in( 335544347, 335544558 ), 1, null ) ) cnt_chk_viol    -- 10
-        ,count( iif(pg.fb_gdscode in( 335544665, 335544349 ), 1, null ) ) cnt_unq_viol
-        ,count( iif(pg.fb_gdscode in( 335544466, 335544838, 335544839 ), 1, null ) ) cnt_fk_viol
-        ,count( iif(pg.fb_gdscode in( 335544345, 335544878, 335544336, 335544451 ), 1, null ) ) cnt_lk_confl
-        ,count( iif(pg.fb_gdscode = 335544517, 1, null) ) cnt_user_exc
-        ,count( iif(pg.fb_gdscode = 335544842, 1, null) ) cnt_stack_trc                 -- 15
-        ,count( iif(pg.fb_gdscode = 0, 1, null) ) cnt_zero_gds
-        ,count( iif( pg.fb_gdscode
-                     in (
-                            335544347, 335544558,
-                            335544665, 335544349,
-                            335544466, 335544838, 335544839,
-                            335544345, 335544878, 335544336, 335544451,
-                            335544517,
-                            335544842,
-                            0
-                        )
-                      ,null
-                      ,pg.fb_gdscode
-                   )
-               ) cnt_other_exc
-    from perf_log pg
-    join r on pg.dts_beg between r.report_beg and r.report_end
-    where
-        pg.elapsed_ms >= 0 and  -- 24.09.2014: prevent from display in result 'sp_halt_on_error', 'perf_watch_interval' and so on
-        pg.unit not starting with 'srv_recalc_idx_stat_'
-    group by 1,2,3
+        select
+             r.report_beg
+            ,r.report_end
+            ,pg.unit
+            ,count(*) cnt_all
+            ,count( iif( nullif(pg.fb_gdscode,0) is null, 1, null) ) cnt_ok                -- 5
+            ,count( nullif(pg.fb_gdscode,0) ) cnt_err
+            ,100.00 * count( nullif(pg.fb_gdscode,0) ) / count(*) err_prc
+            ,min( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_min_ms
+            ,max( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_max_ms
+            ,avg( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_avg_ms
+            ,count( iif(pg.fb_gdscode in( 335544347, 335544558 ), 1, null ) ) cnt_chk_viol    -- 10
+            ,count( iif(pg.fb_gdscode in( 335544665, 335544349 ), 1, null ) ) cnt_unq_viol
+            ,count( iif(pg.fb_gdscode in( 335544466, 335544838, 335544839 ), 1, null ) ) cnt_fk_viol
+            ,count( iif(pg.fb_gdscode in( 335544345, 335544878, 335544336, 335544451 ), 1, null ) ) cnt_lk_confl
+            ,count( iif(pg.fb_gdscode = 335544517, 1, null) ) cnt_user_exc
+            ,count( iif(pg.fb_gdscode = 335544842, 1, null) ) cnt_stack_trc                 -- 15
+            ,count( iif(pg.fb_gdscode = 0, 1, null) ) cnt_zero_gds
+            ,count( iif( pg.fb_gdscode
+                         in (
+                                335544347, 335544558,
+                                335544665, 335544349,
+                                335544466, 335544838, 335544839,
+                                335544345, 335544878, 335544336, 335544451,
+                                335544517,
+                                335544842,
+                                0
+                            )
+                          ,null
+                          ,pg.fb_gdscode
+                       )
+                   ) cnt_other_exc
+        from perf_log pg
+        join r on pg.dts_beg between r.report_beg and r.report_end
+        where
+            pg.elapsed_ms >= 0 and  -- 24.09.2014: prevent from display in result 'sp_halt_on_error', 'perf_watch_interval' and so on
+            pg.unit not starting with 'srv_recalc_idx_stat_'
+        group by
+             r.report_beg
+            ,r.report_end
+            ,pg.unit
     )
     select *
     from c;
@@ -3878,6 +3879,8 @@ begin
         ,cnt_stack_trc
         ,cnt_zero_gds
         ,cnt_other_exc
+        ,dts_beg
+        ,dts_end
     )
     select
          1
@@ -3897,6 +3900,8 @@ begin
         ,sum( cnt_stack_trc ) cnt_stack_trc
         ,sum( cnt_zero_gds ) cnt_zero_gds
         ,sum( cnt_other_exc ) cnt_other_exc
+        ,max( dts_beg )
+        ,max( dts_end )
     from tmp$perf_mon
     group by unit; -- overall totals
 
@@ -3906,8 +3911,7 @@ begin
     -- final resultset (with overall totals first):
     for
         select
-            current_timestamp dts,
-            dy, hr, unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
+            unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
             ,cnt_chk_viol
             ,cnt_unq_viol
             ,cnt_fk_viol
@@ -3916,9 +3920,11 @@ begin
             ,cnt_stack_trc
             ,cnt_zero_gds
             ,cnt_other_exc
+            ,dts_beg
+            ,dts_end
         from tmp$perf_mon
-        order by dy desc nulls first,hr desc, unit
-    into dts, dy, hr, unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
+        --order by dy desc nulls first,hr desc, unit
+    into unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
         ,cnt_chk_viol
         ,cnt_unq_viol
         ,cnt_fk_viol
@@ -3927,7 +3933,8 @@ begin
         ,cnt_stack_trc
         ,cnt_zero_gds
         ,cnt_other_exc
-
+        ,dts_beg
+        ,dts_end
     do
         suspend;
 
@@ -3935,25 +3942,26 @@ end
 
 ^ -- srv_mon_perf_detailed
 
-create or alter procedure srv_mon_business_perf_with_exc(
+create or alter procedure srv_mon_business_perf_with_exc (
     a_last_hours smallint default 3,
-    a_last_mins smallint default 0
-)
+    a_last_mins smallint default 0)
 returns (
-  info dm_info,
-  unit dm_unit,
-  cnt_all int,
-  cnt_ok int,
-  cnt_err int,
-  err_prc numeric(6,2),
-  cnt_chk_viol int,
-  cnt_unq_viol int,
-  cnt_lk_confl int,
-  cnt_user_exc int,
-  cnt_other_exc int
+    info dm_info,
+    unit dm_unit,
+    cnt_all integer,
+    cnt_ok integer,
+    cnt_err integer,
+    err_prc numeric(6,2),
+    cnt_chk_viol integer,
+    cnt_unq_viol integer,
+    cnt_lk_confl integer,
+    cnt_user_exc integer,
+    cnt_other_exc integer,
+    dts_beg timestamp,
+    dts_end timestamp
 )
-as
-    declare v_dummy int;
+AS
+declare v_dummy int;
 begin
 
     a_last_hours = abs( coalesce(a_last_hours, 3) );
@@ -3972,6 +3980,8 @@ begin
             ,s.cnt_lk_confl
             ,s.cnt_user_exc
             ,s.cnt_other_exc
+            ,s.dts_beg
+            ,s.dts_end
         from business_ops o
         left join tmp$perf_mon s on o.unit=s.unit
         order by o.sort_prior
@@ -3987,6 +3997,8 @@ begin
         ,cnt_lk_confl
         ,cnt_user_exc
         ,cnt_other_exc
+        ,dts_beg
+        ,dts_end
     do
         suspend;
 
