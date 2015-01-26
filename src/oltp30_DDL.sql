@@ -6417,9 +6417,11 @@ group by
 
 ------------------------------------------------------------------------------
 
-create or alter view z_mon_stat_per_units as
+create or alter view z_mon_stat_per_units
+as
 -- 29.08.2014: data from measuring statistics per each unit
 -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
+-- 25.01.2015: added rec_locks, rec_confl.
 select
      m.unit
     ,count(*) iter_counts
@@ -6471,19 +6473,24 @@ select
     ,max(m.pg_marks) max_marks
     ,max(m.pg_reads) max_reads
     ,max(m.pg_writes) max_writes
+    ----------- locks and conflicts ----------
+    ,avg(m.rec_locks) avg_locks
+    ,avg(m.rec_confl) avg_confl
+    ,max(m.rec_locks) max_locks
+    ,max(m.rec_confl) max_confl
     ,datediff( minute from min(m.dts) to max(m.dts) ) workload_minutes
 from mon_log m 
--- we are interested only for LAST measure:
---join( select max(x.rowset) rs_max from mon_log x ) x on m.rowset = x.rs_max
 group by unit
 ;
-
-
 ------------------------------------------------------------------------------
 
-create or alter view z_mon_stat_per_tables as
+create or alter view z_mon_stat_per_tables
+as
 -- 29.08.2014: data from measuring statistics per each unit+table
 -- (new table MON$TABLE_STATS required, see srv_fill_mon, srv_fill_tmp_mon)
+-- 25.01.2015: added rec_locks, rec_confl;
+-- ::: do NOT add `bkv_per_seq_idx_rpt` and `frg_per_seq_idx_rpt` into WHERE
+-- clause with check sum > 0, because they can be NULL, see DDL!
 select
      t.table_name
     ,t.unit
@@ -6516,24 +6523,27 @@ select
     ,max(t.rec_backouts) max_bko
     ,max(t.rec_purges) max_pur
     ,max(t.rec_expunges) max_exp
+    ----------- locks and conflicts ----------
+    ,avg(t.rec_locks) avg_locks
+    ,avg(t.rec_confl) avg_confl
+    ,max(t.rec_locks) max_locks
+    ,max(t.rec_confl) max_confl
     ,datediff( minute from min(t.dts) to max(t.dts) ) elapsed_minutes
 from mon_log_table_stats t
--- we are interested only for LAST measure:
---join( select max(x.rowset) rs_max from mon_log_table_stats x ) x on t.rowset = x.rs_max
 where
-     t.rec_seq_reads
-    +t.rec_idx_reads
-    +t.rec_rpt_reads
-    +t.bkv_reads
-    +t.frg_reads
-    +t.bkv_per_seq_idx_rpt
-    +t.frg_per_seq_idx_rpt
-    +t.rec_inserts
-    +t.rec_updates
-    +t.rec_deletes
-    +t.rec_backouts
-    +t.rec_purges
-    +t.rec_expunges
+      t.rec_seq_reads
+    + t.rec_idx_reads
+    + t.rec_rpt_reads
+    + t.bkv_reads
+    + t.frg_reads
+    + t.rec_inserts
+    + t.rec_updates
+    + t.rec_deletes
+    + t.rec_backouts
+    + t.rec_purges
+    + t.rec_expunges
+    + t.rec_locks
+    + t.rec_confl
     > 0
 group by t.table_name,t.unit
 ;
