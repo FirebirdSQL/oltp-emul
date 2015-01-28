@@ -233,7 +233,7 @@ echo Start at: %date% %time%>>%sts%
 
   if .%sid%.==.1. (
     set msg=Making final performance analysys. . .
-    echo %date% %time% %msg% >>%sts%
+    echo %date% %time% %msg%
 
     set psql=%lognm%.performance_report.tmp
     del !psql! 2>nul
@@ -242,7 +242,11 @@ echo Start at: %date% %time%>>%sts%
     echo set width business_action 24;>>!psql!
     echo set width itrv_beg 8;>>!psql!
     echo set width itrv_end 8;>>!psql!
+
+    echo -- do NOT delete this, see SP srv_mon_perf_***: autonomous tx is there.>>!psql!
+    echo commit; set transaction read committed;>>!psql!
     echo.>>!psql!
+
     echo -- 1. Get performance report with splitting data to 10 equal time intervals,>>!psql!
     echo --    for last 3 hours of activity:>>!psql!
     echo select business_action,interval_no,cnt_ok_per_minute,cnt_all,cnt_ok,cnt_err,err_prc >>!psql!
@@ -252,14 +256,12 @@ echo Start at: %date% %time%>>%sts%
     echo where p.business_action containing 'interval' and p.business_action containing 'overall';>>!psql!
     echo commit;>>!psql!
     echo.>>!psql!
+
     echo -- 2. Get overall performance report for last 3 hours of activity:>>!psql!
     echo --    Value in column "avg_times_per_minute" in 1st row is overall performance index.>>!psql!
     echo set width business_action 35;>>!psql!
     echo select business_action, avg_times_per_minute, avg_elapsed_ms, successful_times_done, job_beg, job_end>>!psql!
     echo from srv_mon_perf_total;>>!psql!
-    echo -- 3. Get info about database and FB version:>>!psql!
-    echo set list on; select * from mon$database; set list off;>>!psql!
-    echo show version;>>!psql!
 
     echo.>>!plog!
     echo I. Analyze performance log:>>!plog!

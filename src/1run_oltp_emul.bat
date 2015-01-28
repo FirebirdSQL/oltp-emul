@@ -249,10 +249,12 @@ for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
 if %size% gtr 0 (
   echo.
-  echo RESULT: script finished with ERRORS.
-  echo --------------------------
+  echo Could not check that all database objects already exist
+  echo SQL script: %tmpchk%
+  echo Errors log: %tmperr%
+  echo ---------- content of errors log ----------------
   type %tmperr%
-  echo --------------------------
+  echo -------------------------------------------------
 ) else (
   echo RESULT: script finished OK: database exists and online.
 )
@@ -301,8 +303,11 @@ if errorlevel 1 (
     if errorlevel 1 set db_build_finished_ok=0
     @rem type !tmpclg!
   )
-  echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
   echo.
+  echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
+  echo ############################
+  echo.
+
   if .!db_build_finished_ok!.==.0. (
     echo.
     echo Database: ^>%dbnm%^< -- DOES exist but
@@ -384,10 +389,11 @@ for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
 if %size% gtr 0 (
   echo.
-  echo RESULT: script finished with ERRORS.
-  echo --------------------------
+  echo SQL script: %tmpchk%
+  echo Errors log: %tmperr%
+  echo ---------- content of errors log ----------------
   type %tmperr%
-  echo --------------------------
+  echo -------------------------------------------------
   echo.
   echo Probably you have to open firebird.conf and set 'ExternalFileAccess'
   echo to some folder where 'firebird' account has enough rights.
@@ -429,23 +435,47 @@ if /i .%init_docs%.==.0. goto more
 @rem check that total number of docs (count from doc_list table) is LESS than %init_docs%
 @rem and correct %init_docs% (reduce it) so that its new value + count will be equal to 
 @rem required total number of docs (which is specified in config)
+
 del %tmpchk% 2>nul
 del %tmpclg% 2>nul
-echo set list off; set heading off;>>%tmpchk%
-echo select cast('existing_docs='^|^|count(*^) as varchar(30^)^) as msg from doc_list>>%tmpchk%
-echo union all>>%tmpchk%
-echo select cast('engine='^|^|rdb$get_context('SYSTEM','ENGINE_VERSION'^) as varchar(30^)^) from rdb$database;>>%tmpchk%
+del %tmperr% 2>nul
+
+echo set list on;                                                   >>%tmpchk%
+echo select (select count(*) from doc_list) as "existing_docs="     >>%tmpchk%
+echo       ,rdb$get_context('SYSTEM','ENGINE_VERSION') as "engine=" >>%tmpchk%
+echo       ,iif( exists( select * from rdb$relations r              >>%tmpchk% 
+echo                     where r.rdb$relation_name='PERF_LOG'       >>%tmpchk% 
+echo                           and r.rdb$relation_type=1            >>%tmpchk% 
+echo                           and r.rdb$view_blr is not null       >>%tmpchk%
+echo                    ),                                          >>%tmpchk%
+echo             'XPERFLOG_01',                                     >>%tmpchk% 
+echo             'PERF_LOG'                                         >>%tmpchk%
+echo           ) as "log_tab="                                      >>%tmpchk% 
+echo  from rdb$database;                                            >>%tmpchk% 
+
 if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -pag 0 -i %tmpchk% -n -m -o %tmpclg%
+  %fbc%\isql %dbnm% -pag 0 -i %tmpchk% -n 1>%tmpclg% 2>%tmperr%
 ) else (
-  %fbc%\isql %host%/%port%:%dbnm% -pag 0 -i %tmpchk% -user %usr% -pas %pwd% -n  -m -o %tmpclg%
+  %fbc%\isql %host%/%port%:%dbnm% -pag 0 -i %tmpchk% -user %usr% -pas %pwd% -n  1>%tmpclg% 2>%tmperr%
 )
 
-@rem result: file %tmpclg% contains ONE non-empty row like this: existing_docs=1234
+@rem result: file %tmpclg% contains several rows like this: existing_docs=1234
 @rem now we can APPLY this row as it was SET command in batch and
-@rem assign its value to env. variable with the SAME name -- `existing_docs`:
+@rem assign its value to env. variable with the SAME name -- `existing_docs`, `engine` etc:
+
 for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
   set %%a
+  for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+    set par=%%i
+    set val=%%j
+    for /F "tokens=1" %%p in ("!par!") do (
+      @rem echo param=^|%%i^|, name w/o white-spaces=^|%%p^|
+      for /F "tokens=1" %%u in ("!val!") do (
+        set %%p=%%u
+        @rem echo param=^|%%p^|, value w/o white-spaces=^|%%u^|
+      )
+    )
+  )
 )
 
 set /a init_docs = init_docs - %existing_docs%
@@ -455,7 +485,7 @@ if %init_docs% leq 0 goto more
 @rem --------------   i n i t i a l      d a t a     p o p u l a t i o n   -------------
 
 @echo off
-echo Initial data population untill total number
+echo Initial data population until total number
 echo of created docs will be not less than ^>^>^> %existing_docs% +  %init_docs% ^<^<^< 
 echo.
 echo Please wait. . .
@@ -463,6 +493,7 @@ echo.
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
+del %tmperr% 2>nul
 
 if exist %tmpsql% goto err_del
 if exist %tmplog% goto err_del
@@ -481,21 +512,24 @@ echo commit;>>%tmpsql%
 @rem --- Run ISQL: restart sequence g_init_pop ---
 @echo on
 if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -i %tmpsql% -n -m -o %tmplog%
+  %fbc%\isql %dbnm% -i %tmpsql% -n -o 1>%tmplog% 2>%tmperr%
 ) else (
-  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  -m -o %tmplog%
+  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>%tmplog% 2>%tmperr%
 )
 
-@rem --- Check that script finished Ok: size of log must be ZERO ---
+@rem --- Check that script finished Ok: size of tmperr must be ZERO ---
 @echo off
-for /f "usebackq" %%A in ('%tmplog%') do set size=%%~zA
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
 if %size% gtr 0 (
   echo.
-  echo Script which set initial data population finished with ERROR!
+  echo Script which resets generator for initial data population finished with ERROR.
   echo.
-  echo Check sql: %tmpsql% 
-  echo Check log: %tmplog%
+  echo SQL script: %tmpchk%
+  echo Errors log: %tmperr%
+  echo ---------- content of errors log ----------------
+  type %tmperr%
+  echo -------------------------------------------------
   echo.
   echo Press any key to FINISH this batch. . .
   pause>nul
@@ -503,7 +537,6 @@ if %size% gtr 0 (
 )
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
-
 
 @rem 15.10.2014 obtain current setting of FW and change it - perhaps temply - to OFF:
 @rem if NOT exists %fbc%\gfix.exe ( goto run_init_pop )
@@ -515,8 +548,8 @@ del %tmplog% 2>nul
 
 echo set list on; >>%tmpsql% 
 echo select >>%tmpsql% 
-echo    m.mon$forced_writes as "fw_current=" >>%tmpsql% 
-echo   ,iif( exists( select * from perf_log g  >>%tmpsql% 
+echo    m.mon$forced_writes as "fw_current="                   >>%tmpsql% 
+echo   ,iif( exists( select * from perf_log g                  >>%tmpsql% 
 echo                 where g.unit='fw_both_changes_done' and g.aux1=1 and g.aux2 is null  >>%tmpsql% 
 echo               ^), '0', '1'  >>%tmpsql% 
 echo      ^) as "fw_can_upd=" >>%tmpsql% 
@@ -538,6 +571,13 @@ for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmplog%') do (
   set /a %%a
 )
 
+@rem mode *TO WHICH*  we have to RETURN .fdb after filling:
+if .%fw_current%.==.1. (
+   set fw_mode=sync
+) else (
+   set fw_mode=async
+)
+
 set fwlog=%tmpdir%\tmp_change_fw.log
 
 type %tmplog% >%fwlog%
@@ -546,23 +586,51 @@ echo fw_can_upd=%fw_can_upd%>>%fwlog%
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
+del %tmperr% 2>nul
 
 @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 @rem  T E M P L Y    S E T    F O R C E D   W R I T E S   =   O F F
 @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 if .%fw_can_upd%.==.1. (
-  @rem 1. add to perf_log table our intention to FIRST change FW, always to OFF
-  echo update or insert into perf_log (unit, aux1, aux2, dts_beg, dts_end^) >>%tmpsql%
+
+  @rem 1. add to %log_tab% table our intention to change FW, always to OFF
+
+  echo update or insert into %log_tab% (unit, aux1, aux2, dts_beg, dts_end^) >>%tmpsql%
   echo values ('fw_both_changes_done', %fw_current%, null, 'now', null^) >>%tmpsql%
   echo matching (unit^);>>%tmpsql%
   echo commit;>>%tmpsql%
   if .%is_embed%.==.1. (
-    %fbc%\isql %dbnm% -i %tmpsql% -n -m -o %tmplog%
+    %fbc%\isql %dbnm% -i %tmpsql% -n 1>%tmplog% 2>%tmperr%
   ) else (
-    %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  -m -o %tmplog%
+    %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  1>%tmplog% 2>%tmperr%
   )
+  for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+  if .%size%.==.. set size=0
+
+  if %size% gtr 0 (
+    echo.
+    echo Could NOT add/update record in table %log_tab% with data about changing FW.
+    echo.
+    echo SQL script: %tmpsql%
+    echo Errors log: %tmperr%
+    echo ---------- content of errors log ----------------
+    type %tmperr%
+    echo -------------------------------------------------
+    echo.
+    echo 1. Check that table with name: '%log_tab' - really exists.
+    echo 2. Check content of script: %tmpsql%
+    echo.
+    echo Press any key to FINISH this batch. . .
+    pause>nul
+    goto end
+  ) else (
+    echo.
+    echo Successfully change FW temply to OFF for initial data filling.
+  )
+
   @rem 2. run - perhaps LOCAL - gfix with command line for REMOTE database to set fw = OFF:
+
   if .%is_embed%.==.1. (
     %fbc%\gfix %dbnm% -w async
   ) else (
@@ -570,15 +638,9 @@ if .%fw_can_upd%.==.1. (
   )
 
 )
-if .%fw_current%.==.1. (
-   set fw_mode=sync
-) else (
-   set fw_mode=async
-)
 
-@rem echo check perf_log and FW after change to OFF
-@rem echo fw_mode=%fw_mode%
-@rem pause
+@rem echo check %log_tab% and FW after change to OFF && echo Have return .fdb to: fw_mode=%fw_mode% && exit
+
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
@@ -723,13 +785,13 @@ if %init_docs% gtr 0 (
       %fbc%\gfix %host%/%port%:%dbnm% -w %fw_mode% -user %usr% -pas %pwd%
     )
 
-    echo %time% 2. Update in perf_log table our intention to REVERT change FW to its initial state. . .
+    echo %time% 2. Update in %log_tab% table our intention to REVERT change FW to its initial state. . .
 
     echo set stat on; set echo on;>>!tmpfwsql!
-    echo update perf_log g set aux2=%fw_current%, dts_end='now' where g.unit='fw_both_changes_done';>>!tmpfwsql!
+    echo update %log_tab% g set aux2=%fw_current%, dts_end='now' where g.unit='fw_both_changes_done';>>!tmpfwsql!
     echo commit;>>!tmpfwsql!
     echo set stat off;>>!tmpfwsql!
-    echo select aux1, aux2, dts_beg, dts_end from perf_log g where g.unit='fw_both_changes_done';>>!tmpfwsql!
+    echo select aux1, aux2, dts_beg, dts_end from %log_tab% g where g.unit='fw_both_changes_done';>>!tmpfwsql!
     if .%is_embed%.==.1. (
       set run_isql=%fbc%\isql %dbnm% -i !tmpfwsql! -nod 1^>!tmpfwlog! 2^>&1
     ) else (
@@ -739,7 +801,7 @@ if %init_docs% gtr 0 (
     echo %time% Done, check log !tmpfwlog!
   )
  @rem echo fw_mode=%fw_mode%
- @rem echo check perf_log and FW after change to INITIAL
+ @rem echo check %log_tab% and FW after change to INITIAL
  @rem pause
  @rem exit
 
@@ -828,70 +890,68 @@ del %tmpdir%\%logbase%*.err 2>nul
 @echo off
 set tmpsql=%tmpdir%\tmp_show.tmp
 set tmplog=%tmpdir%\tmp_show.log
+set tmperr=%tmpdir%\tmp_show.err
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
+del %tmperr% 2>nul
 
-echo set heading on; >> %tmpsql%
-echo set width working_mode 30; >> %tmpsql%
-echo set width log_errors   10; >> %tmpsql%
-echo set list on; >> %tmpsql%
-echo set stat on;>>%tmpsql%
-echo select 'Check main settings: ' msg, >> %tmpsql%
-echo        rdb$get_context('USER_SESSION','WORKING_MODE') working_mode >> %tmpsql%
-echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors >> %tmpsql%
-echo       ,rdb$get_context('USER_SESSION', 'C_CATCH_MISM_BITSET') c_catch_mism_bitset >> %tmpsql%
-echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query >> %tmpsql%
-
-echo from rdb$database;>> %tmpsql%
-echo set stat off;>>%tmpsql%
-echo show database;>>%tmpsql%
-echo show version;>>%tmpsql%
 echo set heading off; set list on;>>%tmpsql%
 echo select iif( exists( select * from ext_stoptest ), 'TEST_CANCELLATION_FLAG_DETECTED', 'ALL_OK_-_TEST_CAN_BE_STARTED') as ">>> attention_msg >>>" from rdb$database;>>%tmpsql%
 
 @echo on
 if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -i %tmpsql% -n -m -o %tmplog%
+  %fbc%\isql %dbnm% -i %tmpsql% -n 1>%tmplog% 2>%tmperr%
 ) else (
-  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n  -m -o %tmplog%
+  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>%tmplog% 2>%tmperr%
+)
+@echo off
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo Could NOT define main test settings and/or cancellation status.
+  echo.
+  echo SQL  file: %tmpsql%
+  echo Error log: %tmperr%
+  echo ------------------------------------------------------------------
+  type %tmperr%
+  echo ------------------------------------------------------------------
+  echo.
+  echo Press any key to FINISH this batch. . .
+  pause>nul
+  goto end
 )
 
 @echo off
-del %tmpsql% 2>nul
 
 find /c /i "CANCEL" %tmplog% >nul
 if errorlevel 1 goto start
 goto test_canc
 
 :start
-type %tmplog% 
-del %tmplog% 2>nul
 
-if .1.==.0. (
-  echo.
-  echo %date% %time%
-  echo press ENTER to launch ^>^>^>  %winq% ^<^<^<  isqls with script = %sql%
-  echo.
-  @pause
-)
+type %tmplog% 
+
+del %tmpsql% 2>nul
+del %tmplog% 2>nul
 
 @rem echo Add record for checking work to be stopped on timeout. . .
 echo commit; set transaction no wait;                                         >>%tmpsql%
-echo delete from perf_log g                                                   >>%tmpsql%
+echo delete from %log_tab% g                                                  >>%tmpsql%
 echo where g.unit in ( 'perf_watch_interval',                                 >>%tmpsql%
 echo                   'dump_dirty_data_semaphore',                           >>%tmpsql%
 echo                   'dump_dirty_data_progress'                             >>%tmpsql%
 echo                 );                                                       >>%tmpsql%
 echo commit;                                                                  >>%tmpsql%
-echo insert into perf_log( unit,                  info,     exc_info,         >>%tmpsql%
+echo insert into %log_tab%( unit,                  info,     exc_info,         >>%tmpsql%
 echo                       dts_beg, dts_end, elapsed_ms)                      >>%tmpsql%
 echo               values( 'perf_watch_interval', 'active', 'by %~f0',        >>%tmpsql%
 echo         dateadd( %warm_time% minute to current_timestamp),               >>%tmpsql%
 echo         dateadd( %warm_time% + %test_time% minute to current_timestamp), >>%tmpsql%
 echo         -1 -- skip this record from being displayed in srv_mon_perf_detailed >>%tmpsql%
 echo         );                                                               >>%tmpsql%
-echo insert into perf_log( unit,                        info,  stack,         >>%tmpsql%
+echo insert into %log_tab%( unit,                        info,  stack,         >>%tmpsql%
 echo                       dts_beg, dts_end, elapsed_ms)                      >>%tmpsql%
 echo               values( 'dump_dirty_data_semaphore', '',    'by %~f0',     >>%tmpsql%
 echo                       null, null, -1);                                   >>%tmpsql%
@@ -902,29 +962,69 @@ echo set width dts_measure_beg 24;>>%tmpsql%
 echo set width dts_measure_end 24;>>%tmpsql%
 echo set list on;>>%tmpsql%
 echo.>>%tmpsql%
-echo select p.unit, p.exc_info as add_info,                   >>%tmpsql%
-echo        replace(cast(p.dts_beg as varchar(24)),' ','_') as dts_measure_beg,>>%tmpsql%
-echo        replace(cast(p.dts_end as varchar(24)),' ','_') as dts_measure_end >>%tmpsql%
-echo from perf_log p                       >>%tmpsql%
-echo where p.unit = 'perf_watch_interval'  >>%tmpsql%
-echo order by dts_beg desc rows 1;         >>%tmpsql%
+
+echo Check test settings and record in %log_tab% table that will be checked
+echo by attachments to stop their work:                                 
+echo select                                                                            >>%tmpsql%
+echo        m.mon$database_name as db_name                                             >>%tmpsql%
+echo       ,m.mon$page_size as pg_size                                                 >>%tmpsql%
+echo       ,m.mon$page_buffers as buffers                                              >>%tmpsql%
+echo       ,m.mon$forced_writes as forced_writes                                       >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','WORKING_MODE') working_mode                >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors  >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'C_CATCH_MISM_BITSET') c_catch_mism_bitset >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query        >>%tmpsql%
+echo       ,g.add_info                                                                 >>%tmpsql%
+echo       ,g.dts_measure_beg                                                          >>%tmpsql%
+echo       ,g.dts_measure_end                                                          >>%tmpsql%
+echo from mon$database m                                                               >>%tmpsql%
+echo cross join                                                                        >>%tmpsql%
+echo (                                                                                 >>%tmpsql%
+echo   select p.unit, p.exc_info as add_info,                                          >>%tmpsql%
+echo          replace(cast(p.dts_beg as varchar(24)),' ','_') as dts_measure_beg,      >>%tmpsql%
+echo          replace(cast(p.dts_end as varchar(24)),' ','_') as dts_measure_end       >>%tmpsql%
+echo   from %log_tab% p                                                                >>%tmpsql%
+echo        where p.unit = 'perf_watch_interval'                                       >>%tmpsql%
+echo        order by dts_beg desc rows 1                                               >>%tmpsql%
+echo ) g;                                                                              >>%tmpsql%
 echo.>>%tmpsql%
 echo set list off;>>%tmpsql%
 
 if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -i %tmpsql% -n -m - o %tmplog%
+  %fbc%\isql %dbnm% -i %tmpsql% -n 1>%tmplog% 2>%tmperr%
 ) else (
-  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n -m -o %tmplog%
+  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>%tmplog% 2>%tmperr%
 )
-echo Record in PERF_LOG table that will be checked by attachments to stop their work:
+
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo Could NOT run script with commands for test being auto-stop.
+  echo.
+  echo SQL  file: %tmpsql%
+  echo Error log: %tmperr%
+  echo ------------------------------------------------------------------
+  type %tmperr%
+  echo ------------------------------------------------------------------
+  echo.
+  echo Press any key to FINISH this batch. . .
+  pause>nul
+  goto end
+)
+
 type %tmplog%
 
 @rem set log4all=%tmpdir%\%logbase%-001.performance_report.txt
 set log4all=%tmpdir%\oltp%1.report.txt
 
-@rem INITIATE OVERALL REPORT FILE "...001.performance_report.txt":
-@REM ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-findstr /i /c:dts_measure %tmplog% >%log4all%
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@rem INITIATE REPORT FILE "oltp30.report.txt"
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+del %log4all% 2>nul
+@echo Created by: %~f0>>%log4all%
+type %tmplog%>>%log4all%
 
 @echo Final report will be written in file:
 @echo #####################################
@@ -934,8 +1034,11 @@ findstr /i /c:dts_measure %tmplog% >%log4all%
 
 
 del %tmpsql% 2>nul
+del %tmplog% 2>nul
+
 @echo Launching %winq% ISQL sessions:
 @echo off
+
 for /l %%i in (1, 1, %winq%) do (
 
   @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -959,15 +1062,38 @@ for /l %%i in (1, 1, %winq%) do (
     echo usr=^>%usr%^<             >>%log4all%
     echo pwd=^>%pwd%^<             >>%log4all%
     echo.                          >>%log4all%
-    echo run window #%%i:                                  >>%log4all%
-    echo   start /min oltp_isql_run_worker.bat             >>%log4all%
-    echo           1: %fb% ^<-- version of FB              >>%log4all%
-    echo           2: %sql% ^<-- sql                       >>%log4all%
-    echo           3: %tmpdir%\%logbase%-!k:~1,3! ^<-- log >>%log4all%
-    echo           4: %%i  ^<-- SID                        >>%log4all%
-    echo           5: %log4all% ^<-- log for overall rpt   >>%log4all%
     echo.>>%log4all%
-    echo All subsequent windows are launched similarly.  >>%log4all%
+    echo Command that launch ISQL window #%%i:             >>%log4all%
+    echo.>>%log4all%
+    echo   start /min oltp_isql_run_worker.bat fb sql logbase sid log4all>>%log4all%
+    echo                                       ^^   ^^     ^^     ^^     ^^  >>%log4all%
+    echo                                       1   2     3     4     5   >>%log4all%
+    echo.>>%log4all%
+    echo Actual values of parameters used now:                                        >>%log4all%
+    echo 1: %fb% ^<-- version of FB as number, 25 or 30                     >>%log4all%
+    echo 2: %sql% ^<-- input SQL script for working                         >>%log4all%
+    echo 3: %tmpdir%\%logbase%-!k:~1,3! ^<-- base name of logs for *that* ISQL window >>%log4all%
+    echo 4: %%i  ^<-- SID, sequential number of that ISQL (limits: 1...%winq%^)     >>%log4all%
+    echo 5: %log4all% ^<-- log for overall report                           >>%log4all%
+    echo.>>%log4all%
+    echo All subsequent windows are launched similarly. >>%log4all%
+
+    echo.>>%log4all%
+    
+    echo Obtain server version and implementation info:>>%log4all%
+    echo.>>%log4all%
+    set run_fbs=%fbc%\fbsvcmgr %host%/%port%:service_mgr user %usr% password %pwd% info_server_version info_implementation
+    echo !run_fbs!>>%log4all%
+    cmd /c !run_fbs! 1>>%log4all% 2>>&1
+    echo.>>%log4all%
+
+    echo Obtain database header statistics BEFORE test:>>%log4all%
+    echo.>>%log4all%
+    set run_fbs=%fbc%\fbsvcmgr %host%/%port%:service_mgr user %usr% password %pwd% -action_db_stats -sts_hdr_pages -dbname %dbnm%
+    echo !run_fbs!>>%log4all%
+    cmd /c !run_fbs! 1>>%log4all% 2>>&1
+    echo.>>%log4all%
+    echo %date% %time% Done. Now launch %winq% ISQL sessions. >>%log4all%
   )
  
   @rem Sample of %tmpdir%\%logbase%-!k:~1,3!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
@@ -975,7 +1101,7 @@ for /l %%i in (1, 1, %winq%) do (
   @start /min oltp_isql_run_worker.bat %fb% %sql% %tmpdir%\%logbase%-!k:~1,3! %%i %log4all%
 
 )
-echo. && echo Done.
+echo. && echo %date% %time% Done.
 echo Config params, running commands and results see in file: %log4all%
 
 goto end
@@ -1140,7 +1266,7 @@ goto end
   if .%4.==.1. set nau=NO AUTO UNDO
 
   @rem should detailed info for each iteration be added in log ? 
-  @rem (actual only for mode=run_test; if "1" then add select * from perf_log)
+  @rem (actual only for mode=run_test; if "1" then add select * from %log_tab%)
   set nfo=%5
 
   del %sql% 2>nul
@@ -1180,7 +1306,7 @@ goto end
         @echo      as test_ends_at                                               >>%sql%
         @echo     ,rdb$get_context('SYSTEM','ENGINE_VERSION'^)                   >>%sql%
         @echo      as engine                                                     >>%sql%
-        @echo from perf_log p                                                    >>%sql%
+        @echo from %log_tab% p                                                    >>%sql%
         @echo where p.unit = 'perf_watch_interval'                               >>%sql%
         @echo order by dts_beg desc                                              >>%sql%
         @echo rows 1;                                                            >>%sql%
@@ -1603,11 +1729,12 @@ goto:eof
   if .%w2%.==.. goto bad_dbnm
 
   @echo.
-  @echo #########################################################
-  @echo Database ^>%dbnm%^< does NOT exist on host ^>%host%^<. 
+  @echo ##################################################################################
   @echo.
+  @echo Database ^>%dbnm%^< does NOT exist on host ^>%host%^<. 
   @echo Press ENTER for attempt to CREATE it, Ctrl-C to QUIT. . .
-  @echo #########################################################
+  @echo.
+  @echo ##################################################################################
   pause
 
   set tmpsql=%tmpdir%\tmp_create_dbnm.sql

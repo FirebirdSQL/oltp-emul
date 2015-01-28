@@ -835,7 +835,7 @@ commit;
 -- (NB: *not* all operations add rows in this table)
 recreate table money_turnover_log(
     id dm_ids not null
-   ,doc_id dm_ids -- FK, ref to doc_list, here may be MORE THAN 1 record
+   ,doc_id dm_ids
    ,agent_id dm_ids
    ,optype_id dm_ids
    ,cost_purchase dm_vals -- can be < 0 when deleting records in doc_xxx
@@ -1283,9 +1283,10 @@ alter table wares
 -- do NOT: alter table money_turnover_log add constraint fk_money_turnover_log_doc_list foreign key (doc_id) references doc_list(id);
 -- (documents can be deleted but it mean that NEW record in money_turnover_log appear with cost < 0!)
 
-alter table money_turnover_log
-   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
-;
+-- dis 28.01.2015 0135, no need:
+--alter table money_turnover_log
+--   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
+--;
 
 commit;
 
