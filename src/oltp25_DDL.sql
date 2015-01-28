@@ -1261,9 +1261,10 @@ alter table wares
 -- do NOT: alter table money_turnover_log add constraint fk_money_turnover_log_doc_list foreign key (doc_id) references doc_list(id);
 -- (documents can be deleted but it mean that NEW record in money_turnover_log appear with cost < 0!)
 
-alter table money_turnover_log
-   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
-;
+-- dis 28.01.2015 0135, no need:
+--alter table money_turnover_log
+--   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
+--;
 
 commit;
 
