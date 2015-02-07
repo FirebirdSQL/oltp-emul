@@ -429,8 +429,6 @@ echo Check is the database needs to be filled up with necessary number of docume
 echo ##############################################################################
 
 del %tmpclg% 2>nul
-if /i .%init_docs%.==.. goto more
-if /i .%init_docs%.==.0. goto more
 
 @rem check that total number of docs (count from doc_list table) is LESS than %init_docs%
 @rem and correct %init_docs% (reduce it) so that its new value + count will be equal to 
@@ -478,7 +476,15 @@ for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
   )
 )
 
+echo existing_docs=%existing_docs%, log_tab=%log_tab% 
+
+if /i .%init_docs%.==.. goto more
+if /i .%init_docs%.==.0. goto more
+
 set /a init_docs = init_docs - %existing_docs%
+
+echo We have to create yet ^>^>^>%init_docs%^<^<^< docs.
+
 
 if %init_docs% leq 0 goto more
 
@@ -963,7 +969,7 @@ echo set width dts_measure_end 24;>>%tmpsql%
 echo set list on;>>%tmpsql%
 echo.>>%tmpsql%
 
-echo Check test settings and record in %log_tab% table that will be checked
+echo Check test settings and record in ^>^>^>%log_tab%^<^<^< table that will be checked
 echo by attachments to stop their work:                                 
 echo select                                                                            >>%tmpsql%
 echo        m.mon$database_name as db_name                                             >>%tmpsql%
@@ -971,9 +977,10 @@ echo       ,m.mon$page_size as pg_size                                          
 echo       ,m.mon$page_buffers as buffers                                              >>%tmpsql%
 echo       ,m.mon$forced_writes as forced_writes                                       >>%tmpsql%
 echo       ,rdb$get_context('USER_SESSION','WORKING_MODE') working_mode                >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors  >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION', 'C_CATCH_MISM_BITSET') c_catch_mism_bitset >>%tmpsql%
 echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query        >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors  >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','LOG_PK_VIOLATION') log_pk_violations       >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'C_CATCH_MISM_BITSET') c_catch_mism_bitset >>%tmpsql%
 echo       ,g.add_info                                                                 >>%tmpsql%
 echo       ,g.dts_measure_beg                                                          >>%tmpsql%
 echo       ,g.dts_measure_end                                                          >>%tmpsql%
@@ -1093,6 +1100,7 @@ for /l %%i in (1, 1, %winq%) do (
     echo !run_fbs!>>%log4all%
     cmd /c !run_fbs! 1>>%log4all% 2>>&1
     echo.>>%log4all%
+
     echo %date% %time% Done. Now launch %winq% ISQL sessions. >>%log4all%
   )
  

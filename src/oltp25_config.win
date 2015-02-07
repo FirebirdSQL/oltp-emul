@@ -12,7 +12,7 @@
 # fbc=C:\"Program Files"\"Firebird 2.5.x"\bin
 # fbc=C:\"Program Files"\"Firebird 3.0.x"
 
-fbc= C:\MIX\firebird\fb25\bin
+fbc= C:\firebird\fb25\bin
 
 # Folder where to store work and error logs, with or w/o trailing backslash.
 # Do NOT use "%" character for referencing to some windows environment
@@ -34,6 +34,15 @@ no_auto_undo=1
 # Do we use mtee.exe utility to provide timestamps for error messages 
 # before they are logged in .err files ?
 use_mtee=0
+
+# Do we want to create some DEBUG objects (tables, views and procedures)
+# in order to:
+# 1) make dumps of all data from tables when critical error occurs;
+# 2) make miscelaneous diagnostic queries via "Z_" views.
+# Value=1 will cause "oltp_misc_debug.sql" be called when build database.
+# NB: setting 'C_CATCH_MISM_BITSET' must have bit #2 = 1 when this value = 1.
+# (see oltp_main_filling.sql)
+make_debug_dbos=0
 
 # Add in ISQL logs detailed info for each iteration (select from perf_log...) ?
 # Recommended value: 0
@@ -65,11 +74,11 @@ warm_time=20
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
-test_time=180
+test_time=60
 
 # Rest params are not needed if embedded mode but should be non-empty 
 # for this command scenario:
 usr=SYSDBA
 pwd=masterke
-host=192.168.0.220
-port=3252
+host=127.0.0.1
+port=3050

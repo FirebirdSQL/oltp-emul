@@ -195,7 +195,13 @@ begin
                           exception ex_record_not_found using ('wares', v_pattern);
                     end
                 else
-                    v_ware_id = fn_get_random_id(v_source_for_random_id, null, null, :v_raise_exc_on_nofind); -- <<< take random ware from price list
+                    v_ware_id =
+                    fn_get_random_id(
+                        v_source_for_random_id,
+                        null,
+                        null,
+                        :v_raise_exc_on_nofind
+                    ); -- <<< take random ware from price list
 
                 -- Define cost of ware being added in customer order,
                 -- in purchasing and retailing prices (allow them to vary):
@@ -1350,11 +1356,12 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_customer_reserve' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
+                            fn_get_random_id(
+                                'v_cancel_customer_reserve' -- a_view_for_search
+                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                ,c_raise_exc_when_no_found
+                                ,c_can_skip_order_clause
                                             )
                           );
 
@@ -1514,18 +1521,18 @@ begin
 
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
 
-    -- Choose random doc of corresponding kind.
+    -- Choose random doc of corresponding kind ("closed" customer reserve)
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_write_off' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
+                            fn_get_random_id(
+                                'v_cancel_write_off' -- a_view_for_search
+                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                ,c_raise_exc_when_no_found
+                                ,c_can_skip_order_clause
                                             )
                           );
-
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1619,6 +1626,8 @@ as
     declare v_ware_id dm_ids;
     declare v_cnt int = 0;
     declare v_this dm_dbobj = 'sp_get_clo_for_invoice';
+    declare v_oper_order_by_customer dm_ids;
+    declare v_oper_retail_reserve dm_ids;
 begin
 
     -- Aux SP: find client orders which have at least one unit of amount of
@@ -1629,6 +1638,10 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    --?! 06.02.2015 2020, performance affect ?
+    v_oper_order_by_customer =  fn_oper_order_by_customer();
+    v_oper_retail_reserve = fn_oper_retail_reserve();
 
     delete from tmp$dep_docs d where d.base_doc_id = :a_selected_doc_id;
 
@@ -1653,13 +1666,13 @@ begin
                 from qdistr q
                 where
                     q.ware_id = :v_ware_id
-                    and q.snd_optype_id = fn_oper_order_by_customer()
-                    and q.rcv_optype_id = fn_oper_retail_reserve()
+                    and q.snd_optype_id = :v_oper_order_by_customer
+                    and q.rcv_optype_id = :v_oper_retail_reserve
                 group by q.doc_id
             ) x
             join doc_list h on
                 x.clo_doc_id = h.id
-                and h.optype_id = fn_oper_order_by_customer() -- 31.07.2014: exclude cancelled customer orders!
+                and h.optype_id = :v_oper_order_by_customer -- 31.07.2014: exclude cancelled customer orders!
             into v_clo_doc_id, v_qty_clo_still_not_reserved, v_clo_agent_id
         do begin
             -- NB: BASE_DOC_ID,DEPENDEND_DOC_ID ==> unique
@@ -1897,7 +1910,10 @@ begin
                     where not exists(
                         select * from v_our_firm v
                         where v.id = p.clo_agent_id
-                        --order by v.id -- not yet helps in FB 3.x when `id` is PK/UK, see letter to dimitr 30.09.2014 23:09
+                        -- 3.0: fixed 16.12.2014, revision 60368
+                        -- "Postfix for CORE-1550 Unnecessary index scan happens
+                        --- when the same index is mapped to both WHERE and ORDER BY clauses."
+                        order by v.id -- <<< can do this since 16.12.2014
                     )
                     into v_client_order
                 do begin
@@ -2551,9 +2567,9 @@ begin
             if ( a_total_pay is null ) then
                 begin
                     if (a_payment_oper = fn_oper_pay_from_customer() ) then
-                       current_pay_sum = round(fn_get_random_cost('C_PAYMENT_FROM_CLIENT_MIN_TOTAL', 'C_PAYMENT_FROM_CLIENT_MAX_TOTAL'), v_round_to); -- round to hundreds
+                        current_pay_sum = round(fn_get_random_cost('C_PAYMENT_FROM_CLIENT_MIN_TOTAL', 'C_PAYMENT_FROM_CLIENT_MAX_TOTAL'), v_round_to); -- round to hundreds
                     else
-                       current_pay_sum = round(fn_get_random_cost('C_PAYMENT_TO_SUPPLIER_MIN_TOTAL', 'C_PAYMENT_TO_SUPPLIER_MAX_TOTAL'), v_round_to); -- round to thousands
+                        current_pay_sum = round(fn_get_random_cost('C_PAYMENT_TO_SUPPLIER_MIN_TOTAL', 'C_PAYMENT_TO_SUPPLIER_MAX_TOTAL'), v_round_to); -- round to thousands
                 end
             else
                 current_pay_sum = a_total_pay;
@@ -3230,7 +3246,6 @@ begin
     v_dts_beg = 'now';
     for
         select
-            --m.id,
             m.rdb$db_key,
             m.agent_id,
             o.m_supp_debt,
@@ -3239,14 +3254,7 @@ begin
             m.cost_retail
         from money_turnover_log m
         join optypes o on m.optype_id = o.id
--- need only for debug:
---        where
---            m.agent_id between
---               coalesce( :a_selected_agent_id, -:fn_infinity  )
---               and
---               coalesce( :a_selected_agent_id, :fn_infinity )
     into
-        --v_id,
         v_dbkey,
         agent_id,
         m_supp_debt, -- mutually excl. with m_cust_debt
@@ -3414,9 +3422,9 @@ end
 
 ^ -- srv_recalc_idx_stat
 
---------------------------------------------------------------------------------
--- ###########################    R E P O R T I N G S   ########################
---------------------------------------------------------------------------------
+--------------------------------------------------------------------------
+-- ###########################    R E P O R T S   ########################
+--------------------------------------------------------------------------
 
 create or alter procedure srv_mon_perf_total(
     a_last_hours smallint default 3,
@@ -3461,7 +3469,8 @@ begin
         (
             select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
             from perf_log p
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+            -- nb: do NOT use inner join here (bad plan with sort)
+            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- "order by" - only for 3.0
             order by p.dts_beg desc
             rows 1
         ) y
@@ -3494,6 +3503,7 @@ begin
     from (
         select min(p.dts_beg) min_beg, max(p.dts_end) max_end, sum(p.aux1) succ_all_times
         from tmp$perf_log p
+        where p.stack = :v_this
     )
     into v_all_minutes, v_succ_all_times, job_beg, job_end;
 
@@ -3607,7 +3617,8 @@ begin
                 ,i.intervals_number
             from perf_log p
             join i on 1=1
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+            -- nb: do NOT use inner join here (bad plan with sort)
+            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
             order by p.dts_beg desc
             rows 1
         ) y on 1=1
@@ -4041,7 +4052,8 @@ begin
             (
                 select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
                 from perf_log p
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+                -- nb: do NOT use inner join here (bad plan with sort)
+                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
                 order by p.dts_beg desc
                 rows 1
             ) y

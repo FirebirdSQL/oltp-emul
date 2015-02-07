@@ -323,10 +323,10 @@ commit;
 -- #########################    C R E A T I N G   #############################
 -------------------------------------------------------------------------------
 
-recreate sequence g_common;
-recreate sequence g_doc_data;
-recreate sequence g_perf_log;
-recreate sequence g_init_pop;
+create sequence g_common;
+create sequence g_doc_data;
+create sequence g_perf_log;
+create sequence g_init_pop;
 -- 03.09.2014 1935: refactoring of sp_make_qty_storno
 -- (avoid call of sp_mult_rows_for_qdistr: replace it with update-in-line in qdistr with
 -- explicit increment ID via gen_id)
@@ -334,7 +334,6 @@ create sequence g_qdistr;
 commit;
 
 -- create collations:
--- temply dis 02.07.2014 (troubles with restoring .fbk on windows builds; Vlad)
 create collation name_coll for utf8 from unicode case insensitive;
 create collation nums_coll for utf8 from unicode case insensitive 'NUMERIC-SORT=1';
 commit;
@@ -388,7 +387,7 @@ create domain dm_qty as numeric(12,3) check(value>=0); -- not null check(value>=
 create domain dm_qtz as numeric(12,3) default 0 check(value>=0); -- default 0 not null check(value>=0);
 create domain dm_cost as numeric(12,2); -- temply dis 15.05.2014 for DEBUG! uncomment later:   not null check(value>=0);
 create domain dm_vals as numeric(12,2); -- numeric(12,2) not null; -- money_turnover_log.costXXXX, can be < 0
-
+create domain dm_aux as double precision;
 create domain dm_sign as smallint default 0 check(value in(-1, 1, 0)) ; -- smallint default 0 not null  check(value in(-1, 1, 0)) ;
 create domain dm_account_type as varchar(1) character set utf8 NOT null check( value in('1','2','i','o','c','s') ); -- incoming; outgoing; payment
 
@@ -415,6 +414,9 @@ recreate global temporary table tmp$shopping_cart(
    constraint tmp_shopcart_unq unique(id, snd_id) using index tmp_shopcart_unq
 ) on commit delete rows;
 commit;
+-- 08.01.2015, see sp make_qty_storno, investigatin perf. for NL vs MERGE
+--create index tmp_shopcart_rcv_op on tmp$shopping_cart(rcv_optype_id);
+--commit;
 
 recreate global temporary table tmp$dep_docs(
   base_doc_id dm_ids,
@@ -469,7 +471,7 @@ commit;
 create index tmp_result_set_ware_doc on tmp$result_set(ware_id, doc_id);
 create index tmp_result_set_doc on tmp$result_set(doc_id);
 commit;
-
+-- for materializing temp results in some report SPs:
 recreate global temporary table tmp$perf_mon(
     unit dm_name,
     cnt_all int,
@@ -488,7 +490,7 @@ recreate global temporary table tmp$perf_mon(
     cnt_unq_viol int,
     cnt_fk_viol int,
     cnt_stack_trc int, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
-    cnt_zero_gds  int, -- core-4565 (gdscode=0 in when-section! 3.0 SC only)
+    cnt_zero_gds int, -- core-4565 (gdscode=0 in when-section! 3.0 SC only)
     cnt_other_exc int,
     first_done timestamp,
     last_done timestamp,
@@ -578,153 +580,7 @@ commit;
 -------------------------------------------------------------------------------
 --  ************   D E B U G   T A B L E S (can be taken out after)  **********
 -------------------------------------------------------------------------------
--- tables for dump dirty data, 4 debug only
-recreate table ztmp_shopping_cart(
-   id bigint,
-   snd_id bigint,
-   qty numeric(12,3),
-   optype_id bigint,
-   snd_optype_id bigint,
-   rcv_optype_id bigint,
-   qty_bak numeric(12,3),
-   dup_cnt int,
-   dump_att bigint,
-   dump_trn bigint
-);
-commit;
-
-recreate table ztmp_dep_docs(
-  base_doc_id bigint,
-  dependend_doc_id bigint,
-  dependend_doc_state bigint,
-  dependend_doc_dbkey dm_dbkey,
-  dependend_doc_agent_id bigint,
-  ware_id bigint,
-  base_doc_qty numeric(12,3),
-  dependend_doc_qty numeric(12,3),
-  dump_att bigint,
-  dump_trn bigint
-);
-commit;
-
-recreate table zdoc_list(
-   id bigint
-  ,optype_id bigint
-  ,agent_id bigint
-  ,state_id bigint
-  ,base_doc_id bigint -- id of document that is 'base' for current (stock order => incoming invoice etc)
-  ,cost_purchase numeric(12,2) default 0 -- total in PURCHASING cost (can be ZERO for stock orders)
-  ,cost_retail numeric(12,2) default 0 -- total in RETAIL cost, can be zero for incoming docs and stock orders
-  ,acn_type dm_account_type
-  ,dts_open timestamp
-  ,dts_fix timestamp -- when changes of CONTENT of this document became disabled
-  ,dts_clos timestamp -- when ALL changes of this doc. became disabled
-  ,att int
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-commit;
-
-recreate table zdoc_data(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
-  ,qty dm_qty
-  ,cost_purchase dm_cost
-  ,cost_retail dm_cost
-  ,dts_edit timestamp
-  ,optype_id dm_ids
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-
--- 27.06.2014 (need to find cases when negative remainders appear)
-recreate table zinvnt_turnover_log(
-    ware_id bigint
-   ,qty_diff numeric(12,3)
-   ,cost_diff numeric(12,2)
-   ,doc_list_id bigint
-   ,doc_pref dm_mcode
-   ,doc_data_id bigint
-   ,optype_id bigint
-   ,id bigint
-   ,dts_edit timestamp
-   ,att_id int
-   ,trn_id int
-   ,dump_att bigint
-   ,dump_trn bigint
-);
-
-recreate table zqdistr(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
-  ,snd_qty dm_qty
-  ,rcv_optype_id bigint
-  ,rcv_id bigint -- nullable! ==> doc_data.id of "receiver"
-  ,rcv_qty numeric(12,3)
-  ,snd_purchase dm_cost
-  ,snd_retail dm_cost
-  ,rcv_purchase dm_cost
-  ,rcv_retail dm_cost
-  ,trn_id bigint
-  ,dts timestamp
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-create index zqdistr_id on zqdistr(id); -- NON unique!
-
-recreate table zqstorned(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
-  ,snd_qty dm_qty
-  ,rcv_optype_id dm_ids
-  ,rcv_id dm_ids
-  ,rcv_qty dm_qty
-  ,snd_purchase dm_cost
-  ,snd_retail dm_cost
-  ,rcv_purchase dm_cost
-  ,rcv_retail dm_cost
-  ,trn_id bigint
-  ,dts timestamp
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-create index zqstorned_id on zqstorned(id); -- NON unique!
-
-recreate table zpdistr(
-   id dm_ids
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
-  ,snd_cost dm_qty
-  ,rcv_optype_id dm_ids
-  ,trn_id bigint
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-create index zpdistr_id on zpdistr(id); -- NON unique!
-
-recreate table zpstorned(
-   id dm_ids
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
-  ,snd_cost dm_cost
-  ,rcv_optype_id dm_ids
-  ,rcv_id dm_ids
-  ,rcv_cost dm_cost
-  ,trn_id bigint
-  ,dump_att bigint
-  ,dump_trn bigint
-);
-create index zpstorned_id on zpstorned(id); -- NON unique!
-
+-- moved out, see oltp_dump.sql
 
 -------------------------------------------------------------------------------
 -- aux table for auto stop running attaches:
@@ -752,7 +608,7 @@ commit;
 
 -- lookup table: types of operations
 recreate table optypes(
-   id dm_ids generated by default as identity constraint pk_optypes primary key using index pk_optypes
+   id dm_ids constraint pk_optypes primary key using index pk_optypes
   ,mcode dm_mcode -- mnemonic code
   ,name dm_name
   ,m_qty_clo dm_sign -- how this op. affects on remainder "clients order"
@@ -850,7 +706,7 @@ recreate table money_turnover_log(
 -- Result of data aggregation of table money_turnover_log in sp_make_cost_storno
 -- This table is updated only in 'serialized' mode by SINGLE attach at a time.
 recreate table money_saldo(
-  agent_id dm_ids generated by default as identity constraint pk_money_saldo primary key using index pk_money_saldo,
+  agent_id dm_ids constraint pk_money_saldo primary key using index pk_money_saldo,
   cost_purchase dm_vals,
   cost_retail dm_vals
 );
@@ -932,9 +788,8 @@ recreate table qdistr(
 create index qdistr_ware_sndop_rcvop on qdistr(ware_id, snd_optype_id, rcv_optype_id); -- see: 1) s`p_make_qty_storno; 2) s`p_get_clo_for_invoice
 create descending index qdistr_sndop_rcvop_sndid_desc on qdistr(snd_optype_id, rcv_optype_id, snd_id); -- 08.07.2014: for fast find max_id (clo_ord)
 commit;
--- ::: nb ::: PK on this table can be removed if setting
--- 'C_MINIMAL_PK_CREATION' = '1' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
--- (see end of script `oltp_main_filling.sql`):
+-- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
+-- if setting 'LOG_PK_VIOLATION' = '0' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
 alter table qdistr add  constraint pk_qdistr primary key(id) using index pk_qdistr;
 commit;
 
@@ -961,10 +816,8 @@ recreate table qstorned(
 create index qstorned_doc_id on qstorned(doc_id); -- confirmed 16.09.2014, see s`p_lock_dependent_docs
 create index qstorned_snd_id on qstorned(snd_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
 create index qstorned_rcv_id on qstorned(rcv_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
-commit;
--- ::: nb ::: PK on this table can be removed if setting
--- 'C_MINIMAL_PK_CREATION' = '1' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
--- (see end of script `oltp_main_filling.sql`):
+-- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
+-- if setting 'LOG_PK_VIOLATION' = '0' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
 alter table qstorned add  constraint pk_qdstorned primary key(id) using index pk_qdstorned;
 commit;
 -------------------------------------------------------------------------------
@@ -972,17 +825,16 @@ commit;
 -- for payment docs and when we change document state in:
 -- s`p_add_invoice_to_stock, s`p_reserve_write_off, s`p_cancel_adding_invoice, s`p_cancel_write_off
 recreate table pdistr(
-   -- ::: nb ::: PK on this table can be removed if setting
-   -- 'C_MINIMAL_PK_CREATION' = '1' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
-   -- (see end of script `oltp_main_filling.sql`):
-   id dm_ids generated by default as identity constraint pk_pdistr primary key using index pk_pdistr
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
-  ,snd_id dm_ids -- ==> doc_list.id of "sender"
-  ,snd_cost dm_qty
-  ,rcv_optype_id dm_ids
-  ,trn_id bigint default current_transaction
-  ,constraint pdistr_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
+    -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
+    -- if setting 'LOG_PK_VIOLATION' = '0' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
+    id dm_ids generated by default as identity constraint pk_pdistr primary key using index pk_pdistr
+    ,agent_id dm_ids
+    ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
+    ,snd_id dm_ids -- ==> doc_list.id of "sender"
+    ,snd_cost dm_qty
+    ,rcv_optype_id dm_ids
+    ,trn_id bigint default current_transaction
+    ,constraint pdistr_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
 );
 create index pdistr_snd_id on pdistr(snd_id); -- for fast seek when emul cascade deleting in s`p_kill_cost_storno
 -- 09.09.2014: attempt to speed-up random choise of non-paid realizations and invoices
@@ -995,19 +847,18 @@ commit;
 -- Storage for records which are removed from Pdistr when they are 'storned'
 -- (will returns back into Pdistr when cancel operation - see sp_k`ill_cost_storno):
 recreate table pstorned(
-   -- ::: nb ::: PK on this table can be removed if setting
-   -- 'C_MINIMAL_PK_CREATION' = '1' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
-   -- (see end of script `oltp_main_filling.sql`):
-   id dm_ids generated by default as identity constraint pk_pstorned primary key using index pk_pstorned
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
-  ,snd_id dm_ids -- ==> doc_list.id of "sender"
-  ,snd_cost dm_cost
-  ,rcv_optype_id dm_ids
-  ,rcv_id dm_ids
-  ,rcv_cost dm_cost
-  ,trn_id bigint default current_transaction
-  ,constraint pstorned_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
+    -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
+    -- if setting 'LOG_PK_VIOLATION' = '0' and 'HALT_TEST_ON_ERRORS' not containing ',PK,'
+    id dm_ids generated by default as identity constraint pk_pstorned primary key using index pk_pstorned
+    ,agent_id dm_ids
+    ,snd_optype_id dm_ids -- ex. optype_id dm_ids -- denorm for speed
+    ,snd_id dm_ids -- ==> doc_list.id of "sender"
+    ,snd_cost dm_cost
+    ,rcv_optype_id dm_ids
+    ,rcv_id dm_ids
+    ,rcv_cost dm_cost
+    ,trn_id bigint default current_transaction
+    ,constraint pstorned_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
 );
 create index pstorned_snd_id on pstorned(snd_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
 create index pstorned_rcv_id on pstorned(rcv_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
@@ -1026,7 +877,7 @@ commit;
 
 -- lookup table: doc_states of documents (filled manually, see below)
 recreate table doc_states(
-   id dm_ids generated by default as identity constraint pk_doc_states primary key using index pk_doc_states
+   id dm_ids constraint pk_doc_states primary key using index pk_doc_states
   ,mcode dm_name  -- mnemonic code
   ,name dm_name
   ,constraint doc_states_mcode_unq unique(mcode) using index doc_states_mcode_unq
@@ -1128,7 +979,6 @@ recreate table perf_log(
   ,aux1 double precision -- for srv_recalc_idx_stat: new value of index statistics
   ,aux2 double precision -- for srv_recalc_idx_stat: difference after recalc idx stat
   ,dump_trn bigint default current_transaction
-  -- dis: generated by default as identity constraint pk_perf_log primary key using index pk_perflog_log, see s`p_add_to_perf_log // 04.07.2014
 );
 -- finally dis 09.01.2015, not needed for this table: create index perf_log_id on perf_log(id);
 create descending index perf_log_dts_beg_desc on perf_log(dts_beg);
@@ -1297,8 +1147,8 @@ set term ^;
 --------------------------------------------------------------------------------
 
 ------------  P S Q L     S t o r e d    F u n c t i o n s  -----------------
--- As of current FB-3.x state deterministic function can use internal 'cache'
--- only during time of some query run. Its result is RE-CALCULATED every time when
+-- As of current FB-3.x state, deterministic function can use internal 'cache'
+-- only while some query is running. Its result is RE-CALCULATED every time when
 -- 1) running new query with this func; 2) encounter every new call inside PSQL
 -- see sql.ru/forum/actualutils.aspx?action=gotomsg&tid=951736&msg=12787923
 create or alter function fn_infinity returns bigint deterministic as
@@ -1995,8 +1845,8 @@ create or alter procedure sp_flush_perf_log_on_abend(
     a_gdscode int default null,
     a_info dm_info default null, -- additional info for debug
     a_exc_info dm_info default null, -- user-def or standard ex`ception description
-    a_aux1 type of column perf_log.aux1 default null,
-    a_aux2 type of column perf_log.aux2 default null
+    a_aux1 dm_aux default null,
+    a_aux2 dm_aux default null
 )
 as
     declare v_cnt smallint;
@@ -2055,7 +1905,6 @@ begin
     v_dts = 'now';
     for
         select
-            ---id
             unit
             ,coalesce( fb_gdscode, :a_gdscode, :c_std_user_exc ) as fb_gdscode
             ,info
@@ -2076,8 +1925,18 @@ begin
             -- instead of starting auton. tx (performance!)
             begin
                 v_info = coalesce(c.info, '');
-                if (c.unit = :a_unit) then
-                  v_info = left(v_info || trim(iif( v_info>'', '; ', '')) || coalesce(a_info,''), 255);
+                -- Some unit (e.g. ) could run several times and exc`eption could occured
+                --  in Nth  call of that unit (N >= 2). We must add :a_info to v_info
+                -- *ONLY* if processed record in tmp$perf_log relates to that Nth call
+                -- of unit (where exc`ption occured).
+                -- Sample: sp_cancel_adding_invoice => create list of dependent
+                -- docs, lock all of them, and then for each of these docs (reserves):
+                -- sp_cancel_reserve => trigger doc_list_aiud => sp_kill_qstorno_ret_qs2qd
+                if (c.unit = a_unit
+                    and
+                    c.exc_unit is NOT null
+                ) then
+                    v_info = left(v_info || trim(iif( v_info>'', '; ', '')) || coalesce(a_info,''), 255);
 
                 if ( v_gen_inc_iter_pf = c_gen_inc_step_pf ) then -- its time to get another batch of IDs
                 begin
@@ -2088,10 +1947,10 @@ begin
                 v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
                 v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
 
-                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_ID', v_pf_new_id);    -- 1
+                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_ID', v_pf_new_id);    --  1
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_UNIT', c.unit);       --  2
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_GDS', c.fb_gdscode ); --  3
-                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_INFO', v_info); -- c.info);       --  4
+                rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_INFO', v_info);       --  4
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_XUNI', c.exc_unit);   --  5
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_XNFO', c.exc_info);   --  6
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_BEG', c.dts_beg);     --  7
@@ -2099,7 +1958,7 @@ begin
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_MS', datediff(millisecond from c.dts_beg to c.dts_end));
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_AUX1', c.aux1);       -- 10
                 rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :v_cnt ||'_AUX2', c.aux2);       -- 11
-                v_cnt = v_cnt+1;
+                v_cnt = v_cnt + 1;
             end
         else -- it's time to "flush" data from context vars to fixed table pref_log using auton tx
             begin
@@ -2112,7 +1971,7 @@ begin
     if (v_cnt > 0) then
     begin
         -- flush (again!) to perf_log data from rest of context vars (v_cnt now can be >0 and < c_limit):
-        execute procedure sp_flush_tmpperf_in_auton_tx(a_starter, v_cnt, a_gdscode);
+        execute procedure sp_flush_tmpperf_in_auton_tx( a_starter, v_cnt, a_gdscode);
     end
 
     -- create new ctx in order to prevent repeat of transfer on next-level stack:
@@ -2127,7 +1986,9 @@ create or alter procedure srv_fill_mon(a_rowset bigint default null) returns(row
 begin
   suspend;
 end
-^
+
+^ -- srv_fill_mon (stub!)
+
 create or alter procedure srv_fill_tmp_mon(
     a_rowset dm_ids,
     a_ignore_system_tables smallint default 1,
@@ -2141,7 +2002,9 @@ returns(
 as begin
   suspend;
 end
-^
+
+^ -- srv_fill_tmp_mon (stub!)
+
 --------------------------------------------------------------------------------
 
 create or alter procedure srv_log_mon_for_traced_units(
@@ -2161,6 +2024,7 @@ begin
         -- Gather all avaliable mon info about caller module: add pair of row sets
         -- (for beg and end) and then calculate DIFFERENCES of mon. counters with
         -- logging in tables `mon_log` and `mon_log_table_stats`.
+        -- NOT work in 2.5 due to bulk of deadlocks when intensive monitoring using
         v_rowset = rdb$get_context('USER_SESSION','MON_ROWSET_'||a_unit);
         if ( v_rowset is null  ) then
             begin
@@ -2213,118 +2077,27 @@ end
 
 -------------------------------------------------------------------------------
 
---create or alter procedure sp_last_unit_save(a_unit dm_unit) as
---    declare c_delimiter char(1);
---    declare n bigint;
---begin
---    -- 12.01.2015: not needed, revert back; todo: remove it later.
---    rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', a_unit);
---    rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', cast('now' as timestamp));
---    exit; -- ?! 11.01.2015 1445
---
---    -- This SP is necessary for 'insert-again' record i`nto tmp$perf_log if it
---    -- was added in sp_add_perf_log and then has been backed out (removed!)
---    -- in WHEN block of SP which made that call sp_add_perf_log.
---    -- Without such 're-inserting' table perf_log will NOT contain info about
---    -- unit where exception occured! See CORE-4483.
---    ----------------------------------------------------------------------------
---    -- Increments list of units which are currently in run (i.e. 'on call stack'),
---    -- by adding last called :a_unit to the left end of ctx var `TPLOG_LAST_UNIT`
---    -- (acts like 'pop' on common stack ops; total length of list should be < 255)
---    c_delimiter = '|'; -- ascii_char(1);
---    if ( rdb$get_context('USER_SESSION','LU_DTS_BASE') is null ) then
---      -- save timestamp of this SP 1st call instead of hard-coding any literal values:
---      rdb$set_context('USER_SESSION','LU_DTS_BASE', cast(current_timestamp as varchar(24)) );
---
---    n = datediff( millisecond from
---            cast( rdb$get_context('USER_SESSION','LU_DTS_BASE') as timestamp)
---            to
---            cast('now' as timestamp)
---        );
---    rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT',
---        a_unit || coalesce( c_delimiter || rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT'), '' )
---    );
---
---    rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG',
---        n || coalesce( c_delimiter || rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG'), '' )
---    );
---
---end
---
---^ -- sp_last_unit_save
---
---create or alter procedure sp_last_unit_pull(
---    cut_unit_list smallint = 1 -- '0' ==> do NOT reduce content of ctx var
---) returns(
---    last_unit dm_unit, -- name of unit which was called last time
---    last_beg timestamp
---)
---as
---    declare j smallint;
---    declare k smallint;
---    declare v_list dm_stack;
---    declare v_lbeg dm_stack;
---    declare c_delimiter char(1);
---begin
---    -- 12.01.2015: not needed, revert back; todo: remove it later.
---
---    -- Works in pair with s`p_last_unit_save: TAKE OUT (if cut_unit_list = 1)
---    -- most left token from list of units which are 'on stack' now - i.e. removes
---    -- most left 'word' from ctx var 'TPLOG_LAST_UNIT' and so REDUCES rest value
---    -- of that variable. Similarly takes out most left value from 'TPLOG_LAST_BEG'
---    -- and converts it to timestamp of beginning this SP).
---    last_unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT');
---    last_beg = cast(rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG') as timestamp);
---    suspend;
---    exit; -- ?! 11.01.2015 1445
---
---
---    c_delimiter = '|'; -- ascii_char(1);
---    v_list = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT'); -- 'spNNN:spMMMM:spKKK'
---    v_lbeg = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG'); -- values of ms since last logging timestamp
---    j = position(c_delimiter in v_list);
---    k = position(c_delimiter in v_lbeg);
---
---    last_unit = iif( j > 0, left(v_list, j-1), v_list );
---    last_beg = dateadd( cast(iif( k > 0, left(v_lbeg, k-1), v_lbeg ) as int) millisecond
---                        to
---                        cast( rdb$get_context('USER_SESSION','LU_DTS_BASE') as timestamp)
---                       );
---
---    if ( cut_unit_list = 1  ) then
---    begin
---       rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', iif( j > 0, substring(v_list from j+1), null ) );
---       rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', iif( k > 0, substring(v_lbeg from k+1), null ) );
---    end
---
---    suspend;
---
---end
---
---^ -- sp_last_unit_pull
-
-create or alter procedure sp_add_perf_log ( -- 28.09.2014, instead sp_add_TO_perf_log
+create or alter procedure sp_add_perf_log (
     a_is_unit_beginning dm_sign,
     a_unit dm_unit,
     a_gdscode integer default null,
     a_info dm_info default null,
-    a_aux1 type of column perf_log.aux1 default null,
-    a_aux2 type of column perf_log.aux2 default null)
-as
+    a_aux1 dm_aux default null,
+    a_aux2 dm_aux default null
+) as
     declare v_curr_tx bigint;
     declare v_dts timestamp;
     declare v_save_dts_beg timestamp;
     declare v_save_dts_end timestamp;
     declare v_save_gtt_cnt int;
     declare v_id dm_ids;
-    declare v_info dm_info;
     declare v_unit dm_unit;
+    declare v_info dm_info;
     declare c_gen_inc_step_pf int = 20; -- size of `batch` for get at once new IDs for perf_log (reduce lock-contention of gen page)
     declare v_gen_inc_iter_pf int; -- increments from 1  up to c_gen_inc_step_pf and then restarts again from 1
     declare v_gen_inc_last_pf dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_pf)
     declare v_pf_new_id dm_ids;
 begin
-
     -- Registration of all STARTs and FINISHes (both normal and failed)
     -- for all application SPs and some service units:
     v_curr_tx = current_transaction;
@@ -2390,11 +2163,20 @@ begin
 
                 for
                     select
-                         unit, exc_unit
-                        ,fb_gdscode, trn_id, att_id, elapsed_ms
-                        ,info, exc_info, stack
-                        ,ip, dts_beg, dts_end
-                        ,aux1, aux2
+                         unit
+                        ,exc_unit
+                        ,fb_gdscode
+                        ,trn_id
+                        ,att_id
+                        ,elapsed_ms
+                        ,info
+                        ,exc_info
+                        ,stack
+                        ,ip
+                        ,dts_beg
+                        ,dts_end
+                        ,aux1
+                        ,aux2
                     from tmp$perf_log g
                     as cursor ct
                 do begin
@@ -2473,8 +2255,13 @@ create or alter procedure zdump4dbg(
     a_doc_list_id bigint default null,
     a_doc_data_id bigint default null,
     a_ware_id bigint default null
-) as begin end
-^
+) as begin
+  -- ::: NB ::: This SP is overwritten in script 'oltp_misc_debug.sql' which
+  -- is called ONLY if config parameter 'make_debug_dbos' is set to 1.
+  -- Open oltpNN_config.*** file and change this parameter if you want this
+  -- proc and some other aux tables (named with "Z_" prefix) to be created.
+end
+^ -- zdump4dbg (STUB!)
 
 create or alter procedure sp_add_to_abend_log(
        a_exc_info dm_info,
@@ -2484,7 +2271,9 @@ create or alter procedure sp_add_to_abend_log(
        a_halt_due_to_error smallint default 0 --  1 ==> forcely extract FULL STACK ignoring settings, because of error + halt test
 ) as
     declare v_last_unit dm_unit;
+    declare v_last_info dm_info;
     declare v_last_beg timestamp;
+    declare v_last_end timestamp;
 begin
     -- SP for register info about e`xception occured in application module.
     -- When each module starts, it call sp_add_to_perf_log and creates record in
@@ -2494,7 +2283,7 @@ begin
     -- signalling that all data from GTT tmp$perf_log should be saved now via ATx.
     if ( a_gdscode is NOT null and nullif(a_exc_info, '') is null ) then -- this is standard error
     begin
-        select :a_gdscode||': '||coalesce(f.fb_mnemona||'. ', ' <no-mnemona>. ')||coalesce(f.fb_errtext,'')
+        select coalesce(f.fb_mnemona, 'no-mnemona')
         from fb_errors f
         where f.fb_gdscode = :a_gdscode
         into a_exc_info;
@@ -2514,28 +2303,45 @@ begin
         -- tmp$perf_log can be 'lost' in case of exc in caller before we come
         -- in this SP (sp_cancel_client_order => sp_lock_selected_doc).
         v_last_beg = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG');
-        update or insert into tmp$perf_log(
-             unit
-            ,fb_gdscode
-            ,info
-            ,exc_unit
-            ,dts_beg
-            ,dts_end
-            ,elapsed_ms
-            ,trn_id
-        ) values (
-             :a_caller
-            ,:a_gdscode
-            ,coalesce(rdb$get_context('USER_TRANSACTION','TPLOG_LAST_INFO'),'')
-            ,'#' -- ==> module :a_caller IS the source of raised exception
-            ,:v_last_beg
-            ,'now'
-            ,datediff(millisecond from :v_last_beg to cast('now' as timestamp))
-            ,current_transaction
-        ) matching ( unit, trn_id ); -- index key: UNIT,TRN_ID,DTS_END
+        v_last_end = cast('now' as timestamp);
+        v_last_info = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_INFO');
+
+        update tmp$perf_log t
+        set
+            fb_gdscode = :a_gdscode,
+            info = :a_info, --  coalesce( :v_last_info, '<null-1>'),
+            exc_unit = '#', -- exc_unit: direct CALLER of this SP is the SOURCE of raised exception
+            dts_end = :v_last_end,
+            elapsed_ms = datediff(millisecond from :v_last_beg to :v_last_end)
+        where
+            t.unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT')
+            and t.trn_id = current_transaction
+            and dts_end is NULL; -- index key: UNIT,TRN_ID,DTS_END
+
+        if ( row_count = 0 ) then
+            insert into tmp$perf_log(
+                 unit
+                ,fb_gdscode
+                ,info
+                ,exc_unit
+                ,dts_beg
+                ,dts_end
+                ,elapsed_ms
+                ,trn_id
+            ) values (
+                 :a_caller
+                ,:a_gdscode
+                ,:a_info --- coalesce( :v_last_info, '<null-2>')
+                ,'#' -- ==> module :a_caller IS the source of raised exception
+                ,:v_last_beg
+                ,:v_last_end
+                ,datediff(millisecond from :v_last_beg to :v_last_end)
+                ,current_transaction
+            );
+
         -- before 10.01.2015:
-        -- update tmp$perf_log set ... where t.unit = :a_caller and and t.trn_id = current_transaction and and dts_end is NULL;
-        -- rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
+        -- update tmp$perf_log set ... where t.unit = :a_caller and and t.trn_id = current_transaction and dts_end is NULL;
+        rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
 
         -- Save uncommitted data from tmp$perf_log to perf_log (via autonom. tx):
         -- NB: All records in GTT tmp$perf_log are visible ONLY at the "deepest" point
@@ -2684,15 +2490,6 @@ begin
 
     if ( fn_remote_process() containing 'IBExpert' ) then exit; -- 4debug; 23.07.2014
 
---    -- !!!debug!!! SuperClassic 3.0 trouble, 20.08.2014
---    -- 'HALT_TEST_ON_ERRORS'
---    if ( exists(select * from perf_log g where g.fb_gdscode = 335544842) )
---    then
---        -- this will cause isql to be auto-stopped due to set bail on + raising
---        -- exception when this ctx var = 'TEST_WAS_CANCELLED'
---        -- (see %tmpdir%\sql\tmp_random_run.sql):
---        rdb$set_context('USER_SESSION','SELECTED_UNIT','TEST_WAS_CANCELLED');
-
     if ( rdb$get_context('USER_SESSION','PERF_WATCH_END') is null ) then
         begin
             -- this record is added in 1run_oltp_emul.bat before FIRST attach
@@ -2791,6 +2588,21 @@ end
 
 ^ -- sp_init_ctx
 
+-- STUB! Redefinition see in file oltp_dump.sql
+create or alter procedure z_remember_view_usage (
+    a_view_for_search dm_dbobj,
+    a_view_for_min_id dm_dbobj default null,
+    a_view_for_max_id dm_dbobj default null
+) as
+    declare i smallint;
+    declare v_ctxn dm_ctxnv;
+    declare v_name dm_dbobj;
+begin
+
+end
+
+^ -- z_remember_view_usage (STUB!)s
+
 create or alter function fn_get_random_id (
     a_view_for_search dm_dbobj,
     a_view_for_min_id dm_dbobj default null,
@@ -2811,7 +2623,6 @@ as
     declare msg dm_info;
     declare v_info dm_info;
     declare v_this dm_dbobj = 'fn_get_random_id';
-
     declare v_ctxn dm_ctxnv;
     declare v_name dm_dbobj;
     declare fn_internal_max_rows_usage int;
@@ -2841,39 +2652,9 @@ begin
     -- select id from <a_view_for_search> rows :x to :y, where x = y = random_int
     fn_internal_max_rows_usage = cast( rdb$get_context('USER_SESSION','RANDOM_SEEK_VIA_ROWS_LIMIT') as int);
 
-    i = 1;
-    while (i <= 3) do -- a_view_for_search, a_view_for_min_id,  a_view_for_max_id
-    begin
-        v_name = decode(i, 1, a_view_for_search, 2, a_view_for_min_id ,  a_view_for_max_id  );
-        if ( v_name is not null ) then
-        begin
-            v_ctxn = v_this||':'||v_name;
-            --if ( v_name is distinct from rdb$get_context('USER_SESSION', v_ctxn ) ) then
-            if ( rdb$get_context('USER_SESSION', v_ctxn) is null ) then
-            begin
-                if (not exists( select * from z_used_views u where u.name = :v_name )) then
-                begin
-                    insert into z_used_views(name) values( :v_name );
-                    rdb$set_context('USER_SESSION', v_ctxn, '1' );
-                end
-            when any do
-                -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
-                -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
-                -- catched it's kind of exception!
-                -- 1) tracker.firebirdsql.org/browse/CORE-3275
-                --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
-                -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
-                begin
-                    if ( not fn_is_uniqueness_trouble ( gdscode ) ) then
-                        -- #######
-                        exception;
-                        -- #######
-                    -- else ==> yes, supress no_dup exception here --
-                end
-            end
-        end
-        i = i + 1;
-    end
+    -- Use either stub or non-empty executing code (depends on was 'oltp_dump.sql' compiled or no):
+    -- save fact of usage views in the table `z_used_views`:
+    execute procedure z_remember_view_usage(a_view_for_search, a_view_for_min_id, a_view_for_max_id);
 
     a_view_for_min_id = coalesce( a_view_for_min_id, a_view_for_search );
     a_view_for_max_id = coalesce( a_view_for_max_id, a_view_for_min_id, a_view_for_search );
@@ -3084,8 +2865,6 @@ begin
             rdb$set_context('USER_SESSION', v_ctx_prefix||'CNT', i);
             i = i+1;
         end
-        -- only for showing dependencies (prevent from occasional drops of Qdistr and PDistr tables!):
-        -- dis 05.10.2014, letter by Simonov Denis: i = i + (select 0 from rules_for_qdistr rows 1) + (select 0 from rules_for_pdistr rows 1);
     end
     i = 1;
     while ( i <= cast(rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') as int) )
@@ -3287,7 +3066,6 @@ when any do
 end
 
 ^   -- sp_multiply_rows_for_qdistr
-
 
 create or alter procedure sp_multiply_rows_for_pdistr(
     a_doc_list_id dm_ids,
@@ -3623,7 +3401,7 @@ end
 
 ^ -- sp_kill_cost_storno
 
-create or alter procedure srv_log_dups_qd_qs(
+create or alter procedure srv_log_dups_qd_qs( -- need only in 3.0, SuperCLASSIC.
     a_unit dm_dbobj,
     a_gdscode int,
     a_inserting_table dm_dbobj,
@@ -3650,7 +3428,7 @@ as
     declare v_dts timestamp;
 begin
     -- 09.10.2014, continuing trouble with PK violations in 3.0 SuperCLASSIC.
-    -- add log info using auton Tx when PK violation occurs in QDistr or QStorned.
+    -- Add log info using auton Tx when PK violation occurs in QDistr or QStorned.
     -- 08.01.2014: replace wrong algorithm that ignored invisible data for auton Tx
     v_curr_tx = current_transaction;
     v_get_stt = 'select doc_id, ware_id, snd_optype_id, snd_id, snd_qty,'
@@ -3717,9 +3495,10 @@ begin
 
     end -- in auton Tx
 end
+
 ^ -- srv_log_dups_qd_qs
 
-create or alter procedure sp_kill_qty_storno_ret_qs2qd (
+create or alter procedure sp_kill_qstorno_ret_qs2qd(
     a_doc_id dm_ids,
     a_old_optype dm_ids,
     a_deleting_doc dm_sign
@@ -3728,8 +3507,9 @@ as
     declare c_gen_inc_step_nt int = 100; -- size of `batch` for get at once new IDs for QDistr (reduce lock-contention of gen page)
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_nt and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_nt)
-    declare v_this dm_dbobj = 'sp_kill_qty_storno_ret_qs2qd';
+    declare v_this dm_dbobj = 'sp_kill_qstorno_ret_qs2qd';
     declare v_info dm_info;
+    declare v_suffix dm_info;
     declare i int  = 0;
     declare k int  = 0;
     declare v_dd_id dm_ids;
@@ -3862,7 +3642,6 @@ begin
             open c_ret_qs2qd_by_snd; -- from qstorned where qs.SND_id = :v_dd_id
 
         v_log_cursor = v_ret_cursor;
-        --v_qdistr_info = 'fetch ' || iif( a_old_optype <> v_oper_retail_realization, 'c_ret_qs2qd_by_rcv', '_ret_qs2qd_by_snd');
         while (1=1) do
         begin
             if ( a_old_optype <> v_oper_retail_realization ) then
@@ -3896,14 +3675,32 @@ begin
 
             if ( row_count = 0 ) then leave;
             i = i+1; -- total number of processed rows
+
+            v_suffix =
+                ', id=' || :v_id || ', doc_id=' || :v_doc_id
+                || ', input args: a_doc_id='||a_doc_id
+                || ', a_old_optype='||a_old_optype
+            ;
+
+            v_info = v_ret_cursor
+                || ': try DELETE in qStorned'
+                || ' where ' || iif(v_ret_cursor = 'c_ret_qs2qd_by_rcv', 'rcv_id =', 'snd_id =') || :v_dd_id
+                || v_suffix
+            ;
+
             -- we can try to delete record in QStorned *before* inserting
-            -- data in QDistr: all fields from cursor now are in variables
+            -- data in QDistr: all fields from cursor now are in variables.
+            -- ::: NB ::: (measurements 28.01-05.02.2015)
+            -- replacing qStorned with "unioned-view" based on N tables
+            -- and applying "where id = :a" leads to performance DEGRADATION
+            -- due to need to have index on ID field.
             if ( a_old_optype <> v_oper_retail_realization ) then
                 delete from qstorned where current of c_ret_qs2qd_by_rcv;
             else
                 delete from qstorned where current of c_ret_qs2qd_by_snd;
-            -- for logging in autonom. Tx if PK violation occurs in subsequent sttmt:
-            v_info = 'qs->qd, '||v_ret_cursor || ': try ins qDistr.id='||:v_id;
+
+            -- for logging in autonomous Tx if PK violation occurs in subsequent sttmt:
+            v_info = v_ret_cursor || ': try INSERT in qDistr' || v_suffix;
 
             insert into qdistr(
                 id,
@@ -3949,7 +3746,7 @@ begin
 
                 exception; -- ::: nb ::: anonimous but in when-block!
             end
-        end  -- cursor c_ret_qs2qd_by  _rcv | _snd
+        end -- cursor c_ret_qs2qd_by  _rcv | _snd
 
         if ( a_old_optype <> v_oper_retail_realization ) then
             close c_ret_qs2qd_by_rcv;
@@ -3993,9 +3790,10 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     v_info =
-        'qs->qd, doc='||a_doc_id||', op='||a_old_optype
-        ||', qd cursor: '||v_ret_cursor
-        ||', rows='||i;
+        'qs->qd: doc='||a_doc_id||', op='||a_old_optype
+        ||', ret_rows='||i
+        ||', cur='||v_ret_cursor
+    ;
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
@@ -4020,9 +3818,9 @@ when any do
 
 end
 
-^ -- sp_kill_qty_storno_ret_qs2qd
+^ -- sp_kill_qstorno_ret_qs2qd
 
-create or alter procedure sp_kill_qty_storno_mov_qd2qs(
+create or alter procedure sp_kill_qstorno_mov_qd2qs(
     a_doc_id dm_ids,
     a_old_optype dm_ids,
     a_new_optype dm_ids
@@ -4031,7 +3829,7 @@ create or alter procedure sp_kill_qty_storno_mov_qd2qs(
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_nt and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_nt)
 
-    declare v_this dm_dbobj = 'sp_kill_qty_storno_mov_qd2qs';
+    declare v_this dm_dbobj = 'sp_kill_qstorno_mov_qd2qs';
     declare v_info dm_info;
     declare v_curr_tx bigint;
     declare i int  = 0;
@@ -4160,7 +3958,6 @@ begin
 
             -- S P _ R E S E R V E _ W R I T E _ O F F
             -- (FINAL point of ware turnover ==> remove data from qdistr in qstorned)
-
             insert into qstorned(
                 id,
                 doc_id,
@@ -4236,9 +4033,9 @@ when any do
 
 end
 
-^ -- sp_kill_qty_storno_mov_qd2qs
+^ -- sp_kill_qstorno_mov_qd2qs
 
-create or alter procedure sp_kill_qty_storno_handle_qd4dd (
+create or alter procedure sp_kill_qstorno_handle_qd4dd (
     a_doc_id dm_ids,
     a_old_optype dm_ids,
     a_new_optype dm_ids)
@@ -4246,7 +4043,7 @@ as
     declare c_gen_inc_step_nt int = 100; -- size of `batch` for get at once new IDs for QDistr (reduce lock-contention of gen page)
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_nt and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_nt)
-    declare v_this dm_dbobj = 'sp_kill_qty_storno_handle_qd4dd';
+    declare v_this dm_dbobj = 'sp_kill_qstorno_handle_qd4dd';
     declare v_info dm_info;
     declare v_id dm_ids;
     declare v_snd_id dm_ids;
@@ -4410,7 +4207,7 @@ when any do
 
 end
 
-^ -- sp_kill_qty_storno_handle_qd4dd
+^ -- sp_kill_qstorno_handle_qd4dd
 
 create or alter procedure sp_kill_qty_storno (
     a_doc_id dm_ids,
@@ -4454,23 +4251,23 @@ begin
                 -- S P _ C A N C E L _ C L I E N T _ O R D E R
                 -- Kill allrecords for this doc both in QDistr & QStorned
                 -- delete rows in qdistr for currently cancelled client order:
-                execute procedure sp_kill_qty_storno_handle_qd4dd( :a_doc_id, :a_old_optype, fn_oper_cancel_customer_order() );
+                execute procedure sp_kill_qstorno_handle_qd4dd( :a_doc_id, :a_old_optype, fn_oper_cancel_customer_order() );
             end
 
         else if ( a_old_optype = fn_oper_retail_realization() and a_new_optype = fn_oper_retail_reserve() ) then
             -- S P _ C A N C E L _ W R I T E _ O F F
             -- return from QStorned to QDistr records which were previously moved
             -- (when currently deleting doc was created):
-            execute procedure sp_kill_qty_storno_ret_qs2qd( :a_doc_id, :a_old_optype, :a_deleting );
+            execute procedure sp_kill_qstorno_ret_qs2qd( :a_doc_id, :a_old_optype, :a_deleting );
 
         else if ( a_old_optype = fn_oper_retail_reserve() and a_new_optype = fn_oper_retail_realization() ) then
             -- S P _ R E S E R V E _ W R I T E _ O F F
-            execute procedure sp_kill_qty_storno_mov_qd2qs( :a_doc_id, :a_old_optype, :a_new_optype);
+            execute procedure sp_kill_qstorno_mov_qd2qs( :a_doc_id, :a_old_optype, :a_new_optype);
 
         else -- all other updates of doc state, except s`p_cancel_write_off
             -- S P _ A D D _ I N V O I C E _ T O _ S T O C K (apply and cancel)
             -- update rows in qdistr for currently selected doc (3dr arg <> fn_oper_cancel_cust_order):
-            execute procedure sp_kill_qty_storno_handle_qd4dd( :a_doc_id, :a_old_optype, :a_new_optype );
+            execute procedure sp_kill_qstorno_handle_qd4dd( :a_doc_id, :a_old_optype, :a_new_optype );
 
     end -- a_updating = 1 and a_new_optype is distinct from a_old_optype
 
@@ -4478,7 +4275,7 @@ begin
     begin
         -- return from QStorned to QDistr records which were previously moved
         -- (when currently deleting doc was created):
-        execute procedure sp_kill_qty_storno_ret_qs2qd( :a_doc_id, :a_old_optype, :a_deleting );
+        execute procedure sp_kill_qstorno_ret_qs2qd( :a_doc_id, :a_old_optype, :a_deleting );
 
     end -- a_deleting = 1
 
@@ -4827,7 +4624,7 @@ begin
         from (
             -- Checked plan 13.07.2014:
             -- PLAN (Q ORDER QSTORNED_RCV_ID INDEX (QSTORNED_DOC_ID))
-            select q.rcv_doc_id dependend_doc_id -- q.rcv_id dependend_doc_data_id
+            select q.rcv_doc_id dependend_doc_id
             from qstorned q
             where
                 q.doc_id = :a_base_doc_id -- choosen invoice which is to be re-opened
@@ -4911,6 +4708,16 @@ end
 
 ^ -- sp_lock_dependent_docs
 
+-- 29.07.2014: STUB, need for debug view z_invoices_to_be_adopted, will be redefined in oltp30_sp.sql:
+create or alter procedure sp_get_clo_for_invoice( a_selected_doc_id dm_ids )
+returns (
+    clo_doc_id type of dm_ids,
+    clo_agent_id type of dm_ids
+)
+as begin
+  suspend;
+end
+^
 set term ;^
 commit;
 
@@ -4953,7 +4760,7 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    v_msg ='dh='||:a_doc_list_id || ', op='||fn_mcode_for_oper( :a_optype_id ); --   || ', qDiff='||cast(:a_qty_diff as int)
+    v_msg ='dh='||:a_doc_list_id || ', op='||fn_mcode_for_oper( :a_optype_id );
 
     v_id = null;
     select first 1
@@ -4990,23 +4797,6 @@ begin
             ,sum(o.m_qty_avl * ng.qty_diff) + sum(o.m_qty_res * ng.qty_diff) qty_acn
             -- total cost "on hand" in purchasing prices:
             ,sum(o.m_cost_inc * ng.cost_diff) - sum(o.m_cost_out * ng.cost_diff) cost_acn
-
---    -> Aggregate
---        -> Sort (record length: 144, key length: 12)
---            ->  Nested Loop Join (inner)
---                -> Filter
---                    -> Table "DOC_DATA" as "D" Access By ID
---                        -> Bitmap
---                            -> Index "FK_DOC_DATA_DOC_LIST" Range Scan (full match)
---                -> Filter
---                    -> Table "INVNT_TURNOVER_LOG" as "NG" Access By ID
---                        -> Bitmap
---                            -> Index "INVNT_TURNOVER_LOG_WARE_DD_ID" Range Scan (partial match: 1/2)
---                -> Filter
---                    -> Table "OPTYPES" as "O" Access By ID
---                        -> Bitmap
---                            -> Index "PK_OPTYPES" Unique Scan
-
         from invnt_turnover_log ng
         join optypes o on ng.optype_id=o.id
         join doc_data d on ng.ware_id = d.ware_id -- ng.doc_data_id = d.id
@@ -5076,79 +4866,8 @@ end
 
 ^ -- srv_check_neg_remainders
 
---------------------------------------------------------------------------------
-
-create or alter procedure z_get_dependend_docs(
-    a_doc_list_id dm_ids,
-    a_doc_oper_id dm_ids default null -- = (for invoices which are to be 'reopened' - old_oper_id)
-) returns (
-  dependend_doc_id dm_ids, 
-  dependend_doc_state dm_ids
-)
-as
-    declare v_rcv_optype_id dm_ids;
-begin
-    -- former: s`p_get_dependend_docs; now need only for debug
-    if ( a_doc_oper_id is null ) then
-        select h.optype_id
-        from doc_list h
-        where h.id = :a_doc_list_id
-        into a_doc_oper_id;
-
-    v_rcv_optype_id = decode(a_doc_oper_id,
-                             fn_oper_invoice_add(),  fn_oper_retail_reserve(),
-                             fn_oper_order_for_supplier(), fn_oper_invoice_get(),
-                             null
-                            );
-
-    for
-        select x.dependend_doc_id, h.state_id
-        -- 30.12.2014: PLAN JOIN (SORT (X Q INDEX (QSTORNED_DOC_ID)), H INDEX (PK_DOC_LIST))
-        -- (added field rcv_doc_id in table qstorned, now can remove join with doc_data!)
-        from (
-            -- Checked plan 13.07.2014:
-            -- PLAN (Q ORDER QSTORNED_RCV_ID INDEX (QSTORNED_DOC_ID))
-            select q.rcv_doc_id dependend_doc_id -- q.rcv_id dependend_doc_data_id
-            from qstorned q
-            where
-                q.doc_id =  :a_doc_list_id -- choosen invoice which is to be re-opened
-                and q.snd_optype_id = :a_doc_oper_id -- fn_oper_invoice_add()
-                and q.rcv_optype_id = :v_rcv_optype_id --fn_oper_retail_reserve() -- in ( fn_oper_retail_reserve(), fn_oper_retail_realization() )
-            group by 1
-        ) x
-        join doc_list h on x.dependend_doc_id = h.id
-        into dependend_doc_id, dependend_doc_state
-
---        select x.dependend_doc_id, h.state_id
---        from (
---            select d.doc_id dependend_doc_id --, h.state_id dependend_doc_state
---            from
---            (
---                -- Checked plan 13.07.2014:
---                -- PLAN (Q ORDER QSTORNED_RCV_ID INDEX (QSTORNED_DOC_ID))
---                select q.rcv_id dependend_doc_data_id
---                from qstorned q
---                where
---                    q.doc_id = :a_doc_list_id -- choosen invoice which is to be re-opened
---                    and q.snd_optype_id = :a_doc_oper_id -- fn_oper_invoice_add()
---                    and q.rcv_optype_id = :v_rcv_optype_id --fn_oper_retail_reserve() -- in ( fn_oper_retail_reserve(), fn_oper_retail_realization() )
---                group by 1
---            ) r
---            join doc_data d on r.dependend_doc_data_id = d.id
---            group by d.doc_id 
---        ) x
---        join doc_list h on x.dependend_doc_id = h.id
---        into dependend_doc_id, dependend_doc_state
-    do
-        suspend;
-
-end
-
-^ -- z_get_dependend_docs
-
 set term ;^
 commit;
-
 
 -------------------------------------------------------------------------------
 -- ############################   V I E W S   #################################
@@ -5159,8 +4878,7 @@ create or alter view v_cancel_client_order as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 1000 -- fn_oper_order_by_customer()
+    h.optype_id = 1000 -- fn_oper_order_by_customer
 ;
 
 create or alter view v_cancel_supplier_order as
@@ -5168,8 +4886,7 @@ create or alter view v_cancel_supplier_order as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 1200 -- fn_oper_order_for_supplier()
+    h.optype_id = 1200 -- fn_oper_order_for_supplier
 ;
 
 
@@ -5178,24 +4895,21 @@ create or alter view v_cancel_supplier_invoice as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 2000 -- fn_oper_invoice_get()
+    h.optype_id = 2000 -- fn_oper_invoice_get
 ;
 
 create or alter view v_add_invoice_to_stock as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 2000 -- fn_oper_invoice_get()
+    h.optype_id = 2000 -- fn_oper_invoice_get
 ;
 
 create or alter view v_cancel_adding_invoice as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 2100 -- fn_oper_invoice_add()
+    h.optype_id = 2100 -- fn_oper_invoice_add
 ;
 
 create or alter view v_cancel_customer_reserve as
@@ -5204,8 +4918,7 @@ create or alter view v_cancel_customer_reserve as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 3300 -- fn_oper_retail_reserve() -- this is customer RESERVE
+    h.optype_id = 3300 -- fn_oper_retail_reserve
 ;
 
 create or alter view v_reserve_write_off as
@@ -5213,8 +4926,7 @@ create or alter view v_reserve_write_off as
 select h.id, h.agent_id, h.state_id, h.dts_open, h.dts_clos, h.cost_retail
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 3300 -- fn_oper_retail_reserve()
+    h.optype_id = 3300 -- fn_oper_retail_reserve
 ;
 
 create or alter view v_cancel_write_off as
@@ -5223,8 +4935,7 @@ create or alter view v_cancel_write_off as
 select h.id
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 3400 -- fn_oper_retail_realization() -- this is REALIZATION of customer reserve
+    h.optype_id = 3400 -- fn_oper_retail_realization
 ;
 
 create or alter view v_cancel_payment_to_supplier as
@@ -5232,16 +4943,14 @@ create or alter view v_cancel_payment_to_supplier as
 select h.id, h.agent_id, h.cost_purchase
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 4000 -- fn_oper_pay_to_supplier()
+    h.optype_id = 4000 -- fn_oper_pay_to_supplier
 ;
 
 create or alter view v_cancel_customer_prepayment as
 select h.id, h.agent_id, h.cost_retail
 from doc_list h
 where
-    -- 30.07.2014: replace optype_id with hard-coded literal
-    h.optype_id = 5000 -- fn_oper_pay_from_customer() -- this is customer prepayment
+    h.optype_id = 5000 -- fn_oper_pay_from_customer
 ;
 
 
@@ -5267,6 +4976,9 @@ where a.is_our_firm=1
 
 create or alter view v_all_wares as
 -- source for random choose ware_id in SP_CLIENT_ORDER => SP_FILL_SHOPPING_CART
+-- Plan in 3.0 (checked 06.02.2015):
+-- PLAN (C ORDER TMP_SHOPCART_UNQ) // prevent from bitmap building in tmp$shopping_cart for each row of wares!
+-- PLAN (A NATURAL)
 select a.id
 from wares a
 where not exists(select * from tmp$shopping_cart c where c.id = a.id order by c.id) -- 19.09.2014
@@ -5679,150 +5391,6 @@ from doc_list h
 --left join sp_saldo_invnt(d.ware_id) n on 1=1 -- speed
 ;
 
---------------------------------------------------------------------------------
-
-create or alter view v_diag_fk_uk as
--- service view for check data in FK/UNQ indices: search 'orphan' rows in FK
--- or duplicate rows in all PK/UNQ keys (suggestion by DS, 05.05.2014 18:23)
--- ::: NB ::: this view does NOT include in its reultset self-referenced tables!
-with recursive
-c as (
-    select
-         rc.rdb$relation_name child_tab
-        ,rc.rdb$constraint_name child_fk
-        ,rc.rdb$index_name child_idx
-        ,ru.rdb$const_name_uq parent_uk
-        ,rp.rdb$relation_name parent_tab
-        ,rp.rdb$index_name parent_idx
-    from rdb$relation_constraints rc
-    join rdb$ref_constraints ru on
-         rc.rdb$constraint_name = ru.rdb$constraint_name
-         and rc.rdb$constraint_type = 'FOREIGN KEY'
-    join rdb$relation_constraints rp
-         on ru.rdb$const_name_uq = rp.rdb$constraint_name
-    where rc.rdb$relation_name <> rp.rdb$relation_name -- prevent from select self-ref PK/FK tables!
-)
-,d as(
-    select
-        0 i
-        ,child_tab
-        ,child_fk
-        ,child_idx
-        ,parent_uk
-        ,parent_tab
-        ,parent_idx
-    from c c0
-    -- filter tables which are NOT parents for any other tables:
-    where not exists( select * from c cx where cx.parent_tab= c0.child_tab ) 
-    
-    union all
-    
-    select
-        d.i+1
-        ,c.child_tab
-        ,c.child_fk
-        ,c.child_idx
-        ,c.parent_uk
-        ,c.parent_tab
-        ,c.parent_idx
-    from d
-    join c on d.parent_tab = c.child_tab
-)
---select * from d where d.child_tab='DOC_DATA'
-
-,e as(
-    select distinct
-         child_tab
-        ,child_fk
-        ,child_idx
-        ,parent_uk
-        ,parent_tab
-        ,parent_idx
-        ,rsc.rdb$field_name fk_fld
-        ,rsp.rdb$field_name uk_fld
-    from d
-    join rdb$index_segments rsc on d.child_idx = rsc.rdb$index_name
-    join rdb$index_segments rsp on d.parent_idx = rsp.rdb$index_name and rsc.rdb$field_position=rsp.rdb$field_position
-)
-,f as(
-    select
-        e.child_tab,e.child_fk,e.parent_tab,e.parent_uk
-        --,e.fk_fld,e.uk_fld
-        ,list( 'd.'||trim(e.fk_fld)||' = m.'||trim(e.uk_fld), ' and ') jcond
-        ,list( 'm.'||trim(e.uk_fld)||' is null', ' and ' ) ncond
-    from e
-    group by e.child_tab,e.child_fk,e.parent_tab,e.parent_uk
-)
---select * from f
-
-select
-    f.child_fk checked_constraint
-   ,'FK' type_of_constraint
-   ,'select count(*) from '
-        ||trim(f.child_tab)||' d left join '
-        ||trim(f.parent_tab)||' m on '
-        ||f.jcond
-        ||' where '||f.ncond as checked_qry
-from f
-
-UNION ALL
-
-select
-    uk_idx as checked_constraint
-   ,'UK' type_of_constraint
-   ,'select count(*) from '||trim(tab_name)||' group by '||trim(uk_lst)||' having count(*)>1' as checked_qry
-from(
-    select tab_name,uk_idx, list( trim(uk_fld) ) uk_lst
-    from(
-        select rr.rdb$relation_name tab_name, rc.rdb$index_name uk_idx, rs.rdb$field_name uk_fld
-        from rdb$relation_constraints rc
-        join rdb$relations rr on rc.rdb$relation_name = rr.rdb$relation_name
-        join rdb$index_segments rs on rc.rdb$index_name = rs.rdb$index_name
-        where
-            rc.rdb$constraint_type in ('PRIMARY KEY', 'UNIQUE')
-            and coalesce(rr.rdb$system_flag,0)=0
-    )
-    group by tab_name,uk_idx
-)
--- v_diag_fk_uk
-;
-
--------------------------------------------
-
-create or alter view v_diag_idx_entries as
--- source to check match of all possible counts ortder by table indices
--- and count via natural order (suggestion by DS, 05.05.2014 18:23)
-select
-  tab_name
-  ,idx_name
-  ,cast('select count(*) from (select * from '||trim(tab_name)||' order by '||trim(idx_expr||desc_expr)||')' as varchar(255))
-   as checked_qry
-from(
-    select
-        tab_name
-        ,idx_name
-        ,max(iif(idx_type=1,' desc','')) desc_expr
-        ,list(trim(coalesce(idx_comp, idx_key))) idx_expr
-    from
-    (
-        select
-            ri.rdb$relation_name tab_name
-            ,ri.rdb$index_name idx_name
-            ,ri.rdb$expression_source idx_comp
-            ,ri.rdb$index_type idx_type
-            ,rs.rdb$field_name idx_key
-        from rdb$indices ri
-            join rdb$relations rr on ri.rdb$relation_name = rr.rdb$relation_name
-            left join rdb$index_segments rs on ri.rdb$index_name=rs.rdb$index_name
-        where coalesce(rr.rdb$system_flag,0)=0 and rr.rdb$relation_type not in(4,5)
-        order by ri.rdb$relation_name, rs.rdb$index_name,rs.rdb$field_position
-    )
-    group by
-        tab_name
-        ,idx_name
-)
--- v_diag_idx_entries
-;
 -------------------------------------------------------------------------------
 --######################   d e b u g    v i e w s   ############################
 -------------------------------------------------------------------------------
@@ -5894,29 +5462,10 @@ left join fb_errors e on p.fb_gdscode = e.fb_gdscode
 order by p.id
 ;
 
-create or alter view z_check_inv_vs_sup as
--- for checking: all qty in INVOICES which supplier has sent us must be
--- LESS or EQUEAL than qty which we've ORDERED to supplier before
--- This view should return records with ERRORS in data.
-select
-    doc_id,
-    doc_data_id,
-    ware_id,
-    qty as doc_qty,
-    qty_sup,
-    qty_clo,
-    qty_clr,
-    qty_ord,
-    qty_avl,
-    qty_res
-from v_add_invoice_to_stock v
-join v_doc_detailed f on v.id=f.doc_id
-where qty > qty_sup
-;
-
 --------------------------------------------------------------------------------
+
 create or alter view z_agents_tunrover_saldo as
---4 misc reports and debug, do not delete: agent turnovers and sums
+-- 4 misc reports and debug, do not delete: agent turnovers and sums; only in 3.0
 select
     m.agent_id, m.doc_id, o.mcode, o.acn_type
     ,o.m_supp_debt * m.cost_purchase vol_supp
@@ -5928,501 +5477,13 @@ join optypes o on m.optype_id = o.id
 ;
 
 
---------------------------------------------------------------------------------
-create or alter view z_clean_data as
--- ### DO  NOT DELETE IT! ###
--- source for oltp_main_filling.sql: returns statements for delete all rows in PK/FK
--- (only for table which are NOT self-linked!).
-with recursive
-c as (
-    select
-         rc.rdb$relation_name child_tab
-        ,rc.rdb$constraint_name child_fk
-        ,ru.rdb$const_name_uq parent_uk
-        ,rp.rdb$relation_name parent_tab
-    from rdb$relation_constraints rc
-    join rdb$ref_constraints ru on
-         rc.rdb$constraint_name = ru.rdb$constraint_name
-         and rc.rdb$constraint_type = 'FOREIGN KEY'
-    join rdb$relation_constraints rp
-         on ru.rdb$const_name_uq = rp.rdb$constraint_name
-    where rc.rdb$relation_name <> rp.rdb$relation_name
-)
-,d as(
-    select
-        0 i
-        ,child_tab
-        ,child_fk
-        ,parent_uk
-        ,parent_tab
-    from c c0
-    where not exists( select * from c cx where cx.parent_tab= c0.child_tab )
-    
-    union all
-    
-    select
-        d.i+1
-        ,c.child_tab
-        ,c.child_fk
-        ,c.parent_uk
-        ,c.parent_tab
-    from d
-    join c on d.parent_tab = c.child_tab
-)
-,e as(
-    select
-        i
-        ,child_tab
-        ,child_fk
-        ,parent_uk
-        ,parent_tab
-        ,max(i)over() mi
-    from d
-)
-,f as(
-    select distinct
-        0 i
-        ,child_tab
-    from e where i=0
-
-    UNION DISTINCT
-
-    select
-        1
-        ,child_tab
-    from (select child_tab from e where i>0 order by i)
-
-    UNION DISTINCT
-
-    select
-        2
-        ,parent_tab
-    from e where i=mi
-)
-,t as(
-    select
-        rt.rdb$trigger_name trg_name -- f.child_tab, rt.rdb$trigger_name, rt.rdb$trigger_type
-    from f
-    join rdb$triggers rt on f.child_tab = rt.rdb$relation_name
-    where rt.rdb$system_flag=0 and rt.rdb$trigger_inactive=0
-)
-select 'alter trigger '||trim(trg_name)||' inactive' sql_expr
-from t
-union all
-select 'delete from '||trim(child_tab)
-from f
-union all
-select 'alter trigger '||trim(trg_name)||' active'
-from t
-;
-
------------------
-create or alter view z_idx_stat as
-select ri.rdb$relation_name tab_name, ri.rdb$index_name idx_name, nullif(ri.rdb$statistics,0) idx_stat
-from rdb$indices ri
-where ri.rdb$relation_name not starting with 'RDB$' --and ri.rdb$statistics > 0
-order by 3 desc nulls first,1,2
-;
-
---------------------------------------------------------------------------------
-
-create or alter view zv_doc_detailed as
--- Debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
-select
-    h.id doc_id,
-    h.optype_id,
-    o.mcode oper,
-    h.base_doc_id,
-    d.id doc_data_id,
-    d.ware_id,
-    d.qty,
-    coalesce(d.cost_purchase, h.cost_purchase) cost_purchase, -- cost in purchase price
-    coalesce(d.cost_retail, h.cost_retail) cost_retail, -- cost in retail price
-    h.state_id,
-    h.agent_id,
-    d.dts_edit,
-    h.dts_open,
-    h.dts_fix,
-    h.dts_clos,
-    s.mcode state,
-    h.att
-from zdoc_list h
-    join optypes o on h.optype_id = o.id
-    join doc_states s on h.state_id=s.id
-    left join zdoc_data d on h.id = d.doc_id
-    -- ::: NB ::: do NOT remove "left" from here otherwise performance will degrade
-    -- (FB will not push predicate inside view; 22.04.2014)
-    --LEFT join v_saldo_invnt n on d.ware_id=n.ware_id
-;
---------------------------------------------------------------------------------
-create or alter view zv_saldo_invnt as
--- 21.04.2014
--- ::: NB ::: this view can return NEGATIVE remainders in qty_xxx
--- if parallel attaches call of sp_make_invnt_saldo
--- (because of deleting rows in invnt_turnover_log in this SP)
--- !!! look at table INVNT_SALDO for actual remainders !!!
-select
-    ng.ware_id
-    ,sum(o.m_qty_clo * ng.qty_diff) qty_clo
-    ,sum(o.m_qty_clr * ng.qty_diff) qty_clr
-    ,sum(o.m_qty_ord * ng.qty_diff) qty_ord
-    ,sum(o.m_qty_sup * ng.qty_diff) qty_sup
-    ,sum(o.m_qty_avl * ng.qty_diff) qty_avl
-    ,sum(o.m_qty_res * ng.qty_diff) qty_res
-    ,sum(o.m_cost_inc * ng.qty_diff) qty_inc
-    ,sum(o.m_cost_out * ng.qty_diff) qty_out
-    ,sum(o.m_cost_inc * ng.cost_diff) cost_inc
-    ,sum(o.m_cost_out * ng.cost_diff) cost_out
-    -- amount "on hand" as it seen by accounter:
-    ,sum(o.m_qty_avl * ng.qty_diff) + sum(o.m_qty_res * ng.qty_diff) qty_acn
-    -- total cost "on hand" in purchasing prices:
-    ,sum(o.m_cost_inc * ng.cost_diff) - sum(o.m_cost_out * ng.cost_diff) cost_acn
-from zinvnt_turnover_log ng
-join optypes o on ng.optype_id=o.id
-group by 1
-;
---------------------------------------------------------------------------------
-
-create or alter view z_mism_dd_qd_qs_orphans as
--- 4 debug: search only those rows in doc_data for which absent any rows in
--- qdistr and qstorned ('lite' diagnostics):
-select d.doc_id,h.optype_id,d.id,d.ware_id,d.qty
-from doc_data d
-join doc_list h on d.doc_id = h.id
-left join qdistr q on d.id=q.snd_id
-left join qstorned s on d.id in(s.snd_id, s.rcv_id)
-where h.optype_id<>1100 and q.id is null and s.id is null
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_mism_dd_qd_qs_sums as
--- 4 debug: search for mismatches be`tween doc_data.qty and number of
--- records in qdistr or qstorned
-select d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum,coalesce(sum(qs.snd_qty),0) qs_sum
-from(
-    select d.doc_id, d.id, d.optype_id, d.qty,coalesce(sum(qd.snd_qty),0) qd_sum
-    from (
-        select d.doc_id, d.id, iif(h.optype_id=3400, 3300, h.optype_id) as optype_id, d.qty
-        from doc_data d
-        join doc_list h on d.doc_id = h.id
-    ) d
-    inner join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
-    left join qdistr qd on
-        d.id=qd.snd_id
-        and p.snd_optype_id=qd.snd_optype_id
-        and p.rcv_optype_id is not distinct from qd.rcv_optype_id
-    where d.optype_id<>1100 -- client refused from order
-    group by d.doc_id, d.id, d.optype_id, d.qty
-) d
-join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
-left join qstorned qs on
-    d.id=qs.snd_id
-    and p.snd_optype_id=qs.snd_optype_id
-    and p.rcv_optype_id is not distinct from  qs.rcv_optype_id
-group by d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum
-having d.qty <> d.qd_sum + coalesce(sum(qs.snd_qty),0)
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_mism_zdd_zqdzqs as
--- 4 debug: search for mismatches b`etween doc_data.qty and number of
--- records in qdistr or qstorned
-select d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum,coalesce(sum(qs.snd_qty),0) qs_sum
-from(
-    select d.doc_id, d.id, d.optype_id, d.qty,coalesce(sum(qd.snd_qty),0) qd_sum
-    from (
-        select d.doc_id, d.id, iif(h.optype_id=3400, 3300, h.optype_id) as optype_id, d.qty
-        from zdoc_data d
-        join zdoc_list h on d.doc_id = h.id
-    ) d
-    inner join rules_for_qdistr p on d.optype_id=p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1
-    left join zqdistr qd on
-        d.id=qd.snd_id
-        and p.snd_optype_id=qd.snd_optype_id
-        and p.rcv_optype_id is not distinct from qd.rcv_optype_id
-    where d.optype_id<>1100 -- client refused from order
-    group by d.doc_id, d.id, d.optype_id, d.qty
-) d
-inner join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1
-left join zqstorned qs on
-    d.id=qs.snd_id
-    and p.snd_optype_id=qs.snd_optype_id
-    and p.rcv_optype_id is not distinct from  qs.rcv_optype_id
-group by d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum
-having d.qty <> d.qd_sum + coalesce(sum(qs.snd_qty),0)
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_qdqs as
--- Debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
-select
-    cast(q.src as varchar(8)) as src,
-    q.id,
-    q.ware_id,
-    q.snd_optype_id,
-    so.mcode as snd_op,
-    q.doc_id as snd_doc_id,
-    sh.agent_id as snd_agent,
-    q.snd_id,
-    q.snd_qty,
-    q.snd_purchase,
-    q.snd_retail,
-    q.rcv_optype_id,
-    ro.mcode as rcv_op,
-    d.doc_id as rcv_doc_id,
-    rh.agent_id as rcv_agent,
-    q.rcv_id,
-    q.rcv_qty,
-    q.rcv_purchase,
-    q.rcv_retail,
-    q.trn_id,
-    q.dts
-from (
-  select 'qdistr' src,q.*
-  from qdistr q
-  union all
-  select 'qstorned', s.*
-  from qstorned s
-) q
-left join doc_data d on q.rcv_id = d.id
-left join optypes so on q.snd_optype_id = so.id
-left join doc_list sh on q.doc_id=sh.id
-left join optypes ro on q.rcv_optype_id = ro.id
-left join doc_list rh on d.doc_id=rh.id
-order by q.src, q.doc_id, q.id
-;
-
--------------------------------
-
-create or alter view z_zqdzqs as
--- Debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
-select
-    q.src,
-    q.id,
-    q.ware_id,
-    q.snd_optype_id,
-    left(so.mcode,3) snd_op,
-    q.doc_id as snd_doc_id,
-    q.snd_id,
-    q.snd_qty,
-    q.rcv_optype_id,
-    left(ro.mcode,3) rcv_op,
-    d.doc_id as rcv_doc_id,
-    q.rcv_id,
-    q.rcv_qty,
-    q.trn_id,
-    q.dts,
-    q.dump_att,
-    q.dump_trn
-from (
-  select 'zqdistr' src,q.*
-  from zqdistr q
-  union all
-  select 'zqstorned', s.*
-  from zqstorned s
-) q
-left join zdoc_data d on q.rcv_id = d.id
-left join optypes so on q.snd_optype_id = so.id
-left join optypes ro on q.rcv_optype_id = ro.id
-order by q.src, q.doc_id, q.id
-;
-
-------------------------------
-
-create or alter view z_pdps as
--- Debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
-select
-    cast(p.src as varchar(8)) as src,
-    p.id,
-    p.agent_id,
-    p.snd_optype_id,
-    so.mcode as snd_op,
-    p.snd_id,
-    p.snd_cost,
-    p.rcv_optype_id,
-    ro.mcode as rcv_op,
-    p.rcv_id,
-    p.rcv_cost,
-    p.trn_id
-from (
-    select 'pdistr' src,p.id,p.agent_id,p.snd_optype_id,p.snd_id,p.snd_cost,p.rcv_optype_id, cast(null as bigint) as rcv_id, cast(null as numeric(12,2)) as rcv_cost, p.trn_id
-    from pdistr p
-    union all
-    select 'pstorned', s.id, s.agent_id, s.snd_optype_id, s.snd_id, s.snd_cost, s.rcv_optype_id, s.rcv_id, s.rcv_cost, s.trn_id
-    from pstorned s
-) p
-left join optypes so on p.snd_optype_id = so.id
-left join optypes ro on p.rcv_optype_id = ro.id
-order by p.src, p.id -- p.agent_id, p.rcv_id, p.id
-;
-------------------------------
-
-create or alter view z_zpdzps as
--- Debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
-select
-    p.src,
-    p.id,
-    p.agent_id,
-    p.snd_optype_id,
-    left(so.mcode,3) snd_op,
-    p.snd_id,
-    p.snd_cost,
-    p.rcv_optype_id,
-    left(ro.mcode,3) rcv_op,
-    p.rcv_id,
-    p.rcv_cost,
-    p.trn_id,
-    p.dump_att,
-    p.dump_trn
-from (
-    select 'zpdistr' src,p.id,p.agent_id,p.snd_optype_id,p.snd_id,p.snd_cost,p.rcv_optype_id,
-          cast(null as bigint) as rcv_id, cast(null as numeric(12,2)) as rcv_cost,
-          p.trn_id, p.dump_att, p.dump_trn
-    from zpdistr p
-    union all
-    select 'zpstorned', s.id, s.agent_id, s.snd_optype_id, s.snd_id, s.snd_cost, s.rcv_optype_id,
-          s.rcv_id, s.rcv_cost,
-          s.trn_id, s.dump_att, s.dump_trn
-    from zpstorned s
-) p
-left join optypes so on p.snd_optype_id = so.id
-left join optypes ro on p.rcv_optype_id = ro.id
-order by p.src, p.agent_id, p.rcv_id, p.id
-;
-
--------------------------------------------------
-create or alter view z_slow_get_random_id as
-select
-    substring(pg.info from 1 for coalesce(nullif(position(';',pg.info)-1,-1),31) ) mode,
-    pg.elapsed_ms,
-    min(pg.elapsed_ms) ms_min,
-    max(pg.elapsed_ms) ms_max,
-    count(*) cnt
-from perf_log pg
-where pg.unit='fn_get_random_id' and pg.elapsed_ms>=3000
-group by 1,2
-;
-
-create or alter view z_doc_data_oper_cnt as
--- 19.07.2014, for analyze results of init data population alg
-select h.optype_id,o.name op_name,count(*) doc_data_cnt
-from doc_list h
-join optypes o on h.optype_id=o.id
-join doc_data d on h.id=d.doc_id
-group by 1,2
-;
-
-create or alter view z_doc_list_oper_cnt as
--- 19.07.2014, for analyze results of init data population alg
-select h.optype_id,o.name op_name, count(*) doc_list_cnt
-from doc_list h
-join optypes o on h.optype_id=o.id
-group by 1,2
-;
-
--- 29.07.2014: STUB, need for debug view z_invoices_to_be_adopted, will be redefined in oltp30_sp.sql:
-set term ^;
-create or alter procedure sp_get_clo_for_invoice( a_selected_doc_id dm_ids )
-returns (
-    clo_doc_id type of dm_ids,
-    clo_agent_id type of dm_ids
-)
-as begin
-  suspend;
-end
-^
-set term ;^
-
-create or alter view z_invoices_to_be_adopted as
---  4 debug (performance of sp_add_invoice_to_stock)
-select
-     invoice_id, total_rows, total_qty
-    ,min(p.clo_agent_id) agent_min_id
-    ,max(p.clo_agent_id) agent_max_id
-    ,count(distinct p.clo_agent_id) agent_diff_cnt
-from (
-    select h.id invoice_id, count(*) total_rows, sum(qty) total_qty
-    from doc_list h
-    join doc_data d on h.id=d.doc_id
-    --where h.optype_id=(select result from fn_oper_invoice_get)
-    where h.optype_id=fn_oper_invoice_get()
-    group by 1
-) x
-left join sp_get_clo_for_invoice(x.invoice_id) p on 1=1
-group by invoice_id, total_rows, total_qty
-order by total_rows desc, total_qty desc
-;
-
-create or alter view z_invoices_to_be_cancelled as
---  4 debug (performance of s`p_cancel_adding_invoice)
-select h.id invoice_id, count(*) total_rows, sum(qty) total_qty
-from doc_list h
-join doc_data d on h.id=d.doc_id
-where h.optype_id=fn_oper_invoice_add()
-group by 1
-order by 2 desc
-;
-
-create or alter view z_ord_inc_res_dependencies as
--- 17.07.2014: get all dependencies (links) b`etween
--- supplier orders (take first 5), invoices and customer reserves
-with
-s as(
-    select v.ord_id, count(*) ord_rows, sum(d0.qty) ord_qty_sum --, p1.dependend_doc_id as invoice_id, p2.dependend_doc_id as reserve_id
-    from ( select first 5 v.id as ord_id from v_cancel_supplier_order v ) v
-    join doc_data d0 on v.ord_id = d0.doc_id
-    group by v.ord_id
-)
-,i as(
-    select
-         s.ord_id
-        ,s.ord_rows
-        ,s.ord_qty_sum
-        ,p1.dependend_doc_id as inv_id
-        ,count(*) inv_rows
-        ,sum(di.qty) inv_qty_sum
-    from s
-    left join z_get_dependend_docs(s.ord_id, fn_oper_order_for_supplier()) p1 on 1=1
-    left join doc_data di on p1.dependend_doc_id = di.doc_id
-    group by
-         s.ord_id
-        ,s.ord_rows
-        ,s.ord_qty_sum
-        ,p1.dependend_doc_id
-)
-select
-    i.ord_id
-    ,i.ord_rows
-    ,i.ord_qty_sum
-    ,i.inv_id
-    ,i.inv_rows
-    ,i.inv_qty_sum
-    ,p2.dependend_doc_id as res_id
-    ,count(*) res_rows
-    ,sum(dr.qty) res_qty_sum
-from i
-left join z_get_dependend_docs( i.inv_id, fn_oper_invoice_add()) p2 on 1=1
-left join doc_data dr on p2.dependend_doc_id = dr.doc_id
-group by
-    i.ord_id
-    ,i.ord_rows
-    ,i.ord_qty_sum
-    ,i.inv_id
-    ,i.inv_rows
-    ,i.inv_qty_sum
-    ,p2.dependend_doc_id
-;
-
 ------------------------------------------------------------------------------
 
-create or alter view z_mon_stat_per_units
-as
+create or alter view z_mon_stat_per_units as
 -- 29.08.2014: data from measuring statistics per each unit
 -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
 -- 25.01.2015: added rec_locks, rec_confl.
+-- 06.02.2015: reorder columns, made all `max` values most-right
 select
      m.unit
     ,count(*) iter_counts
@@ -6445,13 +5506,6 @@ select
     ,avg(m.frg_reads) avg_frg
     ,avg(m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
     ,avg(m.frg_per_seq_idx_rpt) avg_frg_per_rec
-    ,max(m.rec_seq_reads) max_seq
-    ,max(m.rec_idx_reads) max_idx
-    ,max(m.rec_rpt_reads) max_rpt
-    ,max(m.bkv_reads) max_bkv
-    ,max(m.frg_reads) max_frg
-    ,max(m.bkv_per_seq_idx_rpt) max_bkv_per_rec
-    ,max(m.frg_per_seq_idx_rpt) max_frg_per_rec
     ---------- modifications ----------
     ,avg(m.rec_inserts) avg_ins
     ,avg(m.rec_updates) avg_upd
@@ -6459,28 +5513,36 @@ select
     ,avg(m.rec_backouts) avg_bko
     ,avg(m.rec_purges) avg_pur
     ,avg(m.rec_expunges) avg_exp
+    --------------- io -----------------
+    ,avg(m.pg_fetches) avg_fetches
+    ,avg(m.pg_marks) avg_marks
+    ,avg(m.pg_reads) avg_reads
+    ,avg(m.pg_writes) avg_writes
+    ----------- locks and conflicts ----------
+    ,avg(m.rec_locks) avg_locks
+    ,avg(m.rec_confl) avg_confl
+    ,datediff( minute from min(m.dts) to max(m.dts) ) workload_minutes
+    --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
+    ,max(m.rec_seq_reads) max_seq
+    ,max(m.rec_idx_reads) max_idx
+    ,max(m.rec_rpt_reads) max_rpt
+    ,max(m.bkv_reads) max_bkv
+    ,max(m.frg_reads) max_frg
+    ,max(m.bkv_per_seq_idx_rpt) max_bkv_per_rec
+    ,max(m.frg_per_seq_idx_rpt) max_frg_per_rec
     ,max(m.rec_inserts) max_ins
     ,max(m.rec_updates) max_upd
     ,max(m.rec_deletes) max_del
     ,max(m.rec_backouts) max_bko
     ,max(m.rec_purges) max_pur
     ,max(m.rec_expunges) max_exp
-    --------------- io -----------------
-    ,avg(m.pg_fetches) avg_fetches
-    ,avg(m.pg_marks) avg_marks
-    ,avg(m.pg_reads) avg_reads
-    ,avg(m.pg_writes) avg_writes
     ,max(m.pg_fetches) max_fetches
     ,max(m.pg_marks) max_marks
     ,max(m.pg_reads) max_reads
     ,max(m.pg_writes) max_writes
-    ----------- locks and conflicts ----------
-    ,avg(m.rec_locks) avg_locks
-    ,avg(m.rec_confl) avg_confl
     ,max(m.rec_locks) max_locks
     ,max(m.rec_confl) max_confl
-    ,datediff( minute from min(m.dts) to max(m.dts) ) workload_minutes
-from mon_log m 
+from mon_log m
 group by unit
 ;
 ------------------------------------------------------------------------------
@@ -6492,6 +5554,7 @@ as
 -- 25.01.2015: added rec_locks, rec_confl;
 -- ::: do NOT add `bkv_per_seq_idx_rpt` and `frg_per_seq_idx_rpt` into WHERE
 -- clause with check sum > 0, because they can be NULL, see DDL!
+-- 06.02.2015: reorder columns, made all `max` values most-right
 select
      t.table_name
     ,t.unit
@@ -6504,13 +5567,6 @@ select
     ,avg(t.frg_reads) avg_frg
     ,avg(t.bkv_per_seq_idx_rpt) avg_bkv_per_rec
     ,avg(t.frg_per_seq_idx_rpt) avg_frg_per_rec
-    ,max(t.rec_seq_reads) max_seq
-    ,max(t.rec_idx_reads) max_idx
-    ,max(t.rec_rpt_reads) max_rpt
-    ,max(t.bkv_reads) max_bkv
-    ,max(t.frg_reads) max_frg
-    ,max(t.bkv_per_seq_idx_rpt) max_bkv_per_rec
-    ,max(t.frg_per_seq_idx_rpt) max_frg_per_rec
     ---------- modifications ----------
     ,avg(t.rec_inserts) avg_ins
     ,avg(t.rec_updates) avg_upd
@@ -6518,18 +5574,26 @@ select
     ,avg(t.rec_backouts) avg_bko
     ,avg(t.rec_purges) avg_pur
     ,avg(t.rec_expunges) avg_exp
+    ----------- locks and conflicts ----------
+    ,avg(t.rec_locks) avg_locks
+    ,avg(t.rec_confl) avg_confl
+    ,datediff( minute from min(t.dts) to max(t.dts) ) elapsed_minutes
+    --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
+    ,max(t.rec_seq_reads) max_seq
+    ,max(t.rec_idx_reads) max_idx
+    ,max(t.rec_rpt_reads) max_rpt
+    ,max(t.bkv_reads) max_bkv
+    ,max(t.frg_reads) max_frg
+    ,max(t.bkv_per_seq_idx_rpt) max_bkv_per_rec
+    ,max(t.frg_per_seq_idx_rpt) max_frg_per_rec
     ,max(t.rec_inserts) max_ins
     ,max(t.rec_updates) max_upd
     ,max(t.rec_deletes) max_del
     ,max(t.rec_backouts) max_bko
     ,max(t.rec_purges) max_pur
     ,max(t.rec_expunges) max_exp
-    ----------- locks and conflicts ----------
-    ,avg(t.rec_locks) avg_locks
-    ,avg(t.rec_confl) avg_confl
     ,max(t.rec_locks) max_locks
     ,max(t.rec_confl) max_confl
-    ,datediff( minute from min(t.dts) to max(t.dts) ) elapsed_minutes
 from mon_log_table_stats t
 where
       t.rec_seq_reads
@@ -6555,11 +5619,42 @@ commit;
 --------------------------------------------------------------------------------
 
 set term ^;
-
+-- not needed in 3.0, see DDL of their `ID` field ('generated as identity'):
+--create or alter trigger wares_bi for wares active
+--before insert position 0
+--as
+--begin
+--   new.id = coalesce(new.id, gen_id(g_common, 1) );
+--end
+--^
+--
+--create or alter trigger phrases_bi for phrases active
+--before insert position 0
+--as
+--begin
+--   new.id = coalesce(new.id, gen_id(g_common, 1) );
+--end
+--^
+--
+--create or alter trigger agents_bi for agents active
+--before insert position 0
+--as
+--begin
+--   new.id = coalesce(new.id, gen_id(g_common, 1) );
+--end
+--^
+--
+--create or alter trigger invnt_saldo_bi for invnt_saldo active
+--before insert position 0
+--as
+--begin
+--   new.id = coalesce(new.id, gen_id(g_common, 1) );
+--end
+--^
 
 create or alter trigger money_turnover_log_bi for money_turnover_log active before insert position 0 as
 begin
-    new.id = coalesce(new.id, gen_id(g_common,1)); -- new.id is NOT null for all docs except payments
+    new.id = coalesce(new.id, gen_id(g_common, 1) ); -- new.id is NOT null for all docs except payments
 end
 
 ^ -- money_turnover_log_bi
@@ -6570,6 +5665,26 @@ begin
 end
 
 ^ -- perf_log_bi
+-- not needed in 3.0, see DDL of their `ID` field ('generated as identity'):
+--create or alter trigger pdistr_bi for pdistr
+--active before insert position 0 as
+--begin
+--    new.id = coalesce(new.id, gen_id(g_common,1));
+--end
+--
+--^ -- pdistr_bi
+--
+--create or alter trigger pstorned_bi for pstorned
+--active before insert position 0 as
+--begin
+--    new.id = coalesce(new.id, gen_id(g_common,1));
+--end
+--
+--^ -- pstorned_bi
+
+set term ;^
+commit;
+set term ^;
 
 --------------------------------------------------------------------------------
 
@@ -6697,11 +5812,10 @@ begin
     v_old_op=iif(inserting, null, old.optype_id);
     v_new_op=iif(deleting,  null, new.optype_id);
 
-    v_msg = 'doc='||v_doc_id||', '
-            ||iif(inserting,'ins',iif(updating,'upd','del'))
-            || ', oper:'
-            || iif(not inserting, ' old='||old.optype_id, '')
-            || iif(not deleting,  ' new='||new.optype_id, '');
+    v_msg = 'dh='|| iif(not inserting, old.id, new.id)
+             || ', op='||iif(inserting,'INS',iif(updating,'UPD','DEL'))
+             || iif(not inserting, ' old='||old.optype_id, '')
+             || iif(not deleting,  ' new='||new.optype_id, '');
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log( 1, v_this , null, v_msg );
@@ -7169,11 +6283,9 @@ as
     declare c_gen_inc_step_qd int = 100; -- size of `batch` for get at once new IDs for QDistr (reduce lock-contention of gen page)
     declare v_gen_inc_iter_qd int; -- increments from 1  up to c_gen_inc_step_qd and then restarts again from 1
     declare v_gen_inc_last_qd dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_qd)
-
     declare c_gen_inc_step_dd int = 20; -- size of `batch` for get at once new IDs for doc_data (reduce lock-contention of gen page)
     declare v_gen_inc_iter_dd int; -- increments from 1  up to c_gen_inc_step_dd and then restarts again from 1
     declare v_gen_inc_last_dd dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_dd)
-
     declare c_gen_inc_step_nt int = 20; -- size of `batch` for get at once new IDs for invnt_turnover_log (reduce lock-contention of gen page)
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_dd and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_dd)
@@ -7756,65 +6868,82 @@ end
 
 ^ -- sp_split_into_words
 
-create or alter procedure srv_diag_fk_uk
-returns(
-    checked_constraint type of column rdb$relation_constraints.rdb$constraint_name,
-    type_of_constraint type of column v_diag_fk_uk.type_of_constraint,
-    failed_rows int
+create or alter procedure srv_random_unit_choice(
+    a_included_modes dm_info default '',
+    a_included_kinds dm_info default '',
+    a_excluded_modes dm_info default '',
+    a_excluded_kinds dm_info default ''
 )
-as
-    declare v_checked_qry varchar(8190);
-begin
-    -- obtain text of queries for checking data in tables which have
-    -- FK and PK/UNQ constraints; counts rows from these tables where
-    -- violations of FK or PK/UNQ occur: 'orphan' FK, duplicates in PK/UNQ
-    for
-        select v.checked_constraint, v.type_of_constraint, cast(v.checked_qry as varchar(8190))
-        from v_diag_fk_uk v
-    into checked_constraint, type_of_constraint, v_checked_qry
-    do begin
-       execute statement(v_checked_qry) into failed_rows; -- this must be always 'select count(*) from ...'
-       if (failed_rows > 0) then suspend;
+returns(
+    unit dm_name,
+    sort_prior int,
+    rnd_weight int,
+    r double precision,
+    c int,
+    n int
+) as
+    declare r_max int;
+    declare v_this dm_dbobj = 'srv_random_unit_choice';
+    declare c_unit_for_mon_query dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of thios SP!
+    declare function fn_internal_enable_mon_query  returns smallint deterministic as
+    begin
+        return ( cast(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') as smallint) );
     end
+begin
+    -- refactored 18.07.2014 (for usage in init data pop)
+    -- sample: select * from srv_random_unit_choice( '','creation,state_next','','removal' )
+    -- (will return first randomly choosen record related to creation of document
+    -- or to changing its state in 'forward' way; excludes all cancellations and change
+    -- doc states in 'backward')
+    a_included_modes = coalesce( a_included_modes, '');
+    a_included_kinds = coalesce( a_included_kinds, '');
+    a_excluded_modes = coalesce( a_excluded_modes, '');
+    a_excluded_kinds = coalesce( a_excluded_kinds, '');
+
+    r_max = rdb$get_context('USER_SESSION', 'BOP_RND_MAX');
+    if ( r_max is null ) then
+    begin
+        select max( b.random_selection_weight ) from business_ops b into r_max;
+        rdb$set_context('USER_SESSION', 'BOP_RND_MAX', r_max);
+    end
+
+    r=rand()*r_max;
+    delete from tmp$perf_log p where p.stack = :v_this;
+    --select count(*) --o.unit, o.sort_prior, o.random_selection_weight
+    insert into tmp$perf_log(unit, aux1, aux2, stack)
+    select o.unit, o.sort_prior, o.random_selection_weight, :v_this
+    from business_ops o
+    where o.random_selection_weight >= :r
+        and (fn_internal_enable_mon_query() = 1 or o.unit <> :c_unit_for_mon_query)
+        and (:a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
+        and (:a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
+        and (:a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
+        and (:a_excluded_kinds = '' or :a_excluded_kinds||',' NOT containing trim(o.kind)||',' )
+    ;
+    c = row_count;
+    n = cast( 0.5+rand()*(c+0.5) as int );
+    n = minvalue(maxvalue(1, n),c);
+
+    select p.unit, p.aux1, p.aux2
+    from tmp$perf_log p
+    where p.aux2 >= :r
+    order by rand()
+    rows :n to :n -- get SINGLE row!
+    into unit, sort_prior, rnd_weight;
+
+    delete from tmp$perf_log p where p.stack = :v_this; -- 18.08.2014! cleanup this temply created data!
+
+    suspend;
+
 end
 
-^ -- srv_diag_fk_uk
+^ -- srv_random_unit_choice
 
-create or alter procedure srv_diag_idx_entries
-returns(
-    tab_name type of column rdb$relations.rdb$relation_name,
-    idx_name type of column rdb$indices.rdb$index_name,
-    nat_count bigint,
-    idx_count bigint,
-    failed_rows bigint
-)
-as
-    declare v_checked_qry varchar(8190);
-    declare v_nat_stt varchar(255);
-    declare rn bigint;
-begin
-    for
-        select row_number()over(partition by v.tab_name order by v.idx_name), v.tab_name, v.idx_name, v.checked_qry
-        from v_diag_idx_entries v
-        where v.checked_qry not containing 'DOC_NUMB' -- temply, smth wrong with coll num-sort=1 and unique index: FB uses plan natural instead of that index, see: http://www.sql.ru/forum/1093394/select-from-t1-order-by-s-ne-uzaet-uniq-indeks-esli-s-utf8-coll-numeric-sort-1
-    into rn, tab_name, idx_name, v_checked_qry
-    do begin
-        if ( rn=1 ) then begin
-          v_nat_stt = 'select count(*) from '||tab_name;
-          execute statement ( v_nat_stt ) into nat_count;
-        end
-       execute statement(v_checked_qry) into idx_count; -- this must be always 'select count(*) from ...'
-       if ( nat_count <> idx_count ) then begin
-           failed_rows = nat_count - idx_count;
-           suspend;
-       end
-    end
-end
+---------------------------------------------------------------------------
 
-^ -- srv_diag_idx_entries
-
-create or alter procedure srv_diag_pay_distr(a_doc_id dm_ids default null)
-returns(
+create or alter procedure srv_diag_pay_distr( -- ::: NB ::: 3.0 only!
+    a_doc_id dm_ids default null
+) returns(
     result varchar(3), -- 'ok.' | 'err'
     ptab varchar(8),
     ptab_id int,
@@ -7898,661 +7027,7 @@ end
 
 ^ -- srv_diag_pay_distr
 
-create or alter procedure srv_diag_qty_distr
-returns(
-    doc_id dm_ids,
-    optype_id dm_ids,
-    rcv_optype_id dm_ids,
-    doc_data_id dm_ids,
-    qty dm_qty,
-    qdqs_sum dm_qty,
-    qdistr_q dm_qty,
-    qstorned_q dm_qty
-) as
-begin
-    -- Looks for mismatches b`etween records count in qdistr + qstorned and doc_data
-    -- Must be run ONLY in TIL = SNAPSHOT!
-    -- ###################################
-
-    for
-        select
-            b.doc_id,
-            b.optype_id,
-            b.rcv_optype_id,
-            b.id,
-            b.qty,
-            b.qdistr_q + coalesce(sum(qs.snd_qty),0) qdqs_sum,
-            b.qdistr_q,
-            coalesce(sum(qs.snd_qty),0) qstorned_q
-        from (
-            select d.doc_id, h.optype_id, r.rcv_optype_id, d.id, d.qty --
-            ,coalesce(sum(qd.snd_qty),0) qdistr_q
-            from doc_data d
-            join doc_list h on d.doc_id = h.id
-            join rules_for_qdistr r on h.optype_id + 0 = r.snd_optype_id + 0 -- only in 3.0: use hash join
-            left join qdistr qd on d.id = qd.snd_id and r.snd_optype_id=qd.snd_optype_id and r.rcv_optype_id=qd.rcv_optype_id
-            group by d.doc_id, h.optype_id, r.rcv_optype_id, d.id, d.qty
-        ) b
-        left join qstorned qs on b.id = qs.snd_id and b.optype_id=qs.snd_optype_id and b.rcv_optype_id=qs.rcv_optype_id
-        group by
-            b.doc_id,
-            b.optype_id,
-            b.rcv_optype_id,
-            b.id,
-            b.qty,
-            b.qdistr_q
-        having b.qty < b.qdistr_q + coalesce(sum(qs.snd_qty),0)
-        into
-            doc_id,
-            optype_id,
-            rcv_optype_id,
-            doc_data_id,
-            qty,
-            qdqs_sum,
-            qdistr_q,
-            qstorned_q
-    do suspend;
-end
-
-^ -- srv_diag_qty_distr
-
-create or alter procedure srv_random_unit_choice(
-    a_included_modes dm_info default '',
-    a_included_kinds dm_info default '',
-    a_excluded_modes dm_info default '',
-    a_excluded_kinds dm_info default ''
-)
-returns(
-    unit dm_name,
-    sort_prior int,
-    rnd_weight int,
-    r double precision,
-    c int,
-    n int
-) as
-    declare r_max int;
-    declare v_this dm_dbobj = 'srv_random_unit_choice';
-    declare c_unit_for_mon_query dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of thios SP!
-    declare function fn_internal_enable_mon_query  returns smallint deterministic as
-    begin
-        return ( cast(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') as smallint) );
-    end
-begin
-    -- refactored 18.07.2014 (for usage in init data pop)
-    -- sample: select * from srv_random_unit_choice( '','creation,state_next','','removal' )
-    -- (will return first randomly choosen record related to creation of document
-    -- or to changing its state in 'forward' way; excludes all cancellations and change
-    -- doc states in 'backward')
-    a_included_modes = coalesce( a_included_modes, '');
-    a_included_kinds = coalesce( a_included_kinds, '');
-    a_excluded_modes = coalesce( a_excluded_modes, '');
-    a_excluded_kinds = coalesce( a_excluded_kinds, '');
-
-    r_max = rdb$get_context('USER_SESSION', 'BOP_RND_MAX');
-    if ( r_max is null ) then
-    begin
-        select max( b.random_selection_weight ) from business_ops b into r_max;
-        rdb$set_context('USER_SESSION', 'BOP_RND_MAX', r_max);
-    end
-
-    r=rand()*r_max;
-    delete from tmp$perf_log p where p.stack = :v_this;
-    --select count(*) --o.unit, o.sort_prior, o.random_selection_weight
-    insert into tmp$perf_log(unit, aux1, aux2, stack)
-    select o.unit, o.sort_prior, o.random_selection_weight, :v_this
-    from business_ops o
-    where o.random_selection_weight >= :r
-        and (fn_internal_enable_mon_query() = 1 or o.unit <> :c_unit_for_mon_query)
-        and (:a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
-        and (:a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
-        and (:a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
-        and (:a_excluded_kinds = '' or :a_excluded_kinds||',' NOT containing trim(o.kind)||',' )
-    ;
-    c = row_count;
-    n = cast( 0.5+rand()*(c+0.5) as int );
-    n = minvalue(maxvalue(1, n),c);
-
-    select p.unit, p.aux1, p.aux2
-    from tmp$perf_log p
-    where p.aux2 >= :r
-    order by rand()
-    rows :n to :n -- get SINGLE row!
-    into unit, sort_prior, rnd_weight;
-
-    delete from tmp$perf_log p where p.stack = :v_this; -- 18.08.2014! cleanup this temply created data!
-
-    suspend;
-
-end
-
-^ -- srv_random_unit_choice
-
---------------------------------------------------------------------------------
--- #############    D E B U G:     D U M P    D I R T Y     D A T A  ###########
---------------------------------------------------------------------------------
-create or alter procedure zdump4dbg(
-       a_doc_list_id bigint default null,
-       a_doc_data_id bigint default null,
-       a_ware_id bigint default null
-)
-as
-    declare v_catch_bitset bigint;
-    declare v_curr_att int;
-    declare v_curr_trn int;
-    declare v_max_id bigint;
-    declare i int;
-    declare v_step int = 1000;
-    declare v_perf_semaphore_id dm_ids;
-    declare v_perf_progress_id dm_ids;
-    declare v_this dm_dbobj = 'zdump4dbg';
-begin
-    -- See oltp_main_filling.sql for definition of bitset var `C_CATCH_MISM_BITSET`:
-    -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in doc_list_aiud => sp_add_invnt_log
-    --                in order to register mismatches b`etween doc_data.qty and total number of rows
-    --                in qdistr + qstorned for doc_data.id
-    -- bit#1 := 1 ==> perform calls of SRV_CATCH_NEG_REMAINDERS from INVNT_TURNOVER_LOG_AI
-    --                (instead of totalling turnovers to `invnt_saldo` table)
-    -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
-    --                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
-    if ( bin_and( v_catch_bitset, 4 ) = 0 ) -- dump dirty data DISABLED
-    then
-        --####
-          exit;
-        --####
-
-    v_curr_att = current_connection;
-    v_curr_trn = current_transaction;
-    v_perf_semaphore_id = null;
-
-    -- record with EMPTY is added by 1run_oltp_emul.bat on every new start of test,
-    -- it always contains EMPTY string in field `info` at this moment:
-    select id from perf_log g
-    where g.unit = 'dump_dirty_data_semaphore'
-    order by id
-    rows 1
-    into v_perf_semaphore_id;
-    if ( v_perf_semaphore_id is null ) then
-    begin
-        exit;
-    end
-
-    in autonomous transaction do
-        update perf_log g set
-            g.info = 'start, tra_'||:v_curr_trn,
-            dts_beg = 'now',
-            dts_end = null
-        where g.id = :v_perf_semaphore_id
-              and g.dts_beg is null;
-
-    -- jump to when-section if lock_conflict, see below --
-    if ( row_count = 0 ) then -- ==> this job was already done by another attach
-    begin
-        exit;
-    end
-
-    -- record for show progress in case of watching from IBE etc:
-    in autonomous transaction do
-        insert into perf_log(unit, dts_beg) values( 'dump_dirty_data_progress', current_timestamp )
-        returning id into v_perf_progress_id;
-
-    -- dumps dirty data into tables for further analysis before halt (4debug only)
-    ----------------------------------------------------------------------------
-    for
-        select c.id,c.snd_id, c.snd_optype_id,c.rcv_optype_id,c.qty,c.dup_cnt,c.qty_bak
-        from tmp$shopping_cart c
-        as cursor ct
-    do
-        in autonomous transaction do
-        insert into ztmp_shopping_cart(id, snd_id, snd_optype_id, rcv_optype_id, qty, dup_cnt, qty_bak, dump_att, dump_trn)
-        values(ct.id, ct.snd_id, ct.snd_optype_id, ct.rcv_optype_id, ct.qty, ct.dup_cnt, ct.qty_bak, :v_curr_att, :v_curr_trn)
-    ;
-    ----------------------------------------------------------------------------
-    for
-        select
-            base_doc_id,dependend_doc_id,dependend_doc_state,dependend_doc_dbkey
-            ,dependend_doc_agent_id,ware_id,base_doc_qty,dependend_doc_qty
-        from tmp$dep_docs
-        as cursor ct
-    do
-        in autonomous transaction do
-        insert into ztmp_dep_docs(
-            base_doc_id,dependend_doc_id,dependend_doc_state,dependend_doc_dbkey
-            ,dependend_doc_agent_id,ware_id,base_doc_qty,dependend_doc_qty
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            ct.base_doc_id, ct.dependend_doc_id, ct.dependend_doc_state, ct.dependend_doc_dbkey
-            ,ct.dependend_doc_agent_id, ct.ware_id, ct.base_doc_qty, ct.dependend_doc_qty
-            ,:v_curr_att
-            ,:v_curr_trn
-        )
-     ;
-
-    ----------------------------------------------------------------------------
-    --   dump dirty data from   ### d o c _ l i s t ###
-    select 0, max(id) from doc_list into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,optype_id
-            ,agent_id
-            ,state_id
-            ,dts_open
-            ,dts_fix
-            ,dts_clos
-            ,base_doc_id
-            ,acn_type
-            ,cost_purchase
-            ,cost_retail
-        from doc_list h
-        where h.id = :a_doc_list_id or :a_doc_list_id is null
-        order by h.id
-        as cursor ch
-    do
-    begin
-        in autonomous transaction do
-        insert into zdoc_list(
-            id
-            ,optype_id
-            ,agent_id
-            ,state_id
-            ,dts_open
-            ,dts_fix
-            ,dts_clos
-            ,base_doc_id
-            ,acn_type
-            ,cost_purchase
-            ,cost_retail
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            ch.id
-            ,ch.optype_id
-            ,ch.agent_id
-            ,ch.state_id
-            ,ch.dts_open
-            ,ch.dts_fix
-            ,ch.dts_clos
-            ,ch.base_doc_id
-            ,ch.acn_type
-            ,ch.cost_purchase
-            ,ch.cost_retail
-            ,:v_curr_att
-            ,:v_curr_trn
-        );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'doc_list: id='||ch.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-    ----------------------------------------------------------------------------
-    --   dump dirty data from   ### d o c _ d a t a ###
-    select 0, max(id) from doc_data into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,doc_id
-            ,ware_id
-            ,qty
-            ,cost_purchase
-            ,cost_retail
-            ,dts_edit
-        from doc_data d
-        where (d.id = :a_doc_data_id or :a_doc_data_id is null) -- OR'ed optimization, 3.0 only
-              and
-              (d.ware_id = :a_ware_id or :a_ware_id is null)
-        as cursor cd
-    do
-    begin
-        in autonomous transaction do
-        insert into zdoc_data(
-            id
-            ,doc_id
-            ,ware_id
-            ,qty
-            ,cost_purchase
-            ,cost_retail
-            ,dts_edit
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cd.id
-            ,cd.doc_id
-            ,cd.ware_id
-            ,cd.qty
-            ,cd.cost_purchase
-            ,cd.cost_retail
-            ,cd.dts_edit
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'doc_data: id='||cd.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-    ----------------------------------------------------------------------------
-    -- 27.06.2014 dump dirty data from  ### i n v n t _ t u r n _ l o g  ###
-    select 0, max(id) from invnt_turnover_log into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            ware_id
-            ,qty_diff
-            ,cost_diff
-            ,doc_list_id
-            ,doc_pref
-            ,doc_data_id
-            ,optype_id
-            ,id
-            ,dts_edit
-            ,att_id
-            ,trn_id
-        from invnt_turnover_log d
-        where (d.ware_id = :a_ware_id or :a_ware_id is null) -- OR'ed optimization, 3.0 only
-        as cursor cn
-    do
-    begin
-        in autonomous transaction do
-        insert into zinvnt_turnover_log(
-            ware_id
-            ,qty_diff
-            ,cost_diff
-            ,doc_list_id
-            ,doc_pref
-            ,doc_data_id
-            ,optype_id
-            ,id
-            ,dts_edit
-            ,att_id
-            ,trn_id
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cn.ware_id
-            ,cn.qty_diff
-            ,cn.cost_diff
-            ,cn.doc_list_id
-            ,cn.doc_pref
-            ,cn.doc_data_id
-            ,cn.optype_id
-            ,cn.id
-            ,cn.dts_edit
-            ,cn.att_id
-            ,cn.trn_id
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'invnt_turnover_log: id='||cn.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-    ----------------------------------------------------------------------------
-    -- 27.06.2014 dump dirty data from  ### q d i s t r  ###
-    select 0, max(id) from qdistr into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,doc_id
-            ,ware_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_qty
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_qty
-            ,snd_purchase
-            ,snd_retail
-            ,rcv_purchase
-            ,rcv_retail
-            ,trn_id
-            ,dts
-        from qdistr d
-        where (d.ware_id = :a_ware_id or :a_ware_id is null) -- OR'ed optimization, 3.0 only
-        as cursor cq
-    do
-    begin
-        in autonomous transaction do
-        insert into zqdistr(
-            id
-            ,doc_id
-            ,ware_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_qty
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_qty
-            ,snd_purchase
-            ,snd_retail
-            ,rcv_purchase
-            ,rcv_retail
-            ,trn_id
-            ,dts
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cq.id
-            ,cq.doc_id
-            ,cq.ware_id
-            ,cq.snd_optype_id
-            ,cq.snd_id
-            ,cq.snd_qty
-            ,cq.rcv_optype_id
-            ,cq.rcv_id
-            ,cq.rcv_qty
-            ,cq.snd_purchase
-            ,cq.snd_retail
-            ,cq.rcv_purchase
-            ,cq.rcv_retail
-            ,cq.trn_id
-            ,cq.dts
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'qdistr: id='||cq.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-
-    ----------------------------------------------------------------------------
-    -- 27.06.2014 dump dirty data from  ### q s t o r n e d  ###
-    select 0, max(id) from qstorned into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,doc_id
-            ,ware_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_qty
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_qty
-            ,snd_purchase
-            ,snd_retail
-            ,rcv_purchase
-            ,rcv_retail
-            ,trn_id
-            ,dts
-        from qstorned d
-        where (d.ware_id = :a_ware_id or :a_ware_id is null) -- OR'ed optimization, 3.0 only
-        as cursor cq
-    do
-    begin
-        in autonomous transaction do
-        insert into zqstorned(
-            id
-            ,doc_id
-            ,ware_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_qty
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_qty
-            ,snd_purchase
-            ,snd_retail
-            ,rcv_purchase
-            ,rcv_retail
-            ,trn_id
-            ,dts
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cq.id
-            ,cq.doc_id
-            ,cq.ware_id
-            ,cq.snd_optype_id
-            ,cq.snd_id
-            ,cq.snd_qty
-            ,cq.rcv_optype_id
-            ,cq.rcv_id
-            ,cq.rcv_qty
-            ,cq.snd_purchase
-            ,cq.snd_retail
-            ,cq.rcv_purchase
-            ,cq.rcv_retail
-            ,cq.trn_id
-            ,cq.dts
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'qstorned: id='||cq.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-    ---------------------------------------------------------------------------
-    -- 04.07.2014 dump dirty data from  ### p d i s t r,    p s t o r n e d  ###
-    select 0, max(id) from pdistr into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,agent_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_cost
-            ,rcv_optype_id
-            ,trn_id
-        from pdistr
-        as cursor cq
-    do
-    begin
-        in autonomous transaction do
-        insert into zpdistr(
-            id
-            ,agent_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_cost
-            ,rcv_optype_id
-            ,trn_id
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cq.id
-            ,cq.agent_id
-            ,cq.snd_optype_id
-            ,cq.snd_id
-            ,cq.snd_cost
-            ,cq.rcv_optype_id
-            ,cq.trn_id
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'pdistr: id='||cq.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-    end
-
-    ----------------------------------------------------------------------------
-    select 0, max(id) from pstorned into i,v_max_id; -- for verbosing in perf_log.stack
-    for
-        select
-            id
-            ,agent_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_cost
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_cost
-            ,trn_id
-        from pstorned
-        as cursor cq
-    do
-    begin
-        in autonomous transaction do
-        insert into zpstorned(
-            id
-            ,agent_id
-            ,snd_optype_id
-            ,snd_id
-            ,snd_cost
-            ,rcv_optype_id
-            ,rcv_id
-            ,rcv_cost
-            ,trn_id
-            ,dump_att
-            ,dump_trn
-        )
-        values(
-            cq.id
-            ,cq.agent_id
-            ,cq.snd_optype_id
-            ,cq.snd_id
-            ,cq.snd_cost
-            ,cq.rcv_optype_id
-            ,cq.rcv_id
-            ,cq.rcv_cost
-            ,cq.trn_id
-            ,:v_curr_att
-            ,:v_curr_trn
-         );
-        if ( mod(i, v_step) = 0 ) then
-            in autonomous transaction do
-            update perf_log g set g.stack = 'pstorned: id='||cq.id||', max='||:v_max_id
-            where g.id = :v_perf_progress_id;
-        i = i + 1;
-     end
-
-    in autonomous transaction do
-    begin
-        update perf_log g
-        set g.info = 'finish, tra_'||:v_curr_trn,
-            g.dts_end = 'now'
-            --stack = fn_get_stack(1)
-        where g.id = :v_perf_semaphore_id;
-        delete from perf_log g where g.id = :v_perf_progress_id;
-    end
-
-when any do
-    begin
-        -- nop: supress ANY exception! We now dump dirty data due to abnormal case! --
-    end
-end
-
-^ -- zdump4dbg
-
 set term ;^
-commit;
 set list on;
 select 'oltp30_DDL.sql finish' as msg, current_timestamp from rdb$database;
 set list off;

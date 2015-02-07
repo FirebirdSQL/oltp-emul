@@ -105,7 +105,6 @@ begin
                           'C_SUPPLIER_DOC_MAX_ROWS',
                           'C_CUSTOMER_DOC_MAX_ROWS'
                         );
-
     v_ctx_max_qty = iif( a_optype_id in ( fn_oper_order_for_supplier, fn_oper_invoice_get ),
                           'C_SUPPLIER_DOC_MAX_QTY',
                           'C_CUSTOMER_DOC_MAX_QTY'
@@ -375,9 +374,9 @@ begin
     select result from fn_oper_order_by_customer into v_oper_order_by_customer;
     select result from fn_doc_fix_state into fn_doc_fix_state;
 
-    -- random select contragent for this client order
-    -- About 20...30% of orders are for our firm (==> they will NOT move to 'reserves'
-    -- after corresp. invoices will added to stock):
+    -- Random select contragent for this client order
+    -- About 20...30% of orders are for our firm (==> they will NOT move to
+    -- 'reserves' after corresponding invoices will be added to stock balance):
     if ( rand()*100 <= cast(rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT') as int) ) then
         begin
             v_clo_for_our_firm = 1;
@@ -927,6 +926,8 @@ as
     declare v_dummy bigint;
     declare v_ibe smallint;
     declare v_stt varchar(255);
+    declare c_raise_exc_when_no_found dm_sign = 1;
+    declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_supplier_invoice';
     declare fn_oper_order_for_supplier bigint;
 begin
@@ -946,12 +947,20 @@ begin
     -- Otherwise raise error: performance degrades almost to zero.
     execute procedure sp_check_nowait_or_timeout;
 
-
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    doc_list_id = coalesce( :a_selected_doc_id, (select result from fn_get_random_id('v_cancel_supplier_invoice')) );
-
+    -- Choose random doc of corresponding kind.
+    -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
+    -- performance degrades from ~4900 to ~1900.
+    doc_list_id = coalesce( :a_selected_doc_id,
+                (select result from fn_get_random_id( 'v_cancel_supplier_invoice' -- a_view_for_search
+                                                      ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                                      ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                                      ,:c_raise_exc_when_no_found
+                                                      ,:c_can_skip_order_clause
+                                                    ))
+                            );
     -- upd. log with doc id whic is actually handling now:
     execute procedure sp_upd_in_perf_log( v_this, null, 'dh='||doc_list_id);
 
@@ -971,8 +980,6 @@ begin
     join doc_list h on d.doc_id = h.id
     where d.doc_id = :doc_list_id; -- invoice which is to be removed now
 
-    -- Trigger doc_list_biud will (only for deleting doc or updating it's state):
-    -- 1) call s`p_kill_qty_storno that returns rows from Q`Storned to Q`distr 
     -- Trigger doc_list_biud will (only for deleting doc or updating it's state):
     -- 1) call s`p_kill_qty_storno that returns rows from Q`Storned to Q`distr 
     -- Trigger doc_list_aiud will:
@@ -1066,8 +1073,7 @@ begin
     select result from fn_oper_invoice_add into v_oper_invoice_add;
     select result from fn_oper_retail_reserve into v_oper_retail_reserve;
     select result from fn_oper_order_by_customer into v_oper_order_by_customer;
-
-   for
+    for
         select
             d.ware_id,
             d.id as dd_id, -- 22.09.2014: for processing in separate cursor in sp_make_qty_distr that used index on snd_op, rcv_op, snd_id
@@ -1106,10 +1112,11 @@ begin
         qty_sum = qty_sum + v_clo_qty_need_to_reserve; -- out arg
     end
 
-
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
     execute procedure sp_add_perf_log(0, v_this, null, 'rc='||row_count );
+
+    suspend; -- row_cnt, qty_sum
 
 when any do
     begin
@@ -1178,7 +1185,7 @@ begin
     --    it in the same Tx with accepting invoice (==> this will be 'heavy' Tx).
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises exception to stop test:
+    -- otherwise raises ex`ception to stop test:
     execute procedure sp_check_to_stop_work;
 
     -- Check that current Tx run in NO wait or with lock_timeout.
@@ -1348,6 +1355,8 @@ returns (
     declare v_stt varchar(255);
     declare v_ibe smallint;
     declare v_dummy bigint;
+    declare c_raise_exc_when_no_found dm_sign = 1;
+    declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_customer_reserve';
     declare fn_doc_canc_state bigint;
 begin
@@ -1360,7 +1369,7 @@ begin
     -- when this customer reserve was created.
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises exception to stop test:
+    -- otherwise raises ex`ception to stop test:
     execute procedure sp_check_to_stop_work;
 
     -- Check that current Tx run in NO wait or with lock_timeout.
@@ -1371,9 +1380,19 @@ begin
     execute procedure sp_add_perf_log(1, v_this);
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
-    doc_list_id = coalesce( :a_selected_doc_id, (select result from fn_get_random_id( 'v_cancel_customer_reserve' )) );
-
     select result from fn_doc_canc_state into fn_doc_canc_state;
+    -- Choose random doc of corresponding kind.
+    -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
+    -- performance degrades from ~4900 to ~1900.
+    doc_list_id = coalesce( :a_selected_doc_id,
+                            (select result from fn_get_random_id(
+                                'v_cancel_customer_reserve' -- a_view_for_search
+                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                ,:c_raise_exc_when_no_found
+                                ,:c_can_skip_order_clause
+                            ))
+                          );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1504,6 +1523,8 @@ as
     declare v_agent_id type of dm_ids;
     declare v_linked_client_order type of dm_ids;
     declare v_this dm_dbobj = 'sp_cancel_write_off';
+    declare c_raise_exc_when_no_found dm_sign = 1;
+    declare c_can_skip_order_clause dm_sign = 0;
 begin
 
     -- Randomly chooses waybill (ex. customer reserve after it was sold) and
@@ -1517,7 +1538,7 @@ begin
     -- that calculates balance of contragents.
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises exception to stop test:
+    -- otherwise raises ex`ception to stop test:
     execute procedure sp_check_to_stop_work;
 
     -- Check that current Tx run in NO wait or with lock_timeout.
@@ -1528,9 +1549,19 @@ begin
     execute procedure sp_add_perf_log(1, v_this);
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
-    -- select randomly customer reserve document that has been *closed*
-    -- and cancel writing-off that was with this doc
-    doc_list_id = coalesce( :a_selected_doc_id, (select result from fn_get_random_id('v_cancel_write_off')) );
+
+    -- Choose random doc of corresponding kind ("closed" customer reserve)
+    -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
+    -- performance degrades from ~4900 to ~1900.
+    doc_list_id = coalesce( :a_selected_doc_id,
+                                (select result from fn_get_random_id(
+                                            'v_cancel_write_off' -- a_view_for_search
+                                            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                            ,:c_raise_exc_when_no_found
+                                            ,:c_can_skip_order_clause
+                                                                    ))
+                          );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1624,8 +1655,8 @@ as
     declare v_ware_id dm_ids;
     declare v_cnt int = 0;
     declare v_this dm_dbobj = 'sp_get_clo_for_invoice';
-    declare fn_oper_order_by_customer dm_ids;
-    declare fn_oper_retail_reserve dm_ids;
+    declare v_oper_order_by_customer dm_ids;
+    declare v_oper_retail_reserve dm_ids;
 begin
 
     -- Aux SP: find client orders which have at least one unit of amount of
@@ -1637,8 +1668,8 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    select result from fn_oper_order_by_customer into fn_oper_order_by_customer;
-    select result from fn_oper_retail_reserve into fn_oper_retail_reserve;
+    select result from fn_oper_order_by_customer into v_oper_order_by_customer;
+    select result from fn_oper_retail_reserve into v_oper_retail_reserve;
 
     delete from tmp$dep_docs d where d.base_doc_id = :a_selected_doc_id;
 
@@ -1661,13 +1692,13 @@ begin
                 from qdistr q
                 where
                     q.ware_id = :v_ware_id
-                    and q.snd_optype_id = :fn_oper_order_by_customer
-                    and q.rcv_optype_id = :fn_oper_retail_reserve
+                    and q.snd_optype_id = :v_oper_order_by_customer
+                    and q.rcv_optype_id = :v_oper_retail_reserve
                 group by q.doc_id
             ) x
             join doc_list h on
                 x.clo_doc_id = h.id
-                and h.optype_id = :fn_oper_order_by_customer -- 31.07.2014: exclude cancelled customer orders!
+                and h.optype_id = :v_oper_order_by_customer -- 31.07.2014: exclude cancelled customer orders!
             into v_clo_doc_id, v_qty_clo_still_not_reserved, v_clo_agent_id
         do begin
             -- NB: BASE_DOC_ID,DEPENDEND_DOC_ID ==> unique
@@ -1762,11 +1793,11 @@ as
     declare v_view_for_search dm_dbobj;
     declare v_this dm_dbobj = 'sp_add_invoice_to_stock';
 
-    declare v_doc_fix_state bigint;
-    declare v_doc_open_state bigint;
-    declare v_doc_clos_state bigint;
-    declare v_oper_invoice_get bigint;
-    declare v_oper_invoice_add bigint;
+    declare v_doc_fix_state dm_ids;
+    declare v_doc_open_state dm_ids;
+    declare v_doc_clos_state dm_ids;
+    declare v_oper_invoice_get dm_ids;
+    declare v_oper_invoice_add dm_ids;
 begin
 
     -- This SP implements TWO tasks (see parameter `a_cancel_mode`):
@@ -1791,7 +1822,7 @@ begin
     -- negative values in 'reserved' or 'sold' kinds of stock remainder.
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises exception to stop test:
+    -- otherwise raises ex`ception to stop test:
     execute procedure sp_check_to_stop_work;
 
     -- Check that current Tx run in NO wait or with lock_timeout.
@@ -1826,7 +1857,7 @@ begin
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id, (select result from fn_get_random_id( :v_view_for_search )) );
     
-    execute procedure sp_upd_in_perf_log(v_this, null, 'sel inv='||doc_list_id); -- 06.07.2014, 4debug
+    execute procedure sp_upd_in_perf_log(v_this, null, 'doc_id='||doc_list_id); -- 06.07.2014, 4debug
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1900,7 +1931,6 @@ begin
                     where not exists(
                         select * from v_our_firm v
                         where v.id = p.clo_agent_id
-                        --order by v.id
                     )
                     into v_client_order
                 do begin
@@ -2144,6 +2174,10 @@ begin
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
 
+    select result from fn_oper_order_for_supplier into v_oper_order_for_supplier;
+    select result from fn_oper_invoice_add into v_oper_invoice_add;
+    select result from fn_doc_open_state into v_doc_open_state;
+
     -- choose random doc of corresponding kind and try to lock it
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
@@ -2151,10 +2185,6 @@ begin
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     execute procedure sp_lock_selected_doc( doc_list_id, 'v_cancel_supplier_order', a_selected_doc_id);
-
-    select result from fn_oper_order_for_supplier into v_oper_order_for_supplier;
-    select result from fn_oper_invoice_add into v_oper_invoice_add;
-    select result from fn_doc_open_state into v_doc_open_state;
 
     -- Since 08.08.2014: first get and lock *ALL* dependent docs - both invoices and reserves
     -- Continue handling of them only after we get ALL locks!
@@ -2340,6 +2370,10 @@ begin
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
 
+    select result from fn_doc_clos_state into fn_doc_clos_state;
+    select result from fn_doc_fix_state into fn_doc_fix_state;
+    select result from fn_oper_retail_realization into fn_oper_retail_realization;
+
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
@@ -2347,10 +2381,6 @@ begin
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     execute procedure sp_lock_selected_doc( doc_list_id, 'v_reserve_write_off', a_selected_doc_id);
-
-    select result from fn_doc_clos_state into fn_doc_clos_state;
-    select result from fn_doc_fix_state into fn_doc_fix_state;
-    select result from fn_oper_retail_realization into fn_oper_retail_realization;
 
     -- Change info in doc header for CUSTOMER RESERVE.
     -- 1. Trigger doc_list_biud will (only for deleting doc or updating it's state)
@@ -2607,7 +2637,7 @@ returns (
 as
     declare v_dbkey dm_dbkey;
     declare v_this dm_dbobj = 'sp_pay_from_customer';
-    declare fn_oper_pay_from_customer bigint;
+    declare fn_oper_pay_from_customer dm_ids;
 begin
 
     -- Implementation for payment from customer to us.
@@ -2758,7 +2788,7 @@ as
     declare v_round_to smallint;
     declare v_id type of dm_ids;
     declare v_this dm_dbobj = 'sp_pay_to_supplier';
-    declare fn_oper_pay_to_supplier bigint;
+    declare fn_oper_pay_to_supplier dm_ids;
 begin
 
     -- Implementation for our payment to supplier.
@@ -3241,7 +3271,6 @@ begin
     v_dts_beg = 'now';
     for
         select
-            --m.id,
             m.rdb$db_key,
             m.agent_id,
             o.m_supp_debt,
@@ -3250,14 +3279,7 @@ begin
             m.cost_retail
         from money_turnover_log m
         join optypes o on m.optype_id = o.id
--- need only for debug:
---        where
---            m.agent_id between
---               coalesce( :a_selected_agent_id, -:fn_infinity  )
---               and
---               coalesce( :a_selected_agent_id, :fn_infinity )
     into
-        --v_id,
         v_dbkey,
         agent_id,
         m_supp_debt, -- mutually excl. with m_cust_debt
@@ -3425,9 +3447,9 @@ end
 
 ^ -- srv_recalc_idx_stat
 
---------------------------------------------------------------------------------
--- ###########################    M I S C E L A N.    ##########################
---------------------------------------------------------------------------------
+--------------------------------------------------------------------------
+-- ###########################    R E P O R T S   ########################
+--------------------------------------------------------------------------
 
 create or alter procedure srv_mon_perf_total(
     a_last_hours smallint default 3,
@@ -3699,7 +3721,7 @@ begin
                 ,id as interval_no
                 ,min(dts_beg) as interval_beg
                 ,min(dts_end) as interval_end
-                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0),0) cnt_ok_per_minute
+                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0), 0) cnt_ok_per_minute
                 ,sum(aux1 + aux2) as cnt_all
                 ,sum(aux1) as cnt_ok
                 ,sum(aux2) as cnt_err
@@ -4056,7 +4078,7 @@ begin
                 select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
                 from perf_log p
                 -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
+                where exists(select 1 from business_ops b where b.unit=p.unit)
                 order by p.dts_beg desc
                 rows 1
             ) y
