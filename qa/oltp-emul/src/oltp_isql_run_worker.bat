@@ -232,8 +232,14 @@ echo Start at: %date% %time%>>%sts%
   @rem ---------------------------------------
 
   if .%sid%.==.1. (
+    
+    @rem All other attachment have to be FINISH before we start to creaing report.
+    @rem We check this by periodical query to mon$attachments:
+
+    call :wait4all   
+
     set msg=Making final performance analysys. . .
-    echo %date% %time% %msg%
+    echo %date% %time% %msg% >>%sts%
 
     set psql=%lognm%.performance_report.tmp
     del !psql! 2>nul
@@ -242,11 +248,11 @@ echo Start at: %date% %time%>>%sts%
     echo set width business_action 24;>>!psql!
     echo set width itrv_beg 8;>>!psql!
     echo set width itrv_end 8;>>!psql!
-
-    echo -- do NOT delete this, see SP srv_mon_perf_***: autonomous tx is there.>>!psql!
+    echo -- Set TIL = RC for SP srv_mon_perf_dynamic could see data>>!psql!
+    echo -- in perf_all table when perf_log is VIEW and is PARTITIONED.>>!psql!
+    echo -- See source code of all report SRV_MON_*** procedures:>>!psql!
     echo commit; set transaction read committed;>>!psql!
     echo.>>!psql!
-
     echo -- 1. Get performance report with splitting data to 10 equal time intervals,>>!psql!
     echo --    for last 3 hours of activity:>>!psql!
     echo select business_action,interval_no,cnt_ok_per_minute,cnt_all,cnt_ok,cnt_err,err_prc >>!psql!
@@ -256,12 +262,14 @@ echo Start at: %date% %time%>>%sts%
     echo where p.business_action containing 'interval' and p.business_action containing 'overall';>>!psql!
     echo commit;>>!psql!
     echo.>>!psql!
-
     echo -- 2. Get overall performance report for last 3 hours of activity:>>!psql!
     echo --    Value in column "avg_times_per_minute" in 1st row is overall performance index.>>!psql!
     echo set width business_action 35;>>!psql!
     echo select business_action, avg_times_per_minute, avg_elapsed_ms, successful_times_done, job_beg, job_end>>!psql!
     echo from srv_mon_perf_total;>>!psql!
+    echo -- 3. Get info about database and FB version:>>!psql!
+    echo set list on; select * from mon$database; set list off;>>!psql!
+    echo show version;>>!psql!
 
     echo.>>!plog!
     echo I. Analyze performance log:>>!plog!
@@ -298,6 +306,77 @@ echo Start at: %date% %time%>>%sts%
   @echo.>>%sts%
   @rem pause
   goto fin
+
+:wait4all
+
+  set tmpchk=%lognm%.wait4all.tmp
+  set tmpclg=%lognm%.wait4all.log
+  set tmperr=%lognm%.wait4all.err
+
+  del %tmpchk% 2>nul
+  del %tmpclg% 2>nul
+  del %tmperr% 2>nul
+
+  echo set list on; commit; >>%tmpchk%
+  echo select count(*^) as "active_att=" from mon$attachments a >>%tmpchk%
+  echo where a.mon$attachment_id ^<^> current_connection >>%tmpchk%
+  echo       and a.mon$remote_address is not null >>%tmpchk%
+  echo       and a.mon$remote_process containing 'isql'; >>%tmpchk%
+  @rem -- do NOT add "a.mon$system_flag is distinct from 1", avail only in 3.0
+
+  set active_att=1
+  set attempt_no=1
+  set max_retries=30
+  :m1
+    if .%attempt_no%.==.%max_retries%. (
+      @rem Something wrong with database or one of hanged attaches. Go on with report.
+      set msg=Limit for waiting exceeded, begin report creation.
+      echo !msg!
+      echo !msg!>>%log4all%
+      goto:eof
+    )
+
+    if .%is_embed%.==.1. (
+       set run_isql=%fbc%\isql %dbnm% -i %tmpchk% -nod -n 
+    ) else (
+       set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod
+    )
+    set msg=%time%: check for other active ISQL attachments, attempt %attempt_no% of %max_retries%
+    echo %msg%
+    echo %msg%>>%log4all%
+
+    echo %run_isql%
+    echo %run_isql%>>%log4all%
+
+    cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
+
+
+    for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
+      set /a %%a
+    )
+    @rem result: env var `active_att` if DEFINED now and equal to number of ISQL sessions
+    
+    if .%active_att%.==.0. (
+      set msg=All ISQL attachments were FINISHED, now we can build final report.
+    ) else (
+      set msg=There are still .%active_att%. active ISQL attachments, we must WAIT. . .
+    )
+    echo %msg%
+    echo %msg%>>%log4all%
+
+    if .%active_att%.==.0. (
+      del %tmpchk% 2>nul
+      del %tmpclg% 2>nul
+      del %tmperr% 2>nul
+    ) else (
+      set /a attempt_no=%attempt_no%+1
+      ping -n 11 127.0.0.1>nul
+      @rem ....................  l o o p    c o u n t    a t t a c h e s  .............
+      goto m1
+    )
+
+goto:eof
+
 :err_setenv
   @echo off
   echo.

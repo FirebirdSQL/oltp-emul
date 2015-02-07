@@ -7,7 +7,7 @@
 ####################################################################
 
 # Folder with Firebird console utilities, with or w/o trailing slash.
-fbc=/opt/fb25sc/bin
+fbc=/opt/fb25/bin
 
 # Folder where to store work and error logs, with or w/o trailing backslash.
 tmpdir=/var/tmp/logs.oltp25
@@ -28,6 +28,15 @@ no_auto_undo=1
 # are logged in .err files ? 
 # (Windows only. Not implemented for Linux, please leave = 0)
 use_mtee=0
+
+# Do we want to create some DEBUG objects (tables, views and procedures)
+# in order to:
+# 1) make dumps of all data from tables when critical error occurs;
+# 2) make miscelaneous diagnostic queries via "Z_" views.
+# Value=1 will cause "oltp_misc_debug.sql" be called when build database.
+# NB: setting 'C_CATCH_MISM_BITSET' must have bit #2 = 1 when this value = 1.
+# (see oltp_main_filling.sql)
+make_debug_dbos=0
 
 # Add in ISQL logs detailed info for each iteration (select from perf_log...) ?
 # Recommended value: 0
@@ -65,6 +74,6 @@ test_time=180
 
 usr=SYSDBA
 pwd=masterke
-host=192.168.0.220
-port=3252
+host=127.0.0.1
+port=3050
 

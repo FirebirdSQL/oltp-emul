@@ -247,8 +247,10 @@ insert into settings(working_mode, mcode, svalue)
 -- Logging of PK violations see in sp SRV_LOG_DUPS_QD_QS
 -- update settings set svalue='0' where mcode='LOG_PK_VIOLATION';
 -- update settings set svalue='1' where mcode='LOG_PK_VIOLATION';
+-- PK WILL BE REMOVED FROM THESE TABLES IF LOG_PK_VIOLATION = 0:
+-- 'qdistr,qstorned,pdistr,pstorned'
 insert into settings(working_mode, mcode,                      svalue,  init_on)
-              values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
+              values('COMMON',     'LOG_PK_VIOLATION',   '0',     'db_prepare');
 
 -- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
 -- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
@@ -259,6 +261,10 @@ insert into settings(working_mode, mcode,                      svalue,  init_on)
 --                (instead of totalling turnovers to `invnt_saldo` table)
 -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
 --                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
+-- ##################################################################################
+-- ::: NB ::: Correct value of config parameter 'make_debug_dbos' (set it = 1)
+-- if you need to create debug "Z-" tables and procedure for DUMP all data on errors.
+-- ##################################################################################
 -- update settings set svalue='3' where mcode='C_CATCH_MISM_BITSET';
 -- update settings set svalue='7' where mcode='C_CATCH_MISM_BITSET';
 insert into settings(working_mode, mcode,         svalue)

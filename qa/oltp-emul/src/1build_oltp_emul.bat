@@ -147,7 +147,11 @@ echo set echo on;>>%bld%
 echo in "%~dp0oltp%fb%_DDL.sql";>>%bld%
 echo in "%~dp0oltp%fb%_sp.sql";>>%bld%
 
-@rem these scripts are EQUAL for each version of Firebird:
+@rem Following scripts are COMMON for each version of Firebird:
+if .%make_debug_dbos%.==.1. (
+  echo in "%~dp0oltp_misc_debug.sql";>>%bld%
+)
+
 echo in "%~dp0oltp_main_filling.sql";>>%bld%
 echo in "%~dp0oltp_data_filling.sql";>>%bld%
 
@@ -221,15 +225,17 @@ echo select s.mcode, s.svalue                                  >>%tmp%
 echo from settings s                                           >>%tmp%
 echo where s.working_mode='COMMON'                             >>%tmp%
 echo       and s.mcode                                         >>%tmp%
-echo           in ('ENABLE_MON_QUERY',                         >>%tmp%
-echo               'ENABLE_RESERVES_WHEN_ADD_INVOICE',         >>%tmp%
-echo               'C_CATCH_MISM_BITSET',                      >>%tmp%
-echo               'TRACED_UNITS',                             >>%tmp%
-echo               'C_MAKE_QTY_STORNO_MODE',                   >>%tmp%
-echo               'C_MIN_COST_TO_BE_SPLITTED',                >>%tmp%
-echo               'C_ROWS_TO_MULTIPLY',                       >>%tmp%
-echo               'RANDOM_SEEK_VIA_ROWS_LIMIT',               >>%tmp%
-echo               'HALT_TEST_ON_ERRORS');                     >>%tmp%
+echo           in ( 'ENABLE_MON_QUERY'                         >>%tmp%
+echo               ,'LOG_PK_VIOLATION'                         >>%tmp%
+echo               ,'HALT_TEST_ON_ERRORS'                      >>%tmp%
+echo               ,'C_CATCH_MISM_BITSET'                      >>%tmp%
+echo               ,'TRACED_UNITS'                             >>%tmp%
+echo               ,'ENABLE_RESERVES_WHEN_ADD_INVOICE'         >>%tmp%
+echo               ,'C_MAKE_QTY_STORNO_MODE'                   >>%tmp%
+echo               ,'C_MIN_COST_TO_BE_SPLITTED'                >>%tmp%
+echo               ,'C_ROWS_TO_MULTIPLY'                       >>%tmp%
+echo               ,'RANDOM_SEEK_VIA_ROWS_LIMIT'               >>%tmp%
+echo              );                                           >>%tmp%
 
 @echo on
 if .%is_embed%.==.1. (
