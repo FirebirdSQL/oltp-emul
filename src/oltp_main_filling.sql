@@ -209,9 +209,9 @@ insert into settings(working_mode, mcode,                  svalue)
 insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'ENABLE_MON_QUERY',
-                      decode( rdb$get_context('SYSTEM','ENGINE_VERSION')
-                             ,'3.0.0', '0' -- can be = '1' since ~10.08.2014
-                             ,'2.5.3', '0' -- do NOT set = '1' at all!
+                      decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
+                             ,'3.0', '0' -- can be = '1' since ~10.08.2014
+                             ,'2.5', '0' -- do NOT set = '1' at all!
                              ,'0'
                             )
                     );
@@ -232,7 +232,7 @@ insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
                       decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
-                             ,'3.0', ',CK,PK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
+                             ,'3.0', ',CK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
                              ,'2.5', ',CK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
                              ,',NONE,'
                             )
