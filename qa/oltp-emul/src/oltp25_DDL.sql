@@ -656,7 +656,9 @@ recreate table doc_data(
   ,cost_purchase dm_cost
   ,cost_retail dm_cost default 0
   ,dts_edit timestamp -- last modification timestamp; do NOT use `default 'now'` here!
-  -- finally dis 09.01.2015, not needed for this table: ,constraint pk_doc_data primary key(id) using index pk_doc_data
+  -- finally dis 09.01.2015, not needed for this table: 
+  -- restored 07.02.2015: PK violations detected when C_MAKE_QTY_STORNO_MODE = 'UPD_ROW'
+  ,constraint pk_doc_data primary key(id) using index pk_doc_data
   ,constraint doc_data_doc_ware_unq unique(doc_id, ware_id) using index doc_data_doc_ware_unq
   ,constraint doc_data_qty_cost_both check ( qty>0 and cost_purchase>0 and cost_retail>0 or qty = 0 and cost_purchase = 0 and cost_retail=0 )
 );
