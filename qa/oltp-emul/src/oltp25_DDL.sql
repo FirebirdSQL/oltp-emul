@@ -939,7 +939,7 @@ recreate table fb_errors(
 -- Log for performance and errors (filled via autonom. tx if exc`eptions occur)
 recreate table perf_log(
    id dm_ids -- value from sequence where record has been added into GTT tmp$perf_log
-  ,id2 bigint -- value from sequence where record has been written from tmp$perf_log into fixed table perf_log (need for debug)
+  --,id2 bigint -- value from sequence where record has been written from tmp$perf_log into fixed table perf_log (need for debug)
   ,unit dm_unit -- name of executed SP
   ,exc_unit char(1) -- was THIS unit the place where exception raised ? yes ==> '#'
   ,fb_gdscode int -- how did finish this unit (0 = OK)
@@ -5546,7 +5546,7 @@ from business_ops b
 --------------------------------------------------------------------------------
 
 create or alter view z_halt_log as -- upd 28.09.2014
-select p.id, p.id2, p.fb_gdscode, p.unit, p.trn_id, p.dump_trn, p.exc_unit, p.info, p.ip, p.dts_beg, e.fb_mnemona, p.exc_info,p.stack
+select p.id, p.fb_gdscode, p.unit, p.trn_id, p.dump_trn, p.exc_unit, p.info, p.ip, p.dts_beg, e.fb_mnemona, p.exc_info,p.stack
 from perf_log p
 join (
     select g.trn_id, g.fb_gdscode
@@ -6647,11 +6647,21 @@ begin
                                 v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
                                 v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
                             end
+
+                            v_inserting_table = 'qdistr';
+                            v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
+                            v_inserting_info = v_inserting_info
+                                ||', try upd QD: id='||v_inserting_id
+                                ||', g_last='||v_gen_inc_last_qd
+                                ||', g_step='||c_gen_inc_step_qd
+                                ||', g_iter='||v_gen_inc_iter_qd
+                                ;
+
                             --v_dd_new_id = iif( v_qty_storned_acc = 0, gen_id(g_d`oc_data, 1), v_dd_new_id);
                             -- 03.09.2014 19:35: update-in-place instead of call sp_multiply_rows_for_qdistr
                             -- which inserts (NB! trigger qdistr_bi instead autogen PK `id` need now):
                             update qdistr q set
-                                 q.id = :v_gen_inc_last_qd - ( :c_gen_inc_step_qd - :v_gen_inc_iter_qd ) -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
+                                 q.id = :v_inserting_id -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
                                 ,q.doc_id = :v_dh_new_id -- :doc_list_id
                                 ,q.snd_optype_id = :a_optype_id
                                 ,q.rcv_optype_id = :v_next_rcv_op
@@ -6660,6 +6670,7 @@ begin
                                 ,q.dts = 'now'
                             where current of c_make_amount_distr_1;  ----------------------- lock_conflict can occur here
                             v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
+
                         end --  v_storno_sub = 1
                     else
                         begin

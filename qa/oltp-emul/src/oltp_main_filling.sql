@@ -231,9 +231,9 @@ insert into settings(working_mode, mcode, svalue)
 insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
-                      decode( rdb$get_context('SYSTEM','ENGINE_VERSION')
-                             ,'3.0.0', ',CK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
-                             ,'2.5.3', ',CK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
+                      decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
+                             ,'3.0', ',CK,PK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
+                             ,'2.5', ',CK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
                              ,',NONE,'
                             )
                     );
@@ -277,6 +277,7 @@ insert into settings(working_mode, mcode,         svalue)
 -- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
 -- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
 -- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10% - see qty_storno_benchmark_upd_row_vs_del_ins-30ss-100att-120min.xls
+-- 07.02.2015: seems that 'UPD_ROW' always lead to PK-violation in doc_data, code see in sp_make_qty_storno. Reason not found :(
 insert into settings(working_mode, mcode,         svalue)
               values('COMMON',     'C_MAKE_QTY_STORNO_MODE',  'DEL_INS');
 
@@ -1324,7 +1325,7 @@ begin
     -- If we have decided do not watch for PK violations than corresp. constraints
     -- can be removed now because actually there are no PK index from these tables
     -- which participates in any search/join etc:
-    v_rel_list = 'qdistr,qstorned,pdistr,pstorned';
+    v_rel_list = 'doc_data,qdistr,qstorned,pdistr,pstorned'; -- 07.02.2015: do NOT remove doc_data from here!
     ------------------------------------------------------------------------
     for
         -- get only PK or ASCENDING UNIQUE indices on field 'ID'
