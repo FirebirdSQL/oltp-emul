@@ -1,7 +1,7 @@
 -- #####################################
 -- Begin of script oltp_main_filling.sql
 -- #####################################
--- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0
+-- ::: NB ::: This script is COMMON for both FB 2.5 and 3.0
 
 set bail on;
 set list on;
@@ -149,7 +149,8 @@ begin
             'MEDIUM_03',   3000,      50,        100,         70,       200,      200  from rdb$database union all select
             'LARGE_01',    5000,      70,        200,        100,       300,      500  from rdb$database union all select
             'LARGE_02',    7000,     100,        300,        150,       450,      700  from rdb$database union all select
-            'LARGE_03',    9000,     150,        400,        200,       600,     1000  from rdb$database
+            'LARGE_03',    9000,     150,        400,        200,       600,     1000  from rdb$database union all select
+            'HEAVY_01',   50000,     250,        500,        300,       900,     2000  from rdb$database
         )
         ,d as(
             select
@@ -195,7 +196,9 @@ commit;
 -- ::: NB ::: re-run oltp_data_filling.sql EVERY time you change this var:
 insert into settings(working_mode, mcode,           svalue)
               values('INIT',       'WORKING_MODE',  'SMALL_03'); -- DEFAULT: 'SMALL_03'
--- DEBUG_01 DEBUG_1A DEBUG_02 DEBUG_03 DEBUG_04 SMALL_01  SMALL_02 SMALL_03 MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
+-- DEBUG_01 DEBUG_1A DEBUG_02 DEBUG_03 DEBUG_04 SMALL_01  SMALL_02 SMALL_03
+-- MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
+-- HEAVY_01
 
 
 -- List of units for which we want to gather info from mon$table_stats
@@ -228,12 +231,13 @@ insert into settings(working_mode, mcode, svalue)
 -- See calls of fn_halt_sign(gdscode):
 -- update settings set svalue=',NONE,' where mcode='HALT_TEST_ON_ERRORS';
 -- update settings set svalue=',CK,' where mcode='HALT_TEST_ON_ERRORS';
+-- update settings set svalue=',CK,PK,' where mcode='HALT_TEST_ON_ERRORS';
 insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
                       decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
-                             ,'3.0', ',CK,' -- ',CK,PK,FK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015
-                             ,'2.5', ',CK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
+                             ,'3.0', ',CK,PK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015, CONFIRMED FAIULT AGAIN 09.02.2015 (SC)
+                             ,'2.5', ',CK,PK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
                              ,',NONE,'
                             )
                     );
@@ -250,7 +254,7 @@ insert into settings(working_mode, mcode, svalue)
 -- PK WILL BE REMOVED FROM THESE TABLES IF LOG_PK_VIOLATION = 0:
 -- 'qdistr,qstorned,pdistr,pstorned'
 insert into settings(working_mode, mcode,                      svalue,  init_on)
-              values('COMMON',     'LOG_PK_VIOLATION',   '0',     'db_prepare');
+              values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
 
 -- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
 -- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
@@ -265,10 +269,10 @@ insert into settings(working_mode, mcode,                      svalue,  init_on)
 -- ::: NB ::: Correct value of config parameter 'make_debug_dbos' (set it = 1)
 -- if you need to create debug "Z-" tables and procedure for DUMP all data on errors.
 -- ##################################################################################
--- update settings set svalue='3' where mcode='C_CATCH_MISM_BITSET';
--- update settings set svalue='7' where mcode='C_CATCH_MISM_BITSET';
+-- update settings set svalue='3' where mcode='QMISM_VERIFY_BITSET';
+-- update settings set svalue='7' where mcode='QMISM_VERIFY_BITSET';
 insert into settings(working_mode, mcode,         svalue)
-              values('COMMON',     'C_CATCH_MISM_BITSET',  '1'); -- default: '1'
+              values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'
 
 -- How records should be handled when OLD one moves from QDistr to QStorned and
 -- NEW must be added in QDistr (when we create new document and search for rows
@@ -277,9 +281,8 @@ insert into settings(working_mode, mcode,         svalue)
 -- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
 -- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
 -- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10% - see qty_storno_benchmark_upd_row_vs_del_ins-30ss-100att-120min.xls
--- 07.02.2015: seems that 'UPD_ROW' always lead to PK-violation in doc_data, code see in sp_make_qty_storno. Reason not found :(
 insert into settings(working_mode, mcode,         svalue)
-              values('COMMON',     'C_MAKE_QTY_STORNO_MODE',  'DEL_INS');
+              values('COMMON',     'QDISTR_HANDLING_MODE',  'DEL_INS');
 
 -- Do we allow to make 'batch reserve creations' in sp_add_invoice ?
 -- When '1' then search of client orders with incompleted reserve amounts and

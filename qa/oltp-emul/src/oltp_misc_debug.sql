@@ -834,6 +834,31 @@ group by 1,2
 
 --------------------------------------------------------------------------------
 
+create or alter view z_get_min_max_id as
+-- 08.02.2015: debug view for efficiency estimation of 'boundary' views which
+-- is used for obtaining MIN and MAX ids before subsequent random selection.
+-- (v_min/max_id_clo_ord, v_min/max_id_ord_sup etc)
+-- Registering in perf_log is in fn_get_random_id.
+select
+    g.unit
+    ,count(iif( coalesce(g.fb_gdscode,0)=0, 1, null ) ) cnt_ok
+    ,count(*) cnt_all
+    ,avg(g.elapsed_ms) avg_time
+    ,min(g.elapsed_ms) min_time
+    ,max(g.elapsed_ms) max_time
+from perf_log g
+where
+(
+  g.unit starting with 'v_min_id'
+  or
+  g.unit starting with 'v_max_id'
+)
+group by 1
+order by right(g.unit,6),left(g.unit,4) desc
+;
+
+--------------------------------------------------------------------------------
+
 create or alter view z_doc_data_oper_cnt as
 -- 19.07.2014, for analyze results of init data population alg
 select h.optype_id,o.name op_name,count(*) doc_data_cnt
@@ -1130,7 +1155,7 @@ as
     declare v_perf_progress_id bigint;
     declare v_this dm_dbobj = 'zdump4dbg';
 begin
-    -- See oltp_main_filling.sql for definition of bitset var `C_CATCH_MISM_BITSET`:
+    -- See oltp_main_filling.sql for definition of bitset var `QMISM_VERIFY_BITSET`:
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in doc_list_aiud => sp_add_invnt_log
     --                in order to register mismatches b`etween doc_data.qty and total number of rows
     --                in qdistr + qstorned for doc_data.id
@@ -1138,7 +1163,7 @@ begin
     --                (instead of totalling turnovers to `invnt_saldo` table)
     -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
     --                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
+    v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
     if ( bin_and( v_catch_bitset, 4 ) = 0 ) -- dump dirty data DISABLED
     then
         --####

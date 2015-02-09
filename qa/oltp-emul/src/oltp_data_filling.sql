@@ -1,7 +1,7 @@
 -- #####################################
 -- Begin of script oltp_data_filling.sql
 -- #####################################
--- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0
+-- ::: NB ::: This script is COMMON for both FB 2.5 and 3.0
 set bail on;
 set list on;
 select 'oltp_data_filling.sql start' as msg, current_timestamp from rdb$database;
@@ -17,6 +17,15 @@ end
 commit;
 
 -- these GTTs need only for this script and will be removed at the end:
+recreate global temporary table tmp$wares(
+    id               dm_ids
+    ,group_id        dm_ids
+    ,numb            dm_nums
+    ,name            dm_name
+    ,price_purchase  dm_cost
+    ,price_retail    dm_cost
+) on commit delete rows;
+
 recreate global temporary table tmp$agents(
   id dm_ids primary key using index pk_tmp_agents,
   name_01 dm_name,
@@ -15315,7 +15324,7 @@ begin
 
     select min(id),max(id) from ware_groups into v_gr_id_min, v_gr_id_max;
     select min(id),max(id) from tmp$names into v_nm_id_min, v_nm_id_max;
-    while(n>0) do begin
+    while(n > 0) do begin
         i = v_gr_id_min + rand()*(v_gr_id_max - v_gr_id_min);
         select id from ware_groups where id >= :i order by id rows 1 into v_group_id;
         
@@ -15325,22 +15334,22 @@ begin
         v_purchase = c_invoice_min_purchase + rand() * (c_invoice_max_purchase - c_invoice_min_purchase );
         v_profit_prc = c_invoice_min_profit_prc + rand() * ( c_invoice_max_profit_prc - c_invoice_min_profit_prc );
 
---        select result from fn_get_random_cost('C_INVOICE_MIN_PURCHASE','C_INVOICE_MAX_PURCHASE', 0) into v_purchase;
---        select result from fn_get_random_cost('C_INVOICE_MIN_PROFIT_PRC','C_INVOICE_MAX_PROFIT_PRC', 0) into v_profit_prc;
-
         v_purchase = round( v_purchase, -2);
         v_profit = 1 + 1e0 * v_profit_prc / 100;
         v_retail = round(v_purchase * v_profit, -2);
         
-        insert into wares(group_id, numb, name, price_purchase, price_retail)
-        values( :v_group_id,
+        insert into tmp$wares(id, group_id, numb, name, price_purchase, price_retail)
+        values(
+              :n,
+              :v_group_id,
               left(replace(uuid_to_char(gen_uuid()),'-',''),16),
               :v_name,
               :v_purchase,
               :v_retail
             );
         
-        n=n-1;
+        n = n - 1;
+
         if ( rdb$get_context('USER_SESSION','ENABLE_FILL_PHRASES') = '1'
              and
              not exists(select * from phrases p where p.name = :v_name)
@@ -15367,7 +15376,8 @@ begin
         end
     end
 end
-
+^
+insert into wares select * from tmp$wares order by rand()
 ^
 set term ;^
 commit; -- 100'000 ==> ~12 sec
@@ -15727,6 +15737,7 @@ insert into semaphores(id, task) values(-1, 'all_build_ok');
 commit;
 
 drop table tmp$aux;
+drop table tmp$wares;
 drop table tmp$agents;
 drop table tmp$names;
 

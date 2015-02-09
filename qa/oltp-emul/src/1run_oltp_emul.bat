@@ -356,69 +356,7 @@ set tmpclg=%tmpdir%\tmp_init_data_chk.log
 set tmperr=%tmpdir%\tmp_init_data_chk.err
 
 @rem ################### check for non-empty stoptest.txt ################################
-del %tmpchk% 2>nul
-del %tmpclg% 2>nul
-echo set heading off; set list on;>>%tmpchk%
-echo -- check that test now can be run: table 'ext_stoptest' must be EMPTY>>%tmpchk%
-echo select iif( exists( select * from ext_stoptest ), >>%tmpchk%
-echo                     '1', >>%tmpchk%
-echo                     '0'>>%tmpchk%
-echo           ) as "cancel_flag=" >>%tmpchk%
-echo from rdb$database;>>%tmpchk%
-@rem type %tmpchk%
-
-if .%is_embed%.==.1. (
-   set run_isql=%fbc%\isql %dbnm% -i %tmpchk% -nod -n 
-) else (
-   set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod
-)
-
-echo.
-echo Check for non-empty external file stoptest.txt. 
-echo Command that now to be run:
-echo %run_isql%
-echo Content of script %tmpchk%:
-echo --------------------------
-type %tmpchk%
-echo --------------------------
-
-cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
-
-set cancel_flag=2
-for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
-if .%size%.==.. set size=0
-if %size% gtr 0 (
-  echo.
-  echo SQL script: %tmpchk%
-  echo Errors log: %tmperr%
-  echo ---------- content of errors log ----------------
-  type %tmperr%
-  echo -------------------------------------------------
-  echo.
-  echo Probably you have to open firebird.conf and set 'ExternalFileAccess'
-  echo to some folder where 'firebird' account has enough rights.
-  echo.
-  echo Press any key to FINISH. . .
-  pause>nul
-  goto end
-) else (
-  echo RESULT: script finished OK.
-
-  for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
-    set /a %%a
-    if errorlevel 1 set err_setenv=1
-  )
-  if .%cancel_flag%.==.. set cancel_flag=0
-)
-
-echo cancel_flag=^>^>^>%cancel_flag%^<^<^<
-
-del %tmpchk% 2>nul
-
-if .%cancel_flag%.==.1. (
-  goto test_canc
-)
-goto chk_init
+call :chk_stop_test init_chk %tmpdir% %fbc% %dbnm% %usr% %pwd%
 
 @rem --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 
@@ -694,6 +632,10 @@ if .%is_embed%.==.1. (
 
   @echo packet #%k% >>%tmplog%
   @echo ^=^=^=^=^=^=^=^=^=^=^=^=^=>>%tmplog%
+
+  @rem ################### check for non-empty stoptest.txt ################################
+  call :chk_stop_test pop_data %tmpdir% %fbc% %dbnm% %usr% %pwd%
+
   if %p% equ 0 (
     del %tmpchk% 2>nul
     del %tmpclg% 2>nul
@@ -962,15 +904,15 @@ echo                       dts_beg, dts_end, elapsed_ms)                      >>
 echo               values( 'dump_dirty_data_semaphore', '',    'by %~f0',     >>%tmpsql%
 echo                       null, null, -1);                                   >>%tmpsql%
 echo commit;>>%tmpsql%
+
 echo set width unit 20;>>%tmpsql%
 echo set width add_info 30;>>%tmpsql%
-echo set width dts_measure_beg 24;>>%tmpsql%
-echo set width dts_measure_end 24;>>%tmpsql%
+echo set width dts_measure_beg 19;>>%tmpsql%
+echo set width dts_measure_end 19;>>%tmpsql%
 echo set list on;>>%tmpsql%
 echo.>>%tmpsql%
 
-echo Check test settings and record in ^>^>^>%log_tab%^<^<^< table that will be checked
-echo by attachments to stop their work:                                 
+echo Database parameters and main test settings:
 echo select                                                                            >>%tmpsql%
 echo        m.mon$database_name as db_name                                             >>%tmpsql%
 echo       ,m.mon$page_size as pg_size                                                 >>%tmpsql%
@@ -980,7 +922,8 @@ echo       ,rdb$get_context('USER_SESSION','WORKING_MODE') working_mode         
 echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query        >>%tmpsql%
 echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors  >>%tmpsql%
 echo       ,rdb$get_context('USER_SESSION','LOG_PK_VIOLATION') log_pk_violations       >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION', 'C_CATCH_MISM_BITSET') c_catch_mism_bitset >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'QDISTR_HANDLING_MODE') make_qty_storno_mode >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'QMISM_VERIFY_BITSET')  qmism_verify_bitset >>%tmpsql%
 echo       ,g.add_info                                                                 >>%tmpsql%
 echo       ,g.dts_measure_beg                                                          >>%tmpsql%
 echo       ,g.dts_measure_end                                                          >>%tmpsql%
@@ -988,8 +931,8 @@ echo from mon$database m                                                        
 echo cross join                                                                        >>%tmpsql%
 echo (                                                                                 >>%tmpsql%
 echo   select p.unit, p.exc_info as add_info,                                          >>%tmpsql%
-echo          replace(cast(p.dts_beg as varchar(24)),' ','_') as dts_measure_beg,      >>%tmpsql%
-echo          replace(cast(p.dts_end as varchar(24)),' ','_') as dts_measure_end       >>%tmpsql%
+echo      left(replace(cast(p.dts_beg as varchar(24)),' ','_'),19) as dts_measure_beg, >>%tmpsql%
+echo      left(replace(cast(p.dts_end as varchar(24)),' ','_'),19) as dts_measure_end  >>%tmpsql%
 echo   from %log_tab% p                                                                >>%tmpsql%
 echo        where p.unit = 'perf_watch_interval'                                       >>%tmpsql%
 echo        order by dts_beg desc rows 1                                               >>%tmpsql%
@@ -1020,6 +963,7 @@ if %size% gtr 0 (
   goto end
 )
 
+@echo off
 type %tmplog%
 
 @rem set log4all=%tmpdir%\%logbase%-001.performance_report.txt
@@ -1030,15 +974,12 @@ set log4all=%tmpdir%\oltp%1.report.txt
 @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 del %log4all% 2>nul
-@echo Created by: %~f0>>%log4all%
+echo Created by: %~f0>>%log4all%
+echo Database parameters and main test settings:>>%log4all%
 type %tmplog%>>%log4all%
 
-@echo Final report will be written in file:
-@echo #####################################
-@echo.
-@echo %log4all%
-@echo.
-
+echo Final report see in file: ^>^>^>%log4all%^<^<^<
+echo #########################
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
@@ -1056,18 +997,18 @@ for /l %%i in (1, 1, %winq%) do (
 
   set /a k=1000+%%i
   if .%%i.==.1. (
-    echo Check parameters for oltp_isql_run_worker.bat:>>%log4all%
-    echo ---------------------------------------------->>%log4all%
-    echo is_embed=^>%is_embed%^<   >>%log4all%
-    echo fbc=^>%fbc%^<             >>%log4all%
-    echo dbnm=^>%dbnm%^<           >>%log4all%
-    echo sql=^>%sql%^<             >>%log4all%
-    echo logbase=^>%logbase%^<     >>%log4all%
-    echo log4all=^>%log4all%^<     >>%log4all%
-    echo host=^>%host%^<           >>%log4all%
-    echo port=^>%port%^<           >>%log4all%
-    echo usr=^>%usr%^<             >>%log4all%
-    echo pwd=^>%pwd%^<             >>%log4all%
+    echo Parameters for launching ISQL sessions:>>%log4all%
+    echo --------------------------------------->>%log4all%
+    echo is_embed = ^|%is_embed%^| >>%log4all%
+    echo fbc      = ^|%fbc%^|      >>%log4all%
+    echo dbnm     = ^|%dbnm%^|     >>%log4all%
+    echo sql      = ^|%sql%^|      >>%log4all%
+    echo logbase  = ^|%logbase%^|  >>%log4all%
+    echo log4all  = ^|%log4all%^|  >>%log4all%
+    echo host     = ^|%host%^|     >>%log4all%
+    echo port     = ^|%port%^|     >>%log4all%
+    echo usr      = ^|%usr%^|      >>%log4all%
+    echo pwd      = ^|%pwd%^|      >>%log4all%
     echo.                          >>%log4all%
     echo.>>%log4all%
     echo Command that launch ISQL window #%%i:             >>%log4all%
@@ -1249,7 +1190,8 @@ goto end
   echo Press any key to FINISH. . .
   echo.
   @pause>nul
-  @goto end
+  @rem @goto end
+  EXIT
 
 :err_del
 
@@ -1345,31 +1287,31 @@ goto end
     @echo execute block as                                                   >>%sql%
     @echo     declare v_unit dm_name;                                        >>%sql%
     @echo begin                                                              >>%sql%
+    @echo     if ( NOT exists( select * from ext_stoptest ^) ^) then        >>%sql%
+    @echo       begin                                                         >>%sql%
     if /i .%mode%.==.init_pop. (
-      @echo     select p.unit                                                  >>%sql%
-      @echo     from srv_random_unit_choice(                                   >>%sql%
+      @echo       select p.unit                                                  >>%sql%
+      @echo       from srv_random_unit_choice(                                   >>%sql%
       @echo               '',                                                  >>%sql%
       @echo               'creation,state_next,service,',                      >>%sql%
       @echo               '',                                                  >>%sql%
       @echo               'removal'                                            >>%sql%
-      @echo     ^) p                                                            >>%sql%
-      @echo     into v_unit;                                                   >>%sql%
+      @echo       ^) p                                                            >>%sql%
+      @echo       into v_unit;                                                   >>%sql%
     )
     if /i .%mode%.==.run_test. (
-      @echo     if ( NOT exists( select * from ext_stoptest ^) ^) then        >>%sql%
-      @echo     begin                                                         >>%sql%
-      @echo       select p.unit                                               >>%sql%
-      @echo       from srv_random_unit_choice(                                >>%sql%
+      @echo         select p.unit                                               >>%sql%
+      @echo         from srv_random_unit_choice(                                >>%sql%
       @echo                 '',                                               >>%sql%
       @echo                 '',                                               >>%sql%
       @echo                 '',                                               >>%sql%
       @echo                 ''                                                >>%sql%
-      @echo       ^) p                                                        >>%sql%
-      @echo       into v_unit;                                                >>%sql%
-      @echo     end                                                           >>%sql%
-      @echo     else                                                          >>%sql%
-      @echo       v_unit = 'TEST_WAS_CANCELLED';                              >>%sql%
+      @echo         ^) p                                                        >>%sql%
+      @echo         into v_unit;                                                >>%sql%
     )
+    @echo       end                                                         >>%sql%
+    @echo     else                                                          >>%sql%
+    @echo       v_unit = 'TEST_WAS_CANCELLED';                              >>%sql%
     @echo     rdb$set_context('USER_SESSION','SELECTED_UNIT', v_unit^);  >>%sql%
     @echo     rdb$set_context('USER_SESSION','ADD_INFO', null^);             >>%sql%
     @echo end                                                                >>%sql%
@@ -1589,7 +1531,6 @@ goto end
       @echo     gen_id(g_init_pop,0^) as new_docs_created                       >>%sql%
       @echo from mon$database m;                                               >>%sql%
     )
-    if /i .%mode%.==.run_test. (
 
       @echo set bail on; -- for catch test cancellation and stop all .sql      >>%sql%
       @echo set term ^^;                                                       >>%sql%
@@ -1614,6 +1555,8 @@ goto end
       @echo set term ;^^                                                       >>%sql%
       @echo set bail off;                                                      >>%sql%
 
+
+    if /i .%mode%.==.run_test. (
       if .%nfo%.==.1. (
         @echo -- Begin block to output DETAILED results of iteration.            >>%sql%
         @echo -- To disable this output change "detailed_info" setting to 0      >>%sql%
@@ -1792,6 +1735,92 @@ goto:eof
     type %tmplog%
   )
   endlocal
+goto:eof
+
+
+:chk_stop_test
+
+setlocal
+set chk_mode=%1
+set tmpdir=%2
+set fbc=%3
+set dbnm=%4
+set usr=%5
+set pwd=%6
+
+@rem ################### check for non-empty stoptest.txt ################################
+
+set tmpchk=%tmpdir%\tmp_chk_stop.sql
+set tmpclg=%tmpdir%\tmp_chk_stop.log
+set tmperr=%tmpdir%\tmp_chk_stop.err
+
+del %tmpchk% 2>nul
+del %tmpclg% 2>nul
+del %tmperr% 2>nul
+
+echo set heading off; set list on;>>%tmpchk%
+echo -- check that test now can be run: table 'ext_stoptest' must be EMPTY>>%tmpchk%
+echo select iif( exists( select * from ext_stoptest ), >>%tmpchk%
+echo                     '1', >>%tmpchk%
+echo                     '0'>>%tmpchk%
+echo           ) as "cancel_flag=" >>%tmpchk%
+echo from rdb$database;>>%tmpchk%
+@rem type %tmpchk%
+
+if .%is_embed%.==.1. (
+   set run_isql=%fbc%\isql %dbnm% -i %tmpchk% -nod -n 
+) else (
+   set run_isql=%fbc%\isql %host%/%port%:%dbnm% -i %tmpchk% -user %usr% -pas %pwd% -n -nod
+)
+
+if .%chk_mode%.==.init_chk. (
+  echo.
+  echo Check for non-empty external file stoptest.txt. 
+  echo Command that now to be run:
+  echo %run_isql%
+  echo Content of script %tmpchk%:
+  echo --------------------------
+  type %tmpchk%
+  echo --------------------------
+)
+cmd /c %run_isql% 1^>%tmpclg% 2^>%tmperr%
+
+set cancel_flag=2
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  echo.
+  echo SQL script: %tmpchk%
+  echo Errors log: %tmperr%
+  echo ---------- content of errors log ----------------
+  type %tmperr%
+  echo -------------------------------------------------
+  echo.
+  echo Probably you have to open firebird.conf and set 'ExternalFileAccess'
+  echo to some folder where 'firebird' account has enough rights.
+  echo.
+  echo Press any key to FINISH. . .
+  pause>nul
+  goto end
+) else (
+  if .%chk_mode%.==.init_chk. echo RESULT: script finished OK.
+  for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
+    set /a %%a
+    if errorlevel 1 set err_setenv=1
+  )
+  if .%cancel_flag%.==.. set cancel_flag=0
+)
+if .%chk_mode%.==.init_chk. (
+  echo cancel_flag=^>^>^>%cancel_flag%^<^<^<
+)
+
+del %tmpchk% 2>nul
+
+if .%cancel_flag%.==.1. (
+  goto test_canc
+)
+
+endlocal
 goto:eof
 
 :trim

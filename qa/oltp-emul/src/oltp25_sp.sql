@@ -1073,6 +1073,7 @@ begin
     select result from fn_oper_invoice_add into v_oper_invoice_add;
     select result from fn_oper_retail_reserve into v_oper_retail_reserve;
     select result from fn_oper_order_by_customer into v_oper_order_by_customer;
+    qty_sum = 0; -- out arg
     for
         select
             d.ware_id,
@@ -1226,7 +1227,7 @@ begin
     select result from fn_oper_retail_reserve into fn_oper_retail_reserve;
     select result from fn_oper_order_by_customer into fn_oper_order_by_customer;
     select result from fn_oper_invoice_add into fn_oper_invoice_add;
-
+    v_qty_sum = 0;
     while (1=1) do begin -- ...............   m a i n   l o o p  .................
   
         delete from tmp$shopping_cart where 1=1;
@@ -1266,15 +1267,17 @@ begin
         --    amounts in tmp$shopping_cart, in FIFO manner.
         -- 2. Perform "STORNING" of them (moves these rows from QDISTR to QSTORNED)
         -- 3. Create new document: header (doc_list) and detalization (doc_data).
-        execute procedure sp_make_qty_storno(
-            fn_oper_retail_reserve
-            ,v_agent_id
-            ,(select result from fn_doc_open_state)
-            ,a_client_order_id
-            ,v_rows_added
-            ,v_qty_sum
-        ) returning_values doc_list_id; -- out arg
-
+        if ( v_qty_sum > 0 ) then
+        begin
+            execute procedure sp_make_qty_storno(
+                fn_oper_retail_reserve
+                ,v_agent_id
+                ,(select result from fn_doc_open_state)
+                ,a_client_order_id
+                ,v_rows_added
+                ,v_qty_sum
+            ) returning_values doc_list_id; -- out arg
+        end
         leave;
 
     end -- while (1=1) -- ...............   m a i n   l o o p  .................
@@ -2975,7 +2978,7 @@ begin
     -- and SKIP problem wares (with logging first ware which has neg. remainder)
     -- and continue totalling for other ones.
 
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
+    v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in doc_list_aiud => sp_add_invnt_log
     -- bit#1 := 1 ==> perform calls of srv_catch_neg_remainders from invnt_turnover_log_ai
     --                (instead of totalling turnovers to `invnt_saldo` table)

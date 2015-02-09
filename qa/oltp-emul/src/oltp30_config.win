@@ -10,14 +10,14 @@
 # If folder contain spaces, enclose in quotes each part 
 # of path that contain spaces, i.e.:
 # fbc=C:\"Program Files"\"Firebird 2.5.x"\bin
-# fbc=C:\"Program Files"\"Firebird 3.0.x"
+#	 fbc	 =C:\"Program Files"\"Firebird 3.0.x"\
 
-fbc=C:\firebird\fb25\bin
+fbc=C:\firebird\fb30
 
 # Folder where to store work and error logs, with or w/o trailing backslash.
 # Do NOT use "%" character for referencing to some windows environment
 # variables like TEMP, use "!" instead, or specify absolute path:
-tmpdir=!temp!\logs.oltp30
+tmpdir   =    !temp!\logs.oltp30   
 
 # is_embed=1 - if Firebird runs in embedded mode, otherwise 0
 is_embed=0
@@ -25,6 +25,7 @@ is_embed=0
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. No spaces or non-latin characters can be here!
+
 dbnm=/var/db/fb30/oltp30.fdb
 
 # Should 'SET TRANSACTION' command include NO AUTO UNDO clause ?
@@ -40,7 +41,7 @@ use_mtee=0
 # 1) make dumps of all data from tables when critical error occurs;
 # 2) make miscelaneous diagnostic queries via "Z_" views.
 # Value=1 will cause "oltp_misc_debug.sql" be called when build database.
-# NB: setting 'C_CATCH_MISM_BITSET' must have bit #2 = 1 when this value = 1.
+# NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
 # (see oltp_main_filling.sql)
 make_debug_dbos=0
 
