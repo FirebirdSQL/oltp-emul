@@ -25,6 +25,7 @@ is_embed=0
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. No spaces or non-latin characters can be here.
+
 dbnm=/var/db/fb25/oltp25.fdb
 
 # Should 'SET TRANSACTION' command include NO AUTO UNDO clause ?
@@ -33,14 +34,14 @@ no_auto_undo=1
 
 # Do we use mtee.exe utility to provide timestamps for error messages 
 # before they are logged in .err files ?
-use_mtee=0
+use_mtee=1
 
 # Do we want to create some DEBUG objects (tables, views and procedures)
 # in order to:
 # 1) make dumps of all data from tables when critical error occurs;
 # 2) make miscelaneous diagnostic queries via "Z_" views.
 # Value=1 will cause "oltp_misc_debug.sql" be called when build database.
-# NB: setting 'C_CATCH_MISM_BITSET' must have bit #2 = 1 when this value = 1.
+# NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
 # (see oltp_main_filling.sql)
 make_debug_dbos=0
 
@@ -65,7 +66,7 @@ init_buff=32768
 # Should script be PAUSED after finish creating <init_docs> documents ?
 # Value = 1 can be set for making copy of .fdb and restore initial database
 # it on the following runs thus avoiding creation of <init_docs> again:
-wait_for_copy=0
+wait_for_copy=1
 
 # Time (in minutes) to warm-up database after initial data population
 # will finish and before all following operations will be measured:

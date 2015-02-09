@@ -34,7 +34,7 @@ use_mtee=0
 # 1) make dumps of all data from tables when critical error occurs;
 # 2) make miscelaneous diagnostic queries via "Z_" views.
 # Value=1 will cause "oltp_misc_debug.sql" be called when build database.
-# NB: setting 'C_CATCH_MISM_BITSET' must have bit #2 = 1 when this value = 1.
+# NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
 # (see oltp_main_filling.sql)
 make_debug_dbos=0
 

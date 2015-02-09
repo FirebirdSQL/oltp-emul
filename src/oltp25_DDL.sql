@@ -304,7 +304,7 @@ create sequence g_common;
 create sequence g_doc_data;
 create sequence g_perf_log;
 create sequence g_init_pop;
--- 03.09.2014 1935: refactoring of sp_make_qty_storno
+-- 03.09.2014 1935: refactoring of s`p_make_qty_storno
 -- (avoid call of sp_mult_rows_for_qdistr: replace it with update-in-line in qdistr with
 -- explicit increment ID via gen_id)
 create sequence g_qdistr;
@@ -657,7 +657,7 @@ recreate table doc_data(
   ,cost_retail dm_cost default 0
   ,dts_edit timestamp -- last modification timestamp; do NOT use `default 'now'` here!
   -- finally dis 09.01.2015, not needed for this table: 
-  -- restored 07.02.2015: PK violations detected when C_MAKE_QTY_STORNO_MODE = 'UPD_ROW'
+  -- restored 07.02.2015: PK violations detected when QDISTR_HANDLING_MODE = 'UPD_ROW'
   ,constraint pk_doc_data primary key(id) using index pk_doc_data
   ,constraint doc_data_doc_ware_unq unique(doc_id, ware_id) using index doc_data_doc_ware_unq
   ,constraint doc_data_qty_cost_both check ( qty>0 and cost_purchase>0 and cost_retail>0 or qty = 0 and cost_purchase = 0 and cost_retail=0 )
@@ -2684,13 +2684,7 @@ begin
     -- [only when TIL = RC] Repeats <fn_internal_retry_count()> times if result is null
     -- (possible if bounds of IDs has been changed since previous call)
 
-    v_this = trim(a_view_for_search) || ' (' || v_this||')';
-
-    if ( a_raise_exc = 1 ) then
-    begin
-        -- add to performance log timestamp about start/finish this unit:
-        execute procedure sp_add_perf_log(1, v_this);
-    end
+    v_this = trim(a_view_for_search);
 
     -- max difference b`etween min_id and max_id to allow scan random id via
     -- select id from <a_view_for_search> rows :x to :y, where x = y = random_int
@@ -2708,13 +2702,23 @@ begin
        rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) is null
      ) then
     begin
+        execute procedure sp_add_perf_log(1, a_view_for_min_id );
+        -- v`iew z_get_min_max_id may be used to see average, min and max elapsed time
+        -- of this sttm:
         v_stt='select min(id)-0.5 from '|| a_view_for_min_id;
-        execute statement (:v_stt) into id_min;
+        execute statement (:v_stt) into id_min; -- do via ES in order to see statistics in the TRACE!
+        execute procedure sp_add_perf_log(0, a_view_for_min_id, null, 'id_min='||coalesce(id_min,'<?>') );
 
         if ( id_min is NOT null ) then -- ==> source <a_view_for_min_id> is NOT empty
         begin
+
+            execute procedure sp_add_perf_log(1, a_view_for_max_id );
+            -- v`iew z_get_min_max_id may be used to see average, min and max elapsed time
+            -- of this sttm:
             v_stt='select max(id)+0.5 from '|| a_view_for_max_id;
-            execute statement (:v_stt) into id_max;
+            execute statement (:v_stt) into id_max; -- do via ES in order to see statistics in the TRACE!
+            execute procedure sp_add_perf_log(0, a_view_for_max_id, null, 'id_max='||coalesce(id_max,'<?>') );
+
             if ( id_max is NOT null  ) then -- ==> source <a_view_for_max_id> is NOT empty
             begin
                 -- Save values for subsequent calls of this func in this tx (minimize DB access)
@@ -2758,7 +2762,11 @@ begin
                 v_stt = v_stt || iif(a_find_using_desc_index = 0, ' order by id     ', ' order by id desc');
             v_stt = v_stt || ' rows 1';
             id_random = cast( id_min + rand() * (id_max - id_min) as bigint);
+
+            -- execute procedure sp_add_perf_log(1, a_view_for_search );
+            -- do via ES in order to see statistics in the TRACE:
             execute statement (:v_stt) (x := id_random) into id_selected;
+            -- execute procedure sp_add_perf_log(0, a_view_for_search, null, 'id_sel='||coalesce(id_selected,'<?>') );
         end
 
     if ( id_selected is null and coalesce(a_raise_exc, 1) = 1 ) then
@@ -2777,13 +2785,6 @@ begin
     end
 
     result = id_selected;
-
-    if ( a_raise_exc = 1 ) then
-    begin
-        -- add to performance log timestamp about start/finish this unit
-        -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
-        execute procedure sp_add_perf_log(0, v_this, null);
-    end
 
     suspend;
 
@@ -4749,8 +4750,8 @@ begin
         end
     end
 
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
-    -- See oltp_main_filling.sql for definition of bitset var `C_CATCH_MISM_BITSET`:
+    v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
+    -- See oltp_main_filling.sql for definition of bitset var `QMISM_VERIFY_BITSET`:
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in d`oc_list_aiud => sp_add_invnt_log
     --                in order to register mismatches b`etween doc_data.qty and total number of rows
     --                in qdistr + qstorned for doc_data.id
@@ -4827,7 +4828,7 @@ declare v_id bigint;
 begin
     -- called from d`oc_list_aiud
     -- #########################
-    -- See oltp_main_filling.sql for definition of bitset var `C_CATCH_MISM_BITSET`:
+    -- See oltp_main_filling.sql for definition of bitset var `QMISM_VERIFY_BITSET`:
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in d`oc_list_aiud => sp_add_invnt_log
     --                in order to register mismatches b`etween doc_data.qty and total number of rows
     --                in qdistr + qstorned for doc_data.id
@@ -4835,7 +4836,7 @@ begin
     --                (instead of totalling turnovers to `invnt_saldo` table)
     -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
     --                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
+    v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
     if ( bin_and( v_catch_bitset, 2 ) = 0 ) then -- job of this SP meaningless because of totalling
         --####
           exit;
@@ -5079,6 +5080,10 @@ where not exists(select * from tmp$shopping_cart c where c.id = a.id)
 -- Performance increased from ~1250 up to ~2000 bop / minute (!)
 ------------------------------
 
+-- ############## A V L => R E S ###############
+-- Views for operation 'Create customer reserve from AVALIABLE remainders'
+-- #############################################
+
 create or alter view v_random_find_avl_res
 as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
@@ -5146,7 +5151,10 @@ where
 order by w.id desc
 rows 1;
 
----------------
+-- ############## C L O => O R D ###############
+-- Views for operation 'Create order to SUPPLIER on the basis of CUSTOMER orders'
+-- #############################################
+
 create or alter view v_random_find_clo_ord as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
 -- source for random choise record from client order to be added into supplier order
@@ -5203,8 +5211,9 @@ from wares w
 order by w.id desc
 rows 1;
 
-
--------------
+-- ############## O R D => S U P ###############
+-- Views for operation 'Create invoice from supplier on the basis of OUR orders to him'
+-- #############################################
 
 create or alter view v_random_find_ord_sup as
 -- 08.07.2014. used in dynamic sql in fn_get_random_id, see it's call in sp_fill_shopping_cart
@@ -5263,7 +5272,9 @@ where
 order by id desc
 rows 1;
 
---------------------------
+-- ############## C L O => R E S ###############
+-- Views for operation 'Create reserve based on client order'
+-- #############################################
 
 create or alter view v_random_find_clo_res as
 -- plan in 2.5 (checked 02.12.2014):
@@ -5966,7 +5977,7 @@ begin
          )
        ) then
     begin
-        v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
+        v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
         if ( bin_and( v_catch_bitset, 1 ) <> 0 ) then
         begin
             -- check that number of rows in qdistr+qstorned exactly equals
@@ -6554,10 +6565,22 @@ begin
     where r.snd_optype_id = :a_optype_id
     into v_next_rcv_op;
 
+    -- `v_internal_qty_storno_mode` ==> how we handle rows in QDistr (defined by SETTINGS table):
+    -- 'DEL_INS' ==> delete record (which is to be 'moved' into QStorned) and INSERT record with data from NEW doc;
+    -- 'UPD_ROW' ==> UPDATE record in QDistr with data from NEW dow (old data are 'moved' into QStorned).
+    v_internal_qty_storno_mode = rdb$get_context('USER_SESSION','QDISTR_HANDLING_MODE');
+    if (v_internal_qty_storno_mode not in ('DEL_INS', 'UPD_ROW')  ) then
+        exception ex_context_var_not_found; --  using ('QDISTR_HANDLING_MODE');
+
+    v_this = v_this || '_mode_' || v_internal_qty_storno_mode;
+
     -- doc_list.id must be defined PRELIMINARY, before cursor that handles with qdistr:
     v_dh_new_id = gen_id(g_common, 1);
 
-    v_info = 'op='||a_optype_id ||', next_op='||coalesce(v_next_rcv_op,'<?>')||coalesce(', clo='||a_client_order_id, '');
+    v_info =
+        'op='||a_optype_id
+        ||', next_op='||coalesce(v_next_rcv_op,'<?>')
+        ||coalesce(', clo='||a_client_order_id, '');
     execute procedure sp_add_perf_log(1, v_this, null, v_info);
 
     v_qty_could_storn = 0;
@@ -6578,9 +6601,6 @@ begin
     v_gen_inc_last_nt = gen_id( g_common, :c_gen_inc_step_nt );-- take bulk IDs at once (reduce lock-contention for GEN page)
 
     v_sign = iif( bin_and(current_transaction, 1)=0, 1, -1);
-    v_internal_qty_storno_mode = rdb$get_context('USER_SESSION','C_MAKE_QTY_STORNO_MODE');
-    if (v_internal_qty_storno_mode not in ('DEL_INS', 'UPD_ROW')  ) then
-        exception ex_context_var_not_found; -- using ('C_MAKE_QTY_STORNO_MODE');
 
     -- rules_for_qdistr.storno_sub = 2 - storno data of clo when creating customer RESERVE:
     -- MODE              SND_OPTYPE_ID    RCV_OPTYPE_ID    STORNO_SUB
@@ -6602,7 +6622,7 @@ begin
         v_dd_dbkey = iif(v_storno_sub=1,  null, v_dd_dbkey);
         v_dd_new_id = iif(v_storno_sub=1,  null, v_dd_new_id);
 
-        v_qty_storned_acc = 0;
+        v_qty_storned_acc = 0; -- how many units will provide required Qty from CURRENT LINE of shopping cart
         v_doc_data_purchase_sum = 0;
         v_doc_data_retail_sum = 0;
 
@@ -6633,103 +6653,113 @@ begin
                 ||iif( v_storno_sub = 1, 'c_make_amount_distr_1', 'c_make_amount_distr_2')
                 ||', qd.id='||v_cq_id;
             v_rows = v_rows + 1; -- total number of ATTEMPTS to lock record (4log)
--- WRONG! dups in doc_data PK!
---            if ( v_storno_sub = 1 and v_qty_storned_acc = 0) then
---            begin -- calculate subsequent value for doc_data.id from previously obtained batch:
---                v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
---                v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
---            end
+
+            -- make increment of `v_gen_inc_iter_**` BEFORE any lock-conflict statements
+            -- (otherwise duplicates will appear in ID because of suppressing lock-conflict ex`c.)
+            if ( v_storno_sub = 1 ) then
+            begin -- calculate subsequent value for doc_data.id from previously obtained batch:
+                if ( v_gen_inc_iter_qd >= c_gen_inc_step_qd ) then -- its time to get another batch of IDs
+                begin
+                    v_gen_inc_iter_qd = 1;
+                    -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
+                    v_gen_inc_last_qd = gen_id( g_qdistr, :c_gen_inc_step_qd );
+                end
+
+                if ( v_qty_storned_acc = 0 ) then
+                begin
+                    -- NO rows could be locked in QDistr (by now) for providing
+                    -- QTY from current line of shopping cart ==> we did not yet
+                    -- inserted row into doc_data with :v_ware_id ==> get subseq.
+                    -- value for :v_dd_new_id from `pool`:
+                    if ( v_gen_inc_iter_dd >= c_gen_inc_step_dd ) then -- its time to get another batch of IDs
+                    begin
+                        v_gen_inc_iter_dd = 1;
+                        -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
+                        v_gen_inc_last_dd = gen_id( g_doc_data, :c_gen_inc_step_dd );
+                    end
+                    v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
+                    v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
+                end
+            end
 
             if ( v_internal_qty_storno_mode = 'UPD_ROW' ) then
-                begin
-                    if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
-                        begin
-                            if ( v_qty_storned_acc = 0) then
-                            begin -- calculate subsequent value for doc_data.id from previously obtained batch:
-                                v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
-                                v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
-                            end
-
-                            v_inserting_table = 'qdistr';
-                            v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
-                            v_inserting_info = v_inserting_info
-                                ||', try upd QD: id='||v_inserting_id
-                                ||', g_last='||v_gen_inc_last_qd
-                                ||', g_step='||c_gen_inc_step_qd
-                                ||', g_iter='||v_gen_inc_iter_qd
-                                ;
-
-                            --v_dd_new_id = iif( v_qty_storned_acc = 0, gen_id(g_d`oc_data, 1), v_dd_new_id);
-                            -- 03.09.2014 19:35: update-in-place instead of call sp_multiply_rows_for_qdistr
-                            -- which inserts (NB! trigger qdistr_bi instead autogen PK `id` need now):
-                            update qdistr q set
-                                 q.id = :v_inserting_id -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
-                                ,q.doc_id = :v_dh_new_id -- :doc_list_id
-                                ,q.snd_optype_id = :a_optype_id
-                                ,q.rcv_optype_id = :v_next_rcv_op
-                                ,q.snd_id = :v_dd_new_id
-                                ,q.trn_id = current_transaction
-                                ,q.dts = 'now'
-                            where current of c_make_amount_distr_1;  ----------------------- lock_conflict can occur here
-                            v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
-
-                        end --  v_storno_sub = 1
-                    else
-                        begin
-                            delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
-                        end
-                end
-            else if ( v_internal_qty_storno_mode = 'DEL_INS' ) then
-                begin
-                    -- we can move delete sttmt BEFORE insert because of using explicit
-                    -- cursor with fetch into declared vars:
-                    if ( v_storno_sub = 1 ) then
-                        delete from qdistr q where current of c_make_amount_distr_1; --- lock_conflict can occur here
-                    else
-                        delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
-
-                    if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
+            begin
+                if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
                     begin
-                        --v_dd_new_id = iif( v_qty_storned_acc = 0, gen_id(g`_doc_data, 1), v_dd_new_id);
-                        if ( v_qty_storned_acc = 0) then
-                        begin -- calculate subsequent value for doc_data.id from previously obtained batch:
-                            v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
-                            v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
-                        end
-
                         v_inserting_table = 'qdistr';
+                        -- iter=1: v_inserting_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
                         v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
                         v_inserting_info = v_inserting_info
-                            ||', try ins QD: id='||v_inserting_id
+                            ||', try upd QD: id='||v_inserting_id
                             ||', g_last='||v_gen_inc_last_qd
                             ||', g_step='||c_gen_inc_step_qd
                             ||', g_iter='||v_gen_inc_iter_qd
                             ;
-                        insert into qdistr(
-                            id,
-                            doc_id,
-                            ware_id,
-                            snd_optype_id,
-                            rcv_optype_id,
-                            snd_id,
-                            snd_qty,
-                            snd_purchase,
-                            snd_retail)
-                        values(
-                            :v_inserting_id, -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
-                            :v_dh_new_id,
-                            :v_ware_id,
-                            :a_optype_id,
-                            :v_next_rcv_op,
-                            :v_dd_new_id,
-                            :v_cq_snd_qty,
-                            :v_cq_snd_purchase,
-                            :v_cq_snd_retail
-                        );
+
+                        update qdistr q set
+                             q.id = :v_inserting_id
+                            ,q.doc_id = :v_dh_new_id
+                            ,q.snd_optype_id = :a_optype_id
+                            ,q.rcv_optype_id = :v_next_rcv_op
+                            ,q.snd_id = :v_dd_new_id
+                            ,q.trn_id = current_transaction
+                            ,q.dts = 'now'
+                        where current of c_make_amount_distr_1;  ----------------------- lock_conflict can occur here
                         v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
-                        v_inserting_info = v_inserting_info || ' - ok';
+
                     end --  v_storno_sub = 1
-                end -- v_internal_qty_storno_mode = 'DEL_INS' (better performance vs 'UPD_ROW'!)
+                else
+                    begin
+                        delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
+                    end
+            end
+            -------------------------------------------------------
+            else if ( v_internal_qty_storno_mode = 'DEL_INS' ) then
+            -------------------------------------------------------
+            begin
+                -- we can move delete sttmt BEFORE insert because of using explicit cursor and
+                -- fetch old data (which is to be moved into QStorned) into declared vars:
+                if ( v_storno_sub = 1 ) then
+                    delete from qdistr q where current of c_make_amount_distr_1; --- lock_conflict can occur here
+                else
+                    delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
+
+                if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
+                begin
+                    v_inserting_table = 'qdistr';
+                    -- iter=1: v_inserting_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
+                    v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
+                    v_inserting_info = v_inserting_info
+                        ||', try ins QD: id='||v_inserting_id
+                        ||', g_last='||v_gen_inc_last_qd
+                        ||', g_step='||c_gen_inc_step_qd
+                        ||', g_iter='||v_gen_inc_iter_qd
+                        ;
+                    insert into qdistr(
+                        id,
+                        doc_id,
+                        ware_id,
+                        snd_optype_id,
+                        rcv_optype_id,
+                        snd_id,
+                        snd_qty,
+                        snd_purchase,
+                        snd_retail)
+                    values(
+                        :v_inserting_id,
+                        :v_dh_new_id,
+                        :v_ware_id,
+                        :a_optype_id,
+                        :v_next_rcv_op,
+                        :v_dd_new_id,
+                        :v_cq_snd_qty,
+                        :v_cq_snd_purchase,
+                        :v_cq_snd_retail
+                    );
+                    v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
+                    v_inserting_info = v_inserting_info || ' - ok';
+                end --  v_storno_sub = 1
+            end -- v_internal_qty_storno_mode = 'DEL_INS' (better performance vs 'UPD_ROW'!)
 
             v_inserting_table = 'qstorned';
             v_inserting_id =  v_cq_id;
@@ -6755,21 +6785,9 @@ begin
 
             v_qty_storned_acc = v_qty_storned_acc + v_cq_snd_qty; -- ==> will be written in doc_data.qty (actual amount that could be gathered)
             v_lock = v_lock + 1; -- total number of SUCCESSFULY locked records
+
             if ( v_storno_sub = 1 ) then
             begin
-                if ( v_gen_inc_iter_qd = c_gen_inc_step_qd ) then -- its time to get another batch of IDs
-                begin
-                    v_gen_inc_iter_qd = 1;
-                    -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
-                    v_gen_inc_last_qd = gen_id( g_qdistr, :c_gen_inc_step_qd );
-                end
-
-                if ( v_gen_inc_iter_dd = c_gen_inc_step_dd ) then -- its time to get another batch of IDs
-                begin
-                    v_gen_inc_iter_dd = 1;
-                    -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
-                    v_gen_inc_last_dd = gen_id( g_doc_data, :c_gen_inc_step_dd );
-                end
                 -- increment sums that will be written into doc_data line:
                 v_qty_could_storn = v_qty_could_storn + v_cq_snd_qty;
                 v_doc_data_purchase_sum = v_doc_data_purchase_sum + v_cq_snd_purchase;

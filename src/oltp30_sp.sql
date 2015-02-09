@@ -419,6 +419,13 @@ begin
             v_gen_inc_last_dd = gen_id( g_doc_data, :c_gen_inc_step_dd );
         end
         v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
+
+--        rdb$set_context('USER_TRANSACTION','DBG_DD_D',
+--              'v_dd_new_id='||v_dd_new_id
+--            ||', v_last_dd='||v_gen_inc_last_dd
+--            ||', c_step_dd='||c_gen_inc_step_dd
+--            ||', v_iter_dd='||v_gen_inc_iter_dd
+--        );
         v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
 
         if ( v_gen_inc_iter_nt = c_gen_inc_step_nt ) then -- its time to get another batch of IDs
@@ -1052,6 +1059,7 @@ begin
     v_oper_invoice_add =  fn_oper_invoice_add();
     v_oper_order_by_customer = fn_oper_order_by_customer();
     v_oper_retail_reserve = fn_oper_retail_reserve();
+    qty_sum = 0; -- out arg
     for
         select
             d.ware_id,
@@ -1198,7 +1206,7 @@ begin
                 );
         end
 
-
+    v_qty_sum = 0;
     while (1=1) do begin -- ...............   m a i n   l o o p  .................
   
         delete from tmp$shopping_cart where 1=1;
@@ -1238,15 +1246,17 @@ begin
         --    amounts in tmp$shopping_cart, in FIFO manner.
         -- 2. Perform "STORNING" of them (moves these rows from QDISTR to QSTORNED)
         -- 3. Create new document: header (doc_list) and detalization (doc_data).
-        execute procedure sp_make_qty_storno(
-            fn_oper_retail_reserve()
-            ,v_agent_id
-            ,fn_doc_open_state()
-            ,a_client_order_id
-            ,v_rows_added
-            ,v_qty_sum
-        ) returning_values doc_list_id; -- out arg
-
+        if ( v_qty_sum > 0 ) then
+        begin
+            execute procedure sp_make_qty_storno(
+                fn_oper_retail_reserve()
+                ,v_agent_id
+                ,fn_doc_open_state()
+                ,a_client_order_id
+                ,v_rows_added
+                ,v_qty_sum
+            ) returning_values doc_list_id; -- out arg
+        end
         leave;
 
     end -- while (1=1) -- ...............   m a i n   l o o p  .................
@@ -2957,7 +2967,7 @@ begin
     -- and SKIP problem wares (with logging first ware which has neg. remainder)
     -- and continue totalling for other ones.
 
-    v_catch_bitset = cast(rdb$get_context('USER_SESSION','C_CATCH_MISM_BITSET') as bigint);
+    v_catch_bitset = cast(rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as bigint);
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in doc_list_aiud => sp_add_invnt_log
     -- bit#1 := 1 ==> perform calls of srv_catch_neg_remainders from invnt_turnover_log_ai
     --                (instead of totalling turnovers to `invnt_saldo` table)

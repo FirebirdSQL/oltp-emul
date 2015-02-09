@@ -245,9 +245,34 @@ echo Start at: %date% %time%>>%sts%
     del !psql! 2>nul
     set plog=%log4all%
 
-    echo set width business_action 24;>>!psql!
-    echo set width itrv_beg 8;>>!psql!
-    echo set width itrv_end 8;>>!psql!
+    echo set width category 12;        >>!psql!
+    echo set width setting 32;         >>!psql!
+    echo set width val 20;             >>!psql!
+
+    echo select s.working_mode as category, s.mcode as setting, s.svalue as val >>!psql!
+    echo from settings s                                            >>!psql!
+    echo where s.working_mode='COMMON'                              >>!psql!
+    echo union all                                                  >>!psql!
+    echo select s.working_mode, s.mcode as setting, s.svalue        >>!psql!
+    echo from settings s                                            >>!psql!
+    echo join (                                                     >>!psql!
+    echo     select s.svalue as working_mode                        >>!psql!
+    echo     from settings s where s.working_mode = 'INIT'          >>!psql!
+    echo ^) w on s.working_mode = w.working_mode;                   >>!psql!
+
+    echo.>>!plog!
+    echo I. All used settings for this test run:>>!plog!
+    echo.>>!plog!
+    set run_isql=%fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i !psql! -user %usr% -pas %pwd% -m
+    cmd /c !run_isql! 1>>!plog! 2>>&1
+    del !psql! 2>nul
+
+    @rem ------------------------------------------------------------------------------
+
+    echo set width business_action 24; >>!psql!
+    echo set width itrv_beg 8;         >>!psql!
+    echo set width itrv_end 8;         >>!psql!
+
     echo -- Set TIL = RC for SP srv_mon_perf_dynamic could see data>>!psql!
     echo -- in perf_all table when perf_log is VIEW and is PARTITIONED.>>!psql!
     echo -- See source code of all report SRV_MON_*** procedures:>>!psql!
@@ -272,7 +297,7 @@ echo Start at: %date% %time%>>%sts%
     echo show version;>>!psql!
 
     echo.>>!plog!
-    echo I. Analyze performance log:>>!plog!
+    echo II. Analyze performance log:>>!plog!
     echo.>>!plog!
     set run_isql=%fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i !psql! -user %usr% -pas %pwd% -m
     echo !run_isql! >>!plog!
@@ -284,9 +309,11 @@ echo Start at: %date% %time%>>%sts%
     echo This report is result of:>>!plog!
     type !psql!>>!plog!
     del !psql! 2>nul
+    
+    @rem ------------------------------------------------------------------------------
 
     echo.>>!plog!
-    echo II. Obtain database statistics:>>!plog!
+    echo III. Obtain database statistics:>>!plog!
     echo.>>!plog!
     set run_fbs=%fbc%\fbsvcmgr %host%/%port%:service_mgr -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname %dbnm%
     echo !run_fbs!>>!plog!
