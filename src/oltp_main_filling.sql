@@ -280,7 +280,7 @@ insert into settings(working_mode, mcode,         svalue)
 -- 'DEL_INS' ==> delete OLD from qdistr; insert data of OLD into qstorno; insert NEW into qdistr
 -- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
 -- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
--- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10% - see qty_storno_benchmark_upd_row_vs_del_ins-30ss-100att-120min.xls
+-- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10%. Confirmed 10.02.2015.
 insert into settings(working_mode, mcode,         svalue)
               values('COMMON',     'QDISTR_HANDLING_MODE',  'DEL_INS');
 
