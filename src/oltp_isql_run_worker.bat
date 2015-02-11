@@ -245,6 +245,27 @@ echo Start at: %date% %time%>>%sts%
     del !psql! 2>nul
     set plog=%log4all%
 
+
+    #############################################################################################
+    ### w a s    t e s t    f i n i s h e d    w i t h    "c r i t i c a l     e r r o r s" ? ###
+    #############################################################################################
+    echo.>>!psql!
+    echo set heading off;set list on; select '' as "Was test finished OK ?" from rdb$database; set list off;set heading on;>>!psql!
+    echo set list on;                                                       >>!psql!
+    echo select iif( (select count(*^) from z_halt_log^) = 0                >>!psql!
+    echo             ,'ALL OK, job stop reason: NORMAL (due to timeout^), view Z_HALT_LOG is empty'  >>!psql!
+    echo             ,'BAD NEWS. At least one critical error found, check data in view Z_HALT_LOG'  >>!psql!
+    echo           ^) as "Test finish result:"                              >>!psql!
+    echo from rdb$database;                                                 >>!psql!
+    echo set list off;                                                      >>!psql!
+    echo.>>!psql!
+
+    ###############################################
+    ### o u t p u t    a l l   s e t t i n g s  ###
+    ###############################################
+
+    echo set heading off;set list on; select '' as "All test settings:" from rdb$database; set list off;set heading on;>>!psql!
+
     echo set width category 12;        >>!psql!
     echo set width setting 32;         >>!psql!
     echo set width val 20;             >>!psql!
@@ -260,14 +281,15 @@ echo Start at: %date% %time%>>%sts%
     echo     from settings s where s.working_mode = 'INIT'          >>!psql!
     echo ^) w on s.working_mode = w.working_mode;                   >>!psql!
 
-    echo.>>!plog!
-    echo I. All used settings for this test run:>>!plog!
-    echo.>>!plog!
     set run_isql=%fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i !psql! -user %usr% -pas %pwd% -m
     cmd /c !run_isql! 1>>!plog! 2>>&1
     del !psql! 2>nul
 
     @rem ------------------------------------------------------------------------------
+
+    ###############################################
+    ###  p e r f o r m a n c e    r e p o r t s ###
+    ###############################################
 
     echo set width business_action 24; >>!psql!
     echo set width itrv_beg 8;         >>!psql!
@@ -280,6 +302,9 @@ echo Start at: %date% %time%>>%sts%
     echo.>>!psql!
     echo -- 1. Get performance report with splitting data to 10 equal time intervals,>>!psql!
     echo --    for last 3 hours of activity:>>!psql!
+
+    echo set heading off;set list on; select '' as "Performance in DYNAMIC:" from rdb$database; set list off;set heading on;>>!psql!
+
     echo select business_action,interval_no,cnt_ok_per_minute,cnt_all,cnt_ok,cnt_err,err_prc >>!psql!
     echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg >>!psql!
     echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end >>!psql!
@@ -287,6 +312,9 @@ echo Start at: %date% %time%>>%sts%
     echo where p.business_action containing 'interval' and p.business_action containing 'overall';>>!psql!
     echo commit;>>!psql!
     echo.>>!psql!
+
+    echo set heading off;set list on; select '' as "Performance TOTAL:" from rdb$database; set list off;set heading on;>>!psql!
+    
     echo -- 2. Get overall performance report for last 3 hours of activity:>>!psql!
     echo --    Value in column "avg_times_per_minute" in 1st row is overall performance index.>>!psql!
     echo set width business_action 35;>>!psql!
@@ -297,7 +325,7 @@ echo Start at: %date% %time%>>%sts%
     echo show version;>>!psql!
 
     echo.>>!plog!
-    echo II. Analyze performance log:>>!plog!
+    echo Analyze performance log:>>!plog!
     echo.>>!plog!
     set run_isql=%fbc%\isql %host%/%port%:%dbnm% -now -q -n -pag 9999 -i !psql! -user %usr% -pas %pwd% -m
     echo !run_isql! >>!plog!
@@ -313,7 +341,7 @@ echo Start at: %date% %time%>>%sts%
     @rem ------------------------------------------------------------------------------
 
     echo.>>!plog!
-    echo III. Obtain database statistics:>>!plog!
+    echo Obtain database statistics:>>!plog!
     echo.>>!plog!
     set run_fbs=%fbc%\fbsvcmgr %host%/%port%:service_mgr -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname %dbnm%
     echo !run_fbs!>>!plog!
