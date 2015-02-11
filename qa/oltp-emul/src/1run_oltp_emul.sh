@@ -1395,6 +1395,6 @@ echo
 
 for i in `seq $winq`
 do
-    sh ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i}&
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i}&
 done
 echo Done script $0
