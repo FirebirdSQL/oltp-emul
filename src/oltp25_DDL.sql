@@ -3570,6 +3570,7 @@ as
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_nt and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_nt)
     declare v_this dm_dbobj = 'sp_kill_qstorno_ret_qs2qd';
+    declare v_call dm_dbobj;
     declare v_info dm_info;
     declare v_suffix dm_info;
     declare i int  = 0;
@@ -3656,6 +3657,7 @@ begin
     -- 1) sp_cancel_wroff (a_deleting = 0!) or
     -- 2) all doc removals (sp_cancel_xxx, a_deleting = 1)
 
+    v_call = v_this;
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this,null);
 
@@ -3676,8 +3678,10 @@ begin
     v_ret_cursor = iif(a_old_optype <> v_oper_retail_realization, 'c_ret_qs2qd_by_rcv', 'c_ret_qs2qd_by_snd');
 
     -- return from QStorned to QDistr records which were previously moved
-    -- (when currently deleting doc was created):
-    open c_dd_rows_for_doc; -- use explicitly declared cursor for immediate removing row from doc_data when document is to be deleted
+    -- (when currently deleting doc was created).
+    -- Use explicitly declared cursor for immediate removing row from doc_data
+    -- when document is to be deleted:
+    open c_dd_rows_for_doc;
     while (1=1) do
     begin
         fetch c_dd_rows_for_doc
@@ -3738,31 +3742,44 @@ begin
             if ( row_count = 0 ) then leave;
             i = i+1; -- total number of processed rows
 
-            v_suffix =
-                ', id=' || :v_id || ', doc_id=' || :v_doc_id
-                || ', input args: a_doc_id='||a_doc_id
-                || ', a_old_optype='||a_old_optype
-            ;
+            v_suffix = ', id=' || :v_id || ', doc_id=' || :v_doc_id;
 
+            -- debug info for logging in srv_log_dups_qd_qs if PK
+            -- violation will occur on INSERT INTO QDISTR statement
+            -- (remained for possible analysis):
+            v_call = v_this || ':try_del_qstorned';
             v_info = v_ret_cursor
                 || ': try DELETE in qStorned'
                 || ' where ' || iif(v_ret_cursor = 'c_ret_qs2qd_by_rcv', 'rcv_id =', 'snd_id =') || :v_dd_id
                 || v_suffix
             ;
 
-            -- we can try to delete record in QStorned *before* inserting
+            -- We can try to delete record in QStorned *before* inserting
             -- data in QDistr: all fields from cursor now are in variables.
             -- ::: NB ::: (measurements 28.01-05.02.2015)
             -- replacing qStorned with "unioned-view" based on N tables
             -- and applying "where id = :a" leads to performance DEGRADATION
-            -- due to need to have index on ID field.
+            -- due to need to have index on ID field in each underlying table.
+
+            -- execute procedure sp_add_perf_log(1, v_call, null, v_info, v_id); -- 10.02.2015, debug
+            -- rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_TRY_DEL_QSTORNO_ID', v_id);
+
             if ( a_old_optype <> v_oper_retail_realization ) then
                 delete from qstorned where current of c_ret_qs2qd_by_rcv;
             else
                 delete from qstorned where current of c_ret_qs2qd_by_snd;
 
-            -- for logging in autonomous Tx if PK violation occurs in subsequent sttmt:
+            --rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_OK_DEL_QSTORNO_ID', v_id);
+            --execute procedure sp_add_perf_log(0, v_call);
+
+            -- debug info for logging in srv_log_dups_qd_qs if PK
+            -- violation will occur on INSERT INTO QDISTR statement
+            -- (remained for possible analysis):
             v_info = v_ret_cursor || ': try INSERT in qDistr' || v_suffix;
+            v_call = v_this || ':try_ins_qdistr';
+
+            -- execute procedure sp_add_perf_log(1, v_call, null, v_info, v_id); -- 10.02.2015, debug
+            -- rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_TRY_INS_QDISTR_ID', v_id);
 
             insert into qdistr(
                 id,
@@ -3794,11 +3811,19 @@ begin
                 ,:v_rcv_purchase
                 ,:v_rcv_retail
             );
+            --rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_OK_INS_QDISTR_ID', v_id);
+            --execute procedure sp_add_perf_log(0, v_call);
+
         when any do
             begin
                 if ( (select result from fn_is_uniqueness_trouble(gdscode)) = 1 ) then
-                    -- temply, 09.10.2014 2120: resume investigate trouble with PK violation
-                    execute procedure srv_log_dups_qd_qs(
+                    -- ###############################################
+                    -- PK violation on INSERT INTO QDISTR, log this:
+                    -- ###############################################
+                    -- 12.02.2015: the reason of PK violations is unpredictable order
+                    -- of UNDO, ultimately explained by dimitr, see letters in e-mail.
+                    -- Also: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1142271&msg=17257984
+                    execute procedure srv_log_dups_qd_qs( -- 09.10.2014: add log info using auton Tx
                         :v_this,
                         gdscode,
                         'qdistr',
@@ -3808,6 +3833,7 @@ begin
 
                 exception; -- ::: nb ::: anonimous but in when-block!
             end
+
         end -- cursor c_ret_qs2qd_by  _rcv | _snd
 
         if ( a_old_optype <> v_oper_retail_realization ) then
@@ -3827,7 +3853,7 @@ begin
             ,doc_data_id
             ,optype_id
         ) values (
-             :v_gen_inc_last_nt - ( :c_gen_inc_step_nt - :v_gen_inc_iter_nt ) -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
+             :v_gen_inc_last_nt - ( :c_gen_inc_step_nt - :v_gen_inc_iter_nt )
             ,:v_dd_ware_id
             ,-(:v_dd_qty)
             ,-(:v_dd_cost)
@@ -3859,7 +3885,8 @@ begin
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
-    execute procedure sp_add_perf_log(0, v_this,null,v_info);
+    v_call = v_this;
+    execute procedure sp_add_perf_log(0, v_call,null,v_info);
 
 when any do
     begin
@@ -3870,7 +3897,7 @@ when any do
             '',
             gdscode,
             v_info, -- 'qs->qd, doc='||a_doc_id||': try ins qd.id='||coalesce(v_id,'<?>')||', v_dd_id='||coalesce(v_dd_id,'<?>'),
-            v_this,
+            v_call, -- ::: NB ::: do NOT use 'v_this' !! name of last started unit must be actual, see sp_add_to_abend_log!
             (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
         );
         --#######
@@ -6409,8 +6436,7 @@ as
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_dd and then restarts again from 1
     declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_dd)
     declare v_inserting_table dm_dbobj;
-    declare v_inserting_id type of dm_ids;
-    declare v_inserting_info dm_info = ''; -- temply, 02.10.2014: still trouble on PK violation (even after fix core-4565)
+    declare v_id type of dm_ids;
     declare v_curr_tx bigint;
     declare v_ware_id dm_ids;
     declare v_dh_new_id bigint;
@@ -6432,6 +6458,7 @@ as
     declare v_rcv_optype_id type of dm_ids;
     declare v_next_rcv_op type of dm_ids;
     declare v_this dm_dbobj = 'sp_make_qty_storno';
+    declare v_call dm_dbobj;
     declare v_info dm_info;
     declare v_rows int = 0;
     declare v_lock int = 0;
@@ -6546,6 +6573,12 @@ as
     declare v_internal_qty_storno_mode dm_name;
 begin
 
+    -- Issue about QDistr & QStorned: for each SINGLE record from doc_data with
+    -- qty=<N> table QDistr initially contains <N> DIFFERENT records (if no storning
+    -- yet occur for that amount from doc_data).
+    -- Each storning takes off some records from this set and "moves" them into
+    -- table QStorned. This SP *does* such storning.
+    ----------------------------------------------------------------------------
     -- Performs attempt to make distribution of AMOUNTS which were added to "sender" docs
     -- and then 'multiplied' (added in QDISTR table) using "value-to-rows"
     -- algorithm in sp_multiply_rows_for_qdistr. If some row is locked now,
@@ -6573,7 +6606,7 @@ begin
         exception ex_context_var_not_found; --  using ('QDISTR_HANDLING_MODE');
 
     v_this = v_this || '_mode_' || v_internal_qty_storno_mode;
-
+    v_call = v_this;
     -- doc_list.id must be defined PRELIMINARY, before cursor that handles with qdistr:
     v_dh_new_id = gen_id(g_common, 1);
 
@@ -6581,7 +6614,7 @@ begin
         'op='||a_optype_id
         ||', next_op='||coalesce(v_next_rcv_op,'<?>')
         ||coalesce(', clo='||a_client_order_id, '');
-    execute procedure sp_add_perf_log(1, v_this, null, v_info);
+    execute procedure sp_add_perf_log(1, v_call, null, v_info);
 
     v_qty_could_storn = 0;
     v_rows_added = 0;
@@ -6649,13 +6682,15 @@ begin
                     ,v_cq_trn_id,v_cq_dts;
 
             if ( row_count = 0 ) then leave;
-            v_inserting_info =  'fetch '
+            v_info =  'fetch '
                 ||iif( v_storno_sub = 1, 'c_make_amount_distr_1', 'c_make_amount_distr_2')
                 ||', qd.id='||v_cq_id;
-            v_rows = v_rows + 1; -- total number of ATTEMPTS to lock record (4log)
+            v_rows = v_rows + 1; -- total ATTEMPTS to make delete/update in QDistr
 
-            -- make increment of `v_gen_inc_iter_**` BEFORE any lock-conflict statements
+            -- ### A.C.H.T.U.N.G ###
+            -- Make increment of `v_gen_inc_iter_**` ALWAYS BEFORE any lock-conflict statements
             -- (otherwise duplicates will appear in ID because of suppressing lock-conflict ex`c.)
+            -- #####################
             if ( v_storno_sub = 1 ) then
             begin -- calculate subsequent value for doc_data.id from previously obtained batch:
                 if ( v_gen_inc_iter_qd >= c_gen_inc_step_qd ) then -- its time to get another batch of IDs
@@ -6687,17 +6722,20 @@ begin
                 if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
                     begin
                         v_inserting_table = 'qdistr';
-                        -- iter=1: v_inserting_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
-                        v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
-                        v_inserting_info = v_inserting_info
-                            ||', try upd QD: id='||v_inserting_id
-                            ||', g_last='||v_gen_inc_last_qd
-                            ||', g_step='||c_gen_inc_step_qd
-                            ||', g_iter='||v_gen_inc_iter_qd
-                            ;
+                        -- iter=1: v_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
+                        v_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
+
+                        -- debug info for logging in srv_log_dups_qd_qs if PK
+                        -- violation will occur on INSERT INTO QSTORNED statement
+                        -- (remained for possible analysis):
+                        v_call = v_this || ':try_upd_qdsub1';
+                        v_info = v_info || ', try UPD QDistr set id='||v_id;
+
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug, temply
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_UPD_QD_ID', v_id);
 
                         update qdistr q set
-                             q.id = :v_inserting_id
+                             q.id = :v_id
                             ,q.doc_id = :v_dh_new_id
                             ,q.snd_optype_id = :a_optype_id
                             ,q.rcv_optype_id = :v_next_rcv_op
@@ -6705,36 +6743,71 @@ begin
                             ,q.trn_id = current_transaction
                             ,q.dts = 'now'
                         where current of c_make_amount_distr_1;  ----------------------- lock_conflict can occur here
+
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_UPD_QD_ID', v_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+
                         v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
 
                     end --  v_storno_sub = 1
                 else
                     begin
+                        v_call = v_this || ':try_del_qdsub2';
+
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_TRY_DEL_QD_ID', v_cq_id);
+
                         delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
-                    end
+
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_OK_DEL_QD_ID', v_cq_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+                    end  --  v_storno_sub = 2
             end
             -------------------------------------------------------
             else if ( v_internal_qty_storno_mode = 'DEL_INS' ) then
             -------------------------------------------------------
             begin
                 -- we can move delete sttmt BEFORE insert because of using explicit cursor and
-                -- fetch old data (which is to be moved into QStorned) into declared vars:
+                -- fetch old fields data (which is to be moved into QStorned) into declared vars:
                 if ( v_storno_sub = 1 ) then
-                    delete from qdistr q where current of c_make_amount_distr_1; --- lock_conflict can occur here
+                    begin
+                        v_call = v_this || ':try_del_qdsub1';
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_DEL_QD_ID', v_cq_id);
+    
+                        delete from qdistr q where current of c_make_amount_distr_1; --- lock_conflict can occur here
+    
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_DEL_QD_ID', v_cq_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+                    end --  v_storno_sub = 1
                 else
-                    delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
+                    begin
+    
+                        v_call = v_this || ':try_del_qdsub2';
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info);
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_TRY_DEL_QD_ID', v_cq_id);
+    
+                        delete from qdistr q where current of c_make_amount_distr_2; --- lock_conflict can occur here
+    
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_OK_DEL_QD_ID', v_cq_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+                    end --  v_storno_sub = 2
 
                 if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
                 begin
                     v_inserting_table = 'qdistr';
-                    -- iter=1: v_inserting_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
-                    v_inserting_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
-                    v_inserting_info = v_inserting_info
-                        ||', try ins QD: id='||v_inserting_id
-                        ||', g_last='||v_gen_inc_last_qd
-                        ||', g_step='||c_gen_inc_step_qd
-                        ||', g_iter='||v_gen_inc_iter_qd
-                        ;
+                    -- iter=1: v_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
+                    v_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
+
+                    -- debug info for logging in srv_log_dups_qd_qs if PK
+                    -- violation will occur on INSERT INTO QSTORNED statement
+                    -- (remained for possible analysis):
+                    v_call = v_this || ':try_ins_qdsub1';
+                    v_info = v_info || ', try INSERT into QDistr id='||v_id;
+
+                    -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug
+                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_INS_QD_ID', v_id);
+
                     insert into qdistr(
                         id,
                         doc_id,
@@ -6746,7 +6819,7 @@ begin
                         snd_purchase,
                         snd_retail)
                     values(
-                        :v_inserting_id,
+                        :v_id,
                         :v_dh_new_id,
                         :v_ware_id,
                         :a_optype_id,
@@ -6756,14 +6829,27 @@ begin
                         :v_cq_snd_purchase,
                         :v_cq_snd_retail
                     );
+
+                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_INS_QD_ID', v_id);
+                    -- execute procedure sp_add_perf_log(0, v_call);
+
                     v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
-                    v_inserting_info = v_inserting_info || ' - ok';
+                    v_info = v_info || ' - ok';
                 end --  v_storno_sub = 1
             end -- v_internal_qty_storno_mode = 'DEL_INS' (better performance vs 'UPD_ROW'!)
 
             v_inserting_table = 'qstorned';
-            v_inserting_id =  v_cq_id;
-            v_inserting_info = v_inserting_info||', try ins QS: id='||:v_inserting_id;
+            v_id =  v_cq_id;
+
+            -- debug info for logging in srv_log_dups_qd_qs if PK
+            -- violation will occur on INSERT INTO QSTORNED statement
+            -- (remained for possible analysis):
+            v_info = v_info||', try INSERT into QStorned: id='||:v_id;
+            v_call = v_this || ':try_ins_qStorn';
+
+            -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug
+            -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_QSTORN_TRY_INS_QS_ID', v_id);
+
             insert into qstorned(
                 id,
                 doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
@@ -6773,7 +6859,7 @@ begin
                 rcv_id,
                 snd_purchase, snd_retail
             ) values (
-                :v_inserting_id
+                :v_id
                 ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
                 ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
                 ,:v_cq_rcv_optype_id
@@ -6781,7 +6867,11 @@ begin
                 ,:v_dd_new_id
                 ,:v_cq_snd_purchase,:v_cq_snd_retail
             );
-            v_inserting_info = v_inserting_info || ' - ok';
+
+            --rdb$set_context('USER_TRANSACTION','DBG_MAKE_QSTORN_OK_INS_QD_ID', v_id);
+            --execute procedure sp_add_perf_log(0, v_call);
+
+            v_info = v_info || ' - ok';
 
             v_qty_storned_acc = v_qty_storned_acc + v_cq_snd_qty; -- ==> will be written in doc_data.qty (actual amount that could be gathered)
             v_lock = v_lock + 1; -- total number of SUCCESSFULY locked records
@@ -6808,13 +6898,19 @@ begin
                     v_skip = v_skip + 1;
                 else
                     begin
+                        -- ###############################################
+                        -- PK violation on INSERT INTO QSTORNED, log this:
+                        -- ###############################################
                         if ( (select result from fn_is_uniqueness_trouble(gdscode)) = 1 ) then
+                            -- 12.02.2015: the reason of PK violations is unpredictable order
+                            -- of UNDO, ultimately explained by dimitr, see letters in e-mail.
+                            -- Also: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1142271&msg=17257984
                             execute procedure srv_log_dups_qd_qs( -- add log info in auton Tx
                                 :v_this,
                                 gdscode,
                                 :v_inserting_table,
-                                :v_inserting_id,
-                                :v_inserting_info
+                                :v_id,
+                                :v_info
                             );
 
                         exception; -- ::: nb ::: anonimous but in when-block!
@@ -6903,7 +6999,8 @@ begin
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
-    execute procedure sp_add_perf_log(0, v_this, null, 'dh='||coalesce(:doc_list_id,'<?>')||', qd ('||iif(:v_sign=1,'asc','dec')||'): capt='||v_lock||', skip='||v_skip||', scan='||v_rows||'; dd: add='||v_rows_added );
+    v_call = v_this;
+    execute procedure sp_add_perf_log(0, v_call, null, 'dh='||coalesce(:doc_list_id,'<?>')||', qd ('||iif(:v_sign=1,'asc','dec')||'): capt='||v_lock||', skip='||v_skip||', scan='||v_rows||'; dd: add='||v_rows_added );
 
     suspend;
 
@@ -6916,7 +7013,7 @@ when any do
             '',
             gdscode,
             v_info,
-            v_this,
+            v_call,
             (select result from fn_halt_sign(gdscode) ) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
         );
 

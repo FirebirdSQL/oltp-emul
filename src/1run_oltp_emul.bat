@@ -349,16 +349,82 @@ echo #########################################
 
 :chk_more
 
+@rem ################### check for non-empty stoptest.txt ################################
+call :chk_stop_test init_chk %tmpdir% %fbc% %dbnm% %usr% %pwd%
+
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@rem INITIATE REPORT FILE "oltp30.report.txt"
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+set log4all=%tmpdir%\oltp%1.report.txt
+del %log4all% 2>nul
+
+echo Created by: %~f0>>%log4all%
+
+@rem --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
+set tmpsql=%tmpdir%\tmp_show.tmp
+set tmplog=%tmpdir%\tmp_show.log
+set tmperr=%tmpdir%\tmp_show.err
+del %tmpsql% 2>nul
+del %tmplog% 2>nul
+del %tmperr% 2>nul
+
+echo Database parameters and main test settings:>>%tmplog%
+echo set list on;                                                                        >>%tmpsql%
+echo select                                                                              >>%tmpsql%
+echo        m.mon$database_name as db_name                                               >>%tmpsql%
+echo       ,m.mon$page_size as pg_size                                                   >>%tmpsql%
+echo       ,m.mon$page_buffers as buffers                                                >>%tmpsql%
+echo       ,m.mon$forced_writes as forced_writes                                         >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','WORKING_MODE') working_mode                  >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query          >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors    >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION','LOG_PK_VIOLATION') log_pk_violations         >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'QDISTR_HANDLING_MODE') make_qty_storno_mode >>%tmpsql%
+echo       ,rdb$get_context('USER_SESSION', 'QMISM_VERIFY_BITSET')  qmism_verify_bitset  >>%tmpsql%
+echo from mon$database m;                                                                >>%tmpsql%
+echo set list off;                                                                       >>%tmpsql%
+
+echo.>>%tmpsql%
+echo set list off;>>%tmpsql%
+
+if .%is_embed%.==.1. (
+  %fbc%\isql %dbnm% -i %tmpsql% -n 1>%tmplog% 2>%tmperr%
+) else (
+  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>>%tmplog% 2>%tmperr%
+)
+
+for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
+if .%size%.==.. set size=0
+if %size% gtr 0 (
+  type %tmperr%>>%log4all%
+  echo.
+  echo Could NOT run script with commands for show database and test parameters.
+  echo.
+  echo SQL  file: %tmpsql%
+  echo Error log: %tmperr%
+  echo ------------------------------------------------------------------
+  type %tmperr%
+  echo ------------------------------------------------------------------
+  echo.
+  echo Press any key to FINISH this batch. . .
+  pause>nul
+  goto end
+)
+
+@echo off
+
+@rem Display database and main test parameters + add them to main log:
+type %tmplog%
+type %tmplog%>>%log4all%
+
+@rem --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+
 set tmpsql=%tmpdir%\tmp_init_data_pop.sql
 set tmplog=%tmpdir%\tmp_init_data_pop.log
 set tmpchk=%tmpdir%\tmp_init_data_chk.sql
 set tmpclg=%tmpdir%\tmp_init_data_chk.log
 set tmperr=%tmpdir%\tmp_init_data_chk.err
-
-@rem ################### check for non-empty stoptest.txt ################################
-call :chk_stop_test init_chk %tmpdir% %fbc% %dbnm% %usr% %pwd%
-
-@rem --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
 
 :chk_init
 
@@ -883,6 +949,7 @@ type %tmplog%
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
+del %tmperr% 2>nul
 
 @rem echo Add record for checking work to be stopped on timeout. . .
 echo commit; set transaction no wait;                                         >>%tmpsql%
@@ -912,23 +979,14 @@ echo set width dts_measure_end 19;>>%tmpsql%
 echo set list on;>>%tmpsql%
 echo.>>%tmpsql%
 
-echo Database parameters and main test settings:
+echo Parameters for measuring:>>%tmplog%
+
 echo select                                                                            >>%tmpsql%
-echo        m.mon$database_name as db_name                                             >>%tmpsql%
-echo       ,m.mon$page_size as pg_size                                                 >>%tmpsql%
-echo       ,m.mon$page_buffers as buffers                                              >>%tmpsql%
-echo       ,m.mon$forced_writes as forced_writes                                       >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION','WORKING_MODE') working_mode                >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION','ENABLE_MON_QUERY') enable_mon_query        >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') halt_test_on_errors  >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION','LOG_PK_VIOLATION') log_pk_violations       >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION', 'QDISTR_HANDLING_MODE') make_qty_storno_mode >>%tmpsql%
-echo       ,rdb$get_context('USER_SESSION', 'QMISM_VERIFY_BITSET')  qmism_verify_bitset >>%tmpsql%
-echo       ,g.add_info                                                                 >>%tmpsql%
+echo        '%log_tab%' as log_table                                                   >>%tmpsql%
 echo       ,g.dts_measure_beg                                                          >>%tmpsql%
 echo       ,g.dts_measure_end                                                          >>%tmpsql%
-echo from mon$database m                                                               >>%tmpsql%
-echo cross join                                                                        >>%tmpsql%
+echo       ,g.add_info                                                                 >>%tmpsql%
+echo from                                                                              >>%tmpsql%
 echo (                                                                                 >>%tmpsql%
 echo   select p.unit, p.exc_info as add_info,                                          >>%tmpsql%
 echo      left(replace(cast(p.dts_beg as varchar(24)),' ','_'),19) as dts_measure_beg, >>%tmpsql%
@@ -937,18 +995,22 @@ echo   from %log_tab% p                                                         
 echo        where p.unit = 'perf_watch_interval'                                       >>%tmpsql%
 echo        order by dts_beg desc rows 1                                               >>%tmpsql%
 echo ) g;                                                                              >>%tmpsql%
+
 echo.>>%tmpsql%
 echo set list off;>>%tmpsql%
 
 if .%is_embed%.==.1. (
-  %fbc%\isql %dbnm% -i %tmpsql% -n 1>%tmplog% 2>%tmperr%
+  %fbc%\isql %dbnm% -i %tmpsql% -n 1>>%tmplog% 2>%tmperr%
 ) else (
-  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>%tmplog% 2>%tmperr%
+  %fbc%\isql %host%/%port%:%dbnm% -i %tmpsql% -user %usr% -pas %pwd% -n 1>>%tmplog% 2>%tmperr%
 )
 
 for /f "usebackq" %%A in ('%tmperr%') do set size=%%~zA
 if .%size%.==.. set size=0
 if %size% gtr 0 (
+
+  type %tmperr%>>%log4all%
+
   echo.
   echo Could NOT run script with commands for test being auto-stop.
   echo.
@@ -964,25 +1026,18 @@ if %size% gtr 0 (
 )
 
 @echo off
-type %tmplog%
 
-@rem set log4all=%tmpdir%\%logbase%-001.performance_report.txt
-set log4all=%tmpdir%\oltp%1.report.txt
+@rem type %tmplog%
+type %tmplog% >> %log4all%
 
-@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-@rem INITIATE REPORT FILE "oltp30.report.txt"
-@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-del %log4all% 2>nul
-echo Created by: %~f0>>%log4all%
-echo Database parameters and main test settings:>>%log4all%
-type %tmplog%>>%log4all%
+type %log4all%
 
 echo Final report see in file: ^>^>^>%log4all%^<^<^<
 echo #########################
 
 del %tmpsql% 2>nul
 del %tmplog% 2>nul
+del %tmperr% 2>nul
 
 @echo Launching %winq% ISQL sessions:
 @echo off

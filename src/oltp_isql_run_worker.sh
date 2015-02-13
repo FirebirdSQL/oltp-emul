@@ -9,6 +9,7 @@ cfg=$1
 sql=$2
 prf=$3
 sid=$4 # ISQL window (session) sequential number
+rpt=$5 # final report where sid N1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
 
 #echo -e Config file \>$cfg\< parsing result:
 shopt -s extglob
@@ -102,29 +103,20 @@ do
       msg="$(date +'%H:%M:%S'). SID=$sid. Start final performance analysys."
       echo $msg >>$sts
       psql=$prf.performance_report.tmp
-      plog=$prf.performance_report.txt
-      rm -f $psql $plog
 
-      echo $(date +'%H:%M:%S'). Created by $0, working window $sid.>$plog
+      # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
+      plog=$rpt
 
-      #############################################################################################
-      ### w a s    t e s t    f i n i s h e d    w i t h    "c r i t i c a l     e r r o r s" ? ###
-      #############################################################################################
-      echo -e "-- 1. Was test finished due to timeout (i.e. normal) ?">>$psql
-      echo>>$psql
-      echo -e "set list on;"                                                         >>$psql
-      echo -e "select iif( (select count(*) from z_halt_log) = 0"                    >>$psql
-      echo -e "            ,'ALL OK, job stop reason: NORMAL (due to timeout), view Z_HALT_LOG is empty'"  >>$psql
-      echo -e "            ,'BAD NEWS! At least one critical error found, check data in view Z_HALT_LOG'"  >>$psql
-      echo -e "          ) as \"Test finish result:\""                               >>$psql
-      echo -e "from rdb\$database;"                                                  >>$psql
-      echo -e "set list off;"                                                        >>$psql
-      echo>>$psql
+      #$prf.performance_report.txt
+      rm -f $psql
+      # ---- do NOT ---- rm $plog
+
+      echo $(date +'%H:%M:%S'). Starting performance analysis>>$plog
 
       ###############################################
       ### o u t p u t    a l l   s e t t i n g s  ###
       ###############################################
-      echo -e "-- 2. All used settings for this test run:">>$psql
+      echo -e "-- 1. All used settings for this test run:">>$psql
       echo>>$psql
       echo -e "set heading off;set list on; select '' as \"All test settings:\" from rdb\$database; set list off;set heading on;">>$psql
       echo -e "set width category 12;"        >>$psql
@@ -146,7 +138,7 @@ do
       ###############################################
       ###  p e r f o r m a n c e    r e p o r t s ###
       ###############################################
-      echo -e "-- 3. Get performance report with splitting data to 10 equal time intervals,">>$psql
+      echo -e "-- 2. Get performance report with splitting data to 10 equal time intervals,">>$psql
       echo -e "--    for last three hours of activity:">>$psql
       echo>>$psql
       echo -e "set heading off;set list on; select '' as \"Performance in DYNAMIC:\" from rdb\$database; set list off;set heading on;">>$psql
@@ -161,7 +153,7 @@ do
       echo -e "commit;">>$psql
       echo>>$psql
 
-      echo -e "-- 4. Get overall performance report for last three hours of activity:">>$psql
+      echo -e "-- 3. Get overall performance report for last three hours of activity:">>$psql
       echo -e "--    Value in column "avg_times_per_minute" in 1st row is overall performance index.">>$psql
       echo>>$psql
       echo -e "set heading off;set list on; select '' as \"Performance TOTAL:\" from rdb\$database; set list off;set heading on;">>$psql
@@ -169,6 +161,22 @@ do
       echo -e "select business_action, avg_times_per_minute, avg_elapsed_ms, successful_times_done, job_beg, job_end">>$psql
       echo -e "from srv_mon_perf_total;">>$psql
       echo>>$psql
+
+
+      #########################################################
+      ###  e x c e p t i o n s     d u r i n g     t e s t  ###
+      #########################################################
+      echo>>$psql
+      echo -- 4. Get exceptions statistics for last three hours of activity:>>$psql
+      echo -e "set heading off;set list on; select '' as \"Detected EXCEPTIONS:\" from rdb\$database; set list off;set heading on;">>$psql
+      echo -e "set width fb_mnemona 31;"                  >>$psql
+      echo -e "set width unit 40;"                        >>$psql
+      echo -e "set width dts_beg 16;"                     >>$psql
+      echo -e "set width dts_end 16;"                     >>$psql
+      echo -e "select fb_mnemona, cnt, unit, fb_gdscode"                                >>$psql
+      echo -e "      ,substring(cast( dts_min as varchar(24 )) from 1 for 16) dts_beg"  >>$psql
+      echo -e "      ,substring(cast( dts_max as varchar(24 )) from 1 for 16) dts_end"  >>$psql
+      echo -e "from srv_mon_exceptions;"                                                >>$psql
 
       echo -e "set heading off;set list on; select '' as \"mon\$database and version info:\" from rdb\$database; set list off;set heading on;">>$psql
       echo -e "-- 5. Get info about database and FB version:">>$psql
@@ -178,6 +186,7 @@ do
       echo $(date +'%H:%M:%S'). SID=$sid. Analyzing performance log table - START.
 
       $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth -m -o $plog
+      
       echo>>$plog
       echo $(date +'%H:%M:%S'). SID=$sid. Analyzing performance log table - FINISH.
 
