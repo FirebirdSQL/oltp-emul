@@ -18,10 +18,12 @@ begin
     for
         select rt.rdb$trigger_name
         from rdb$triggers rt
+        join rdb$relations rr on rt.rdb$relation_name = rr.rdb$relation_name
         where
             coalesce(rt.rdb$system_flag,0)=0
             and rt.rdb$relation_name is not null
             and rt.rdb$trigger_inactive=0
+            and rr.rdb$relation_type in (0, 4, 5) -- only fixed tables and GTTs, NOT VIEWS!
     into trg_name
     do begin
         rdb$set_context('USER_TRANSACTION','ACTIVE_TRIGGER_'||trg_name,trg_name);
@@ -67,7 +69,13 @@ begin
     do begin
         -- ::: nb ::: check that table really exists! otherwise some triggers can
         -- stay inactive (being active before) and will NOT return to their prev. state!
-        if ( exists( select * from rdb$relations r where r.rdb$relation_name = upper( :tab_name ) ) ) then
+        if ( exists(
+                select * from rdb$relations r
+                    where r.rdb$relation_name = upper( :tab_name )
+                        and r.rdb$relation_type in (0, 4, 5) -- only fixed tables and GTTs, NOT VIEWS!
+                        and coalesce(r.rdb$system_flag, 0) = 0
+                   )
+            ) then
         begin
             stt = 'delete from '||tab_name;
             execute statement(stt);
@@ -219,40 +227,38 @@ insert into settings(working_mode, mcode, svalue)
                             )
                     );
 
--- Should test STOP itself if exceptions like PK/FK or check violation occur ?
--- (these exceptions can appear only under heavy load):
+-- Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
 -- 'CK' -- halt if CHECK violation or 'not_valid' occurs
 -- 'PK' -- halt if PK or UK violation occurs
 -- 'FK' -- halt if FK violation occurs // now n/a
 -- 'ST' -- halt if exc #335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
--- These mnemonics can be combined in list, i.e.:
--- 'CK,PK,FK' - halt if CHECK or PK or FK violation occurs
--- default: 'CK'
--- See calls of fn_halt_sign(gdscode):
--- update settings set svalue=',NONE,' where mcode='HALT_TEST_ON_ERRORS';
--- update settings set svalue=',CK,' where mcode='HALT_TEST_ON_ERRORS';
--- update settings set svalue=',CK,PK,' where mcode='HALT_TEST_ON_ERRORS';
+-- These mnemonics can be combined in list, i.e.: 'CK,PK,FK' - halt if CHECK or PK or FK violation occurs
+-- Default: ',CK,' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
+-- 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
+-- but it is due to UNDEFINED order of UNDO when some Tx must perform bulk of such work.
+-- Detailed investigation:
+-- sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
+-- (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
 insert into settings(working_mode, mcode, svalue)
               values( 'COMMON',
                       'HALT_TEST_ON_ERRORS',
                       decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
-                             ,'3.0', ',CK,PK,' -- 3.0 SS: all passed Ok, 12.09.2014; 3.0 SC - fails on PK violation attempts (qdistr, qstorned), 09.01.2015, CONFIRMED FAIULT AGAIN 09.02.2015 (SC)
-                             ,'2.5', ',CK,PK,' -- PK not passed on 2.5.3, 13.09.2014; seems that 'NONE' needs to be here
+                             ,'3.0', ',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
+                             ,'2.5', ',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 2.5
                              ,',NONE,'
                             )
                     );
 
 -- LOG_PK_VIOLATION:
--- = '0' ==> REMOVE primary keys from tables qdistr, qstorned, pdistr & pstorned
--- in order to increase performance (but only if HALT_TEST_ON_ERRORS does NOT
+-- = '0' ==> REMOVE primary keys from tables doc_data, qdistr, qstorned, pdistr & pstorned
+-- in order to get max possible performance (but only if HALT_TEST_ON_ERRORS does NOT
 -- containing ',PK,');
--- = '1' ==> do NOT remove PK from some tables where these constraints actually
--- NOT needed (they were added in early stage of test implementation)
+-- = '1' ==> do NOT remove PK from these tables despite of these constraints actually
+-- are NOT needed (they were added in early stage of test implementation).
 -- Logging of PK violations see in sp SRV_LOG_DUPS_QD_QS
 -- update settings set svalue='0' where mcode='LOG_PK_VIOLATION';
 -- update settings set svalue='1' where mcode='LOG_PK_VIOLATION';
--- PK WILL BE REMOVED FROM THESE TABLES IF LOG_PK_VIOLATION = 0:
--- 'qdistr,qstorned,pdistr,pstorned'
+-- Removing PK from these tables see at the end of **THIS** script.
 insert into settings(working_mode, mcode,                      svalue,  init_on)
               values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
 
@@ -275,9 +281,9 @@ insert into settings(working_mode, mcode,         svalue)
               values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'
 
 -- How records should be handled when OLD one moves from QDistr to QStorned and
--- NEW must be added in QDistr (when we create new document and search for rows
--- from several old docs which are placed immediately BEFORE new one), see SP_MAKE_QTY_STORNO
--- 'DEL_INS' ==> delete OLD from qdistr; insert data of OLD into qstorno; insert NEW into qdistr
+-- NEW should be added in QDistr (when we create new document and search for rows
+-- from several old docs which are placed immediately BEFORE new one), see SP_MAKE_QTY_STORNO.
+-- 'DEL_INS' ==> save fields from OLD and delete it in QDistr; insert data of OLD into qstorno;
 -- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
 -- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
 -- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10%. Confirmed 10.02.2015.
@@ -306,7 +312,7 @@ insert into settings(working_mode, mcode,                   svalue)
 -- (good for small resultsets with skewed IDs)
 -- update settings s set svalue='1000000' where s.working_mode='COMMON' and s.mcode='RANDOM_SEEK_VIA_ROWS_LIMIT';
 insert into settings(working_mode, mcode,                      svalue)
-              values('COMMON',       'RANDOM_SEEK_VIA_ROWS_LIMIT', '0') ; -- '10000');
+              values('COMMON',       'RANDOM_SEEK_VIA_ROWS_LIMIT', '0');
 
 
 -- Used only in script oltp_data_filling.sql that fills wares table:

@@ -183,53 +183,10 @@ db_build() {
     echo Script is now terminated.
     exit 1
   fi
-  
-  echo Creation of database objects COMPLETED. See results in $log.
-  echo Test will be run with following settings:
-  echo set width db_name 30\;>>$tmp
-  echo select                                                    >>$tmp
-  echo     m.mon\$page_size as page_size                          >>$tmp
-  echo    ,m.mon\$page_buffers as page_buffers                    >>$tmp
-  echo    ,iif\(m.mon\$forced_writes=0,\'OFF\',\'ON\'\) as FW           >>$tmp
-  echo    ,m.mon\$sweep_interval as sweep                         >>$tmp
-  echo    ,right\(m.mon\$database_name,30\) as db_name              >>$tmp
-  echo from mon\$database m\;                                      >>$tmp
-  echo set width working_mode 20\;>>$tmp
-  echo set width setting_name 40\;>>$tmp
-  echo set width setting_value 15\;>>$tmp
-  echo set list off\;                                             >>$tmp
-  echo select s.mcode as setting_name, s.svalue as setting_value >>$tmp
-  echo from settings s                                           >>$tmp
-  echo where s.working_mode=\'INIT\' and s.mcode=\'WORKING_MODE\'    >>$tmp
-  echo UNION ALL                                                 >>$tmp
-  echo select t.mcode as setting_name, t.svalue as setting_value >>$tmp
-  echo from settings s                                           >>$tmp
-  echo join settings t on s.svalue=t.working_mode                >>$tmp
-  echo where s.working_mode=\'INIT\' and s.mcode=\'WORKING_MODE\'    >>$tmp
-  echo UNION ALL                                                 >>$tmp
-  echo select s.mcode, s.svalue                                  >>$tmp
-  echo from settings s                                           >>$tmp
-  echo where s.working_mode=\'COMMON\'                           >>$tmp
-  echo       and s.mcode                                         >>$tmp
-  echo           in \(                                           >>$tmp
-  echo                 \'WORKING_MODE\'                          >>$tmp
-  echo                ,\'ENABLE_MON_QUERY\'                      >>$tmp
-  echo                ,\'HALT_TEST_ON_ERRORS\'                   >>$tmp
-  echo                ,\'LOG_PK_VIOLATION\'                      >>$tmp
-  echo                ,\'QDISTR_HANDLING_MODE\'                  >>$tmp
-  echo                ,\'QMISM_VERIFY_BITSET\'                   >>$tmp
-  echo                ,\'TRACED_UNITS\'                          >>$tmp
-  echo              \)\;                                         >>$tmp
-  if [ $is_embed == 1 ]; then
-    $fbc/isql $dbnm -nod -i $tmp
-  else
-    $fbc/isql $host/$port:$dbnm -nod -i $tmp -user $usr -pas $pwd
-  fi
-  echo -e '###########################################################'
   rm -f $bld $tmp
+
+  echo Creation of database objects COMPLETED. See results in $log.
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
-  echo Press ENTER to continue. . .
-  pause
   echo
 }
 
@@ -1108,26 +1065,12 @@ launch_preparing() {
   echo -e "              values( 'dump_dirty_data_semaphore', '',    'by $0',"    >>$tmpchk
   echo -e "                      null, null, -1);"                                  >>$tmpchk
   echo -e "commit;">>$tmpchk
-  echo -e "set width unit 20;">>$tmpchk
-  echo -e "set width add_info 30;">>$tmpchk
-  echo -e "set width dts_measure_beg 24;">>$tmpchk
-  echo -e "set width dts_measure_end 24;">>$tmpchk
-  echo -e "set list on;">>$tmpchk
-  echo>>$tmpchk
-  echo -e "select p.unit, p.exc_info as add_info,"                   >>$tmpchk
-  echo -e "       cast(p.dts_beg as varchar(24)) as dts_measure_beg,">>$tmpchk
-  echo -e "       cast(p.dts_end as varchar(24)) as dts_measure_end" >>$tmpchk
-  echo -e "from perf_log p order by dts_beg desc rows 1;">>$tmpchk
-  echo>>$tmpchk
-  echo -e "set list off;">>$tmpchk
 
   echo Command to be run:
   echo $run_isql
 
   $run_isql
 
-  echo Record in PERF_LOG table that will be checked by attachments to stop their work:
-  cat $tmpclg
   rm -f $tmpchk $tmpclg
 
   echo Routine $FUNCNAME: finish.
@@ -1310,6 +1253,60 @@ fi # grep "Error while trying to open" $tmperr ==> true or false
 # check that file 'stoptest.txt' is EMPTY
 check_stoptest
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# INITIATE REPORT FILE "oltp30.report.txt"
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+log4all=$tmpdir/oltp$1.report.txt
+rm -f $log4all
+##########################################
+
+tmp_show_sql=$tmpdir/tmp_show.sql
+tmp_show_log=$tmpdir/tmp_show.log
+tmp_show_err=$tmpdir/tmp_show.err
+
+echo Created by: $0>$log4all
+
+  echo Database parameters and main test settings: > $tmp_show_log
+  echo set list on\;                                                 >$tmp_show_sql
+  echo select                                                       >>$tmp_show_sql
+  echo     m.mon\$page_size as page_size                            >>$tmp_show_sql
+  echo    ,m.mon\$page_buffers as page_buffers                      >>$tmp_show_sql
+  echo    ,iif\(m.mon\$forced_writes=0,\'OFF\',\'ON\'\) as FW       >>$tmp_show_sql
+  echo    ,m.mon\$sweep_interval as sweep                           >>$tmp_show_sql
+  echo    ,right\(m.mon\$database_name,30\) as db_name              >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'WORKING_MODE\'          \) working_mode         >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'ENABLE_MON_QUERY\'      \) enable_mon_query     >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'HALT_TEST_ON_ERRORS\'   \) halt_test_on_errors  >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'LOG_PK_VIOLATION\'      \) log_pk_violations    >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'QDISTR_HANDLING_MODE\'  \) make_qty_storno_mode >>$tmp_show_sql
+  echo    ,rdb\$get_context\(\'USER_SESSION\', \'QMISM_VERIFY_BITSET\'   \) qmism_verify_bitset  >>$tmp_show_sql
+  echo from mon\$database m\;                                      >>$tmp_show_sql
+  echo set list off\;                                              >>$tmp_show_sql
+
+  if [ $is_embed == 1 ]; then
+    $fbc/isql $dbnm -i $tmp_show_sql 1>>$tmp_show_log 2>$tmp_show_err
+  else
+    $fbc/isql $host/$port:$dbnm -i $tmp_show_sql -user $usr -pas $pwd 1>>$tmp_show_log 2>$tmp_show_err
+  fi
+
+  if [ -s $tmp_show_err ];then
+    cat $tmp_show_err >> $log4all
+    echo Could NOT run script with commands for show database and test parameters.
+    echo SQL  file: $tmp_show_sql
+    echo Error log: $tmp_show_err
+    echo ------------------------------------------------------------------
+    cat $tmp_show_err
+    echo ------------------------------------------------------------------
+    echo
+    echo Script is now terminated.
+    exit 1
+  fi
+  rm -f $tmp_show_sql $tmp_show_err
+
+# Display database and main test parameters + add them to main log:
+cat $tmp_show_log
+cat $tmp_show_log>>$log4all
+
 # get number of currently existed documents and update value of $init_docs if need:
 export existing_docs=0
 if [ $init_docs -gt 0 ]; then
@@ -1329,11 +1326,12 @@ if [ $init_docs -gt 0 ]; then
 
   # 1. set linger to 15 (only for 3.0; greatly reduce time of connect!),
   # 2. temply change FW to OFF with saving old value of it.
+  # 3. alter sequence g_init_pop restart with 0;
   ####################
   init_docs_set_fw_off
   ####################
   echo stored value of FW: \>$fw_mode\<
-````````````````  
+
   # 3. generate temp .sql script for initial filling:
   export init_pkq=50 # number of transactions in .sql (reduce re-connects)
 
@@ -1383,11 +1381,63 @@ export sql=$tmpdir/sql/tmp_random_run.sql
 #####################
 launch_preparing $sql
 #####################
+
+
+tmp_show_sql=$tmpdir/tmp_show.sql
+tmp_show_log=$tmpdir/tmp_show.log
+tmp_show_err=$tmpdir/tmp_show.err
+
+rm -f $tmp_show_sql $tmp_show_log $tmp_show_err
+
+echo Parameters for measuring:>>$tmp_show_log
+echo set list on\;                                                                     >>$tmp_show_sql
+echo select                                                                            >>$tmp_show_sql
+echo        g.dts_measure_beg                                                          >>$tmp_show_sql
+echo       ,g.dts_measure_end                                                          >>$tmp_show_sql
+echo       ,g.add_info                                                                 >>$tmp_show_sql
+echo from                                                                              >>$tmp_show_sql
+echo \(                                                                                >>$tmp_show_sql
+echo   select p.unit, p.exc_info as add_info,                                          >>$tmp_show_sql
+echo      left\(replace\(cast\(p.dts_beg as varchar\(24\)\),\' \',\'_\'\),19\) as dts_measure_beg, >>$tmp_show_sql
+echo      left\(replace\(cast\(p.dts_end as varchar\(24\)\),\' \',\'_\'\),19\) as dts_measure_end  >>$tmp_show_sql
+echo   from perf_log p                                                                 >>$tmp_show_sql
+echo        where p.unit = \'perf_watch_interval\'                                     >>$tmp_show_sql
+echo        order by dts_beg desc rows 1                                               >>$tmp_show_sql
+echo \) g\;                                                                            >>$tmp_show_sql
+echo set list off\;                                                                    >>$tmp_show_sql
+
+if [ $is_embed == 1 ]; then
+  $fbc/isql $dbnm -i $tmp_show_sql 1>>$tmp_show_log 2>$tmp_show_err
+else
+  $fbc/isql $host/$port:$dbnm -i $tmp_show_sql -user $usr -pas $pwd 1>>$tmp_show_log 2>$tmp_show_err
+fi
+
+if [ -s $tmp_show_err ];then
+    cat $tmp_show_err >> $log4all
+    echo Could NOT run script with commands for test being auto-stop.
+    echo SQL  file: $tmp_show_sql
+    echo Error log: $tmp_show_err
+    echo ------------------------------------------------------------------
+    cat $tmp_show_err
+    echo ------------------------------------------------------------------
+    echo
+    echo Script is now terminated.
+    exit 1
+fi
+rm -f $tmp_show_sql $tmp_show_err
+
+# Display database and main test parameters + add them to main log:
+cat $tmp_show_log
+cat $tmp_show_log>>$log4all
+
+echo Final report see in file: $log4all
+echo ##########################################################
+rm -f $tmp_show_sql $tmp_show_log $tmp_show_err
+
 echo
 export prf="$tmpdir/$mode"_"$HOSTNAME"
 echo prf=$prf
-echo Performance report will be in file:
-echo -e "$prf"_001_performance_report.txt
+echo Performance report will be in file: $log4all
 echo
 echo Main SQL script: $sql
 echo Number of launched ISQL sessions: $winq
@@ -1401,7 +1451,8 @@ echo
 
 for i in `seq $winq`
 do
-    # --- WRONG, 10.02.2015 --- sh ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i}&
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i}&
+    # 10.02.2015: it's wrong to start separate session via `sh`:
+    # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all}&
 done
 echo Done script $0

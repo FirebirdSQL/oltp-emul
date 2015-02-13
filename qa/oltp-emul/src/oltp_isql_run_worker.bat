@@ -245,24 +245,9 @@ echo Start at: %date% %time%>>%sts%
     del !psql! 2>nul
     set plog=%log4all%
 
-
-    #############################################################################################
-    ### w a s    t e s t    f i n i s h e d    w i t h    "c r i t i c a l     e r r o r s" ? ###
-    #############################################################################################
-    echo.>>!psql!
-    echo set heading off;set list on; select '' as "Was test finished OK ?" from rdb$database; set list off;set heading on;>>!psql!
-    echo set list on;                                                       >>!psql!
-    echo select iif( (select count(*^) from z_halt_log^) = 0                >>!psql!
-    echo             ,'ALL OK, job stop reason: NORMAL (due to timeout^), view Z_HALT_LOG is empty'  >>!psql!
-    echo             ,'BAD NEWS. At least one critical error found, check data in view Z_HALT_LOG'  >>!psql!
-    echo           ^) as "Test finish result:"                              >>!psql!
-    echo from rdb$database;                                                 >>!psql!
-    echo set list off;                                                      >>!psql!
-    echo.>>!psql!
-
-    ###############################################
-    ### o u t p u t    a l l   s e t t i n g s  ###
-    ###############################################
+    @rem ################################################
+    @rem ###  o u t p u t    a l l   s e t t i n g s  ###
+    @rem ################################################
 
     echo set heading off;set list on; select '' as "All test settings:" from rdb$database; set list off;set heading on;>>!psql!
 
@@ -287,9 +272,9 @@ echo Start at: %date% %time%>>%sts%
 
     @rem ------------------------------------------------------------------------------
 
-    ###############################################
-    ###  p e r f o r m a n c e    r e p o r t s ###
-    ###############################################
+    @rem ###############################################
+    @rem ###  p e r f o r m a n c e    r e p o r t s ###
+    @rem ###############################################
 
     echo set width business_action 24; >>!psql!
     echo set width itrv_beg 8;         >>!psql!
@@ -320,7 +305,29 @@ echo Start at: %date% %time%>>%sts%
     echo set width business_action 35;>>!psql!
     echo select business_action, avg_times_per_minute, avg_elapsed_ms, successful_times_done, job_beg, job_end>>!psql!
     echo from srv_mon_perf_total;>>!psql!
-    echo -- 3. Get info about database and FB version:>>!psql!
+
+    
+    @rem #########################################################
+    @rem ###  e x c e p t i o n s     d u r i n g     t e s t  ###
+    @rem #########################################################
+    echo.>>!psql!
+    echo -- 3. Get exceptions statistics for last 3 hours of activity:>>!psql!
+    echo set heading off;set list on; select '' as "Detected EXCEPTIONS:" from rdb$database; set list off;set heading on;>>!psql!
+    echo set width fb_mnemona 31;                  >>!psql!
+    echo set width unit 40;                        >>!psql!
+    echo set width dts_beg 16;                     >>!psql!
+    echo set width dts_end 16;                     >>!psql!
+
+    echo select fb_mnemona, cnt, unit, fb_gdscode                                  >>!psql!
+    echo       ,substring(cast( dts_min as varchar(24^)^) from 1 for 16^) dts_beg  >>!psql!
+    echo       ,substring(cast( dts_max as varchar(24^)^) from 1 for 16^) dts_end  >>!psql!
+    echo from srv_mon_exceptions;                                                  >>!psql!
+
+    echo.>>!psql!
+        
+    echo -- 4. Get info about database and FB version:>>!psql!
+    echo set heading off;set list on; select '' as "MON$DATABASE and VERSION info:" from rdb$database; set list off;set heading on;>>!psql!
+
     echo set list on; select * from mon$database; set list off;>>!psql!
     echo show version;>>!psql!
 
@@ -340,6 +347,9 @@ echo Start at: %date% %time%>>%sts%
     
     @rem ------------------------------------------------------------------------------
 
+    @rem #################################################
+    @rem ###  d a t a b a s e    s t a t i s t i c s   ###
+    @rem #################################################
     echo.>>!plog!
     echo Obtain database statistics:>>!plog!
     echo.>>!plog!
