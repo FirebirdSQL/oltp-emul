@@ -26,7 +26,10 @@ msg_nocfg() {
 
 msg_novar() {
   echo
-  echo -e At least one variable: \>$1\< - is NOT defined. Check config file $cfg.
+  echo -e "##########################################################"
+  echo -e At least one variable: \>\>\>$1\<\<\< - is NOT defined.
+  echo Check config file $cfg.
+  echo -e "##########################################################"
   echo
   echo Script is now terminated.
 }
@@ -471,11 +474,17 @@ gen_working_sql() {
  local verb
  [[ $mode = "init_pop" ]] && verb=10 || verb=50
 
+ local idle=${6:-0}
+
  rm -f $sql
- echo Input args: 
- echo mode: $mode,
- echo sql: $sql, 
- echo number of repeating EB: $lim
+ echo Input arguments: 
+ echo 1\) mode:			$mode
+ echo 2\) sql:			$sql
+ echo 3\) number-of-EB:		$lim
+ echo 4\) Tx-undo-clause:	$nau
+ echo 5\) show-detailed-info:	$nfo
+ echo 6\) idle-time-seconds:	$idle
+ 
  #echo set tran option: $nau
  echo "-- ### WARNING: DO NOT EDIT ###">>$sql
  echo "-- Generated auto by $shname, routine: $FUNCNAME">>$sql
@@ -494,7 +503,35 @@ gen_working_sql() {
     [[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
     echo "----------------- mode = $mode, iter # $i -----------------------">>$sql
     echo>>$sql
-    [[ $i = 1 ]] && echo commit\;>>$sql
+
+    #[[ $i = 1 ]] && echo commit\;>>$sql
+
+    if [ $i = 1 ]; then
+      echo commit\;>>$sql
+    else
+      if [ $idle -gt 0 ]; then
+        echo -- Take pause between transactions. Argument for \'sleep\' command       >>$sql 
+        echo -- is in SECONDS and is equal to \'idle_time\' parameter in config.      >>$sql 
+        echo set list on\;                                                            >>$sql 
+        echo set transaction read only read committed\;                               >>$sql 
+        echo select current_timestamp as \"Pause $idle seconds starting at: \"        >>$sql 
+        echo from rdb\$database\;                                                     >>$sql 
+        echo ----------------------------- p a u s e--------------------------------  >>$sql 
+        echo shell sleep $idle\;                                                      >>$sql 
+        echo -----------------------------------------------------------------------  >>$sql
+        echo select current_timestamp as \"Pause $idle seconds finished at: \"        >>$sql 
+        echo from rdb\$database\;                                                     >>$sql 
+        echo commit\;                                                                 >>$sql 
+        echo set list off\;                                                           >>$sql 
+      else
+        echo>>$sql 
+        echo -- Pause between transactions is DISABLED.                >>$sql 
+        echo -- For enabling them set value of \'idle_time\' parameter >>$sql 
+        echo -- in test config file to some value \> 0.                >>$sql 
+        echo>>$sql 
+      fi
+    fi
+
     echo -- check oltp_config.NN for optional setting NO AUTO UNDO here: >>$sql
     echo set transaction no wait $nau\;                                  >>$sql
 
@@ -1034,9 +1071,10 @@ launch_preparing() {
 
   if [ $skipGenSQL = 0 ]; then
     # Generating script to be used by working isqls.
-    # ############################################################
-    gen_working_sql run_test $tmpsql 300 $no_auto_undo $detailed_info
-    # ############################################################
+    # ##########################################################################
+    gen_working_sql run_test $tmpsql 300 $no_auto_undo $detailed_info $idle_time
+    #                  1        2     3       4             5             6
+    # ##########################################################################
   fi
 
   local prf=tmp_add_aux_rows
@@ -1117,7 +1155,7 @@ tmpdir=${tmpdir%/}
 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
 echo -ne "Check that all necessary environment variables have values. . . "
-vars=(tmpdir fbc is_embed dbnm no_auto_undo use_mtee detailed_info init_docs init_buff wait_for_copy warm_time test_time)
+vars=(tmpdir fbc is_embed dbnm no_auto_undo use_mtee detailed_info init_docs init_buff wait_for_copy warm_time test_time idle_time)
 for i in ${vars[@]}; do
   #echo -e $i=\|${!i}\|
   [[ -z ${!i} ]] && msg_novar $i $cfg && exit 1
@@ -1337,6 +1375,7 @@ if [ $init_docs -gt 0 ]; then
 
   ########################################################
   gen_working_sql init_pop $tmpsql $init_pkq $no_auto_undo
+  #                  1        2       3           4
   ########################################################
 
   # 4. Run just generated SQL: add new documents until their count less than $init_docs parameter:
@@ -1381,7 +1420,6 @@ export sql=$tmpdir/sql/tmp_random_run.sql
 #####################
 launch_preparing $sql
 #####################
-
 
 tmp_show_sql=$tmpdir/tmp_show.sql
 tmp_show_log=$tmpdir/tmp_show.log
@@ -1446,8 +1484,6 @@ echo Number of launched ISQL sessions: $winq
 
 echo launch $winq isqls. . .
 echo
-
-#. ./oltp_isql_run_worker.sh $cfg $sql $prf 1
 
 for i in `seq $winq`
 do
