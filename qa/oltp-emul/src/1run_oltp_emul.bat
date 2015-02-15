@@ -106,9 +106,9 @@ if .%tmp_deq:~-1%.==.\. (
 
 echo. && echo Config parsing finished. Result:
 
-for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_docs,init_buff,wait_for_copy,warm_time,test_time) do (
+for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_docs,init_buff,wait_for_copy,warm_time,test_time,idle_time) do (
   if "!%%v!"=="" (
-    echo ### MISSED: %%v ###
+    echo. && echo ### MISSED: %%v ### && echo.
     set err_setenv=1
   ) else (
     echo Param: ^|%%v^|, value: ^|!%%v!^|
@@ -119,7 +119,7 @@ for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_do
 if .%is_embed%.==.0. (
   for %%v in (usr,pwd,host,port) do (
     if "!%%v!"=="" (
-      echo ### MISSED: %%v ###
+      echo. && echo ### MISSED: %%v ### && echo.
       set err_setenv=1
     ) else (
       echo Param: ^|%%v^|, value: ^|!%%v!^|
@@ -130,7 +130,7 @@ if .%is_embed%.==.0. (
 if .%1.==.30. (
   for %%v in (mon_unit_perf) do (
     if "!%%v!"=="" (
-      echo ### MISSED: %%v ###
+      echo. && echo ### MISSED: %%v ### && echo.
       set err_setenv=1
     ) else (
       echo Param: ^|%%v^|, value: ^|!%%v!^|
@@ -666,9 +666,10 @@ echo set term ;^^>>%tmpsql%
 
 set init_pkq=50
 set srv_frq=10
-if .%no_auto_undo%.==.. set no_auto_undo=1
+
 @rem %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-call :gen_working_sql init_pop %tmpsql% %init_pkq% %no_auto_undo%
+call :gen_working_sql  init_pop  %tmpsql%   %init_pkq%  %no_auto_undo%  0  0
+@rem                      1         2          3              4         5  6
 @rem %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 set t0=%time%
@@ -889,10 +890,9 @@ if exist %sql% (
 
 if .%skipGenSQL%.==.0. (
   @rem Generating script to be used by working isqls.
-  if .%no_auto_undo%.==.. set no_auto_undo=1
-  if .%detailed_info%.==.. set detailed_info=0
   @rem ##################################################
-  call :gen_working_sql run_test %sql% 300 %no_auto_undo% %detailed_info%
+  call :gen_working_sql  run_test  %sql%  300  %no_auto_undo%  %detailed_info% %idle_time%
+  @rem                      1        2     3         4              5              6
   @rem ##################################################
 )
 
@@ -1264,20 +1264,39 @@ goto end
 
 :gen_working_sql
   setlocal
+  @echo off
+
   set mode=%1
+
+  @rem Usually smth like: C:\TEMP\logs.oltpNN\sql\tmp_random_run.sql 
+  
   set sql=%2
+
+  @rem Number of repeated pairs {execute_block, commit} in the file %sql%
   set lim=%3
+
   @rem should NO AUTO UNDO clause be added in SET TRAN command ? 1=yes, 0=no
+  
   if .%4.==.1. set nau=NO AUTO UNDO
 
   @rem should detailed info for each iteration be added in log ? 
   @rem (actual only for mode=run_test; if "1" then add select * from %log_tab%)
+
   set nfo=%5
+
+  @rem How many seconds eacworker should be idle between transactions (only when mode='run_test')
+  set idle=%6
 
   del %sql% 2>nul
   echo.
-  echo sql generating routine `gen_working_sql`:  
-  @echo mode: ^>%mode%^<, sql: ^>%sql%^<, number of repeating EB: ^>%lim%^<
+  echo sql generating routine `gen_working_sql`, input arguments:  
+  echo 		1) mode:		^>%mode%^<
+  echo 		2) sql:			^>%sql%^<
+  echo 		3) number-of-EB:	^>%lim%^<
+  echo 		4) Tx-undo-clause:	^>%nau%^<
+  echo 		5) show-detailed-info:	^>%nfo%^<
+  echo 		6) idle-time-seconds:	^>%idle%^<
+
   @echo -- ### WARNING: DO NOT EDIT ###>>%sql%
   @echo -- GENERATED AUTO BY %~f0>>%sql%
   if /i .%mode%.==.init_pop. (
@@ -1285,6 +1304,13 @@ goto end
     @echo -- NB-1: FW must be (temply^) set to OFF>>%sql%
     @echo -- NB-2: cache buffers temply set to pretty big value>>%sql%
     @echo set list on; select * from mon$database; set list off;>>%sql%
+  ) else (
+    del !tmpdir!\tmp_longsleep.tmp 2>nul
+    echo ' Generated AUTO by %~f0, do NOT edit. >>!tmpdir!\tmp_longsleep.tmp
+    echo ' This file is used by Windows CSCRIPT.EXE as dummy scenario. >>!tmpdir!\tmp_longsleep.tmp
+    echo ' Cscript is called via SHELL from %sql%  >>!tmpdir!\tmp_longsleep.tmp
+    echo ' after every COMMIT statement. >>!tmpdir!\tmp_longsleep.tmp
+    echo WScript.Sleep(900000^) >>!tmpdir!\tmp_longsleep.tmp
   )
   echo.>>%sql%
   echo.
@@ -1297,6 +1323,31 @@ goto end
     @echo.>>%sql%
     if %%i equ 1 (
       @echo commit;                                                          >>%sql% 
+    ) else (
+      if /i .%mode%.==.run_test. (
+        if .%idle%. gtr .0. (
+          @echo -- Take relax between transactions, value after '//t:' is number of     >>%sql% 
+          @echo -- SECONDS and is equal to 'idle_time' parameter in !cfg! file.         >>%sql% 
+          @echo set list on;                                                            >>%sql% 
+          @echo set transaction read only read committed;                               >>%sql% 
+          @echo select current_timestamp as "Pause %idle% seconds starting at: "        >>%sql% 
+          @echo from rdb$database;                                                      >>%sql% 
+          @echo ----------------------------- p a u s e-------------------------------- >>%sql% 
+          @echo shell cscript //e:vbscript //t:%idle% !tmpdir!\tmp_longsleep.tmp ^>nul; >>%sql% 
+          @echo ----------------------------------------------------------------------- >>%sql% 
+          @echo select current_timestamp as "Pause %idle% seconds finished at: "        >>%sql% 
+          @echo from rdb$database;                                                      >>%sql% 
+          @echo commit;                                                                 >>%sql% 
+          @echo set list off;                                                           >>%sql% 
+          @echo.>>%sql% 
+        ) else (
+          @echo.>>%sql% 
+          @echo -- Pause between transactions is DISABLED.              >>%sql% 
+          @echo -- For enabling them set value of 'idle_time' parameter >>%sql% 
+          @echo -- in !cfg! file to some value ^> 0.                    >>%sql% 
+          @echo.>>%sql% 
+        )
+      )
     )
     @echo -- check oltp_config.NN for optional setting NO AUTO UNDO here: >>%sql%
     @echo set transaction no wait %nau%;                                  >>%sql%

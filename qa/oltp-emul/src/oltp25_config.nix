@@ -69,6 +69,10 @@ warm_time=20
 # Recommended value: at least 60
 test_time=60
 
+# Number of seconds between transactions for pause in each working session
+# Default: 0 - no pauses, subsequent Tx starts immediatelly after commit.
+idle_time=0
+
 # Rest params not needed if embedded mode 
 # but should be non-empty to run batch:
 
