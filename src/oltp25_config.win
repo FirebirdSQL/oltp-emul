@@ -12,7 +12,7 @@
 # fbc=C:\"Program Files"\"Firebird 2.5.x"\bin
 # fbc=C:\"Program Files"\"Firebird 3.0.x"
 
-fbc= C:\firebird\fb25\bin
+fbc= C:\MIX\firebird\fb25\bin
 
 # Folder where to store work and error logs, with or w/o trailing backslash.
 # Do NOT use "%" character for referencing to some windows environment
@@ -26,9 +26,12 @@ is_embed=0
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. No spaces or non-latin characters can be here.
 
-dbnm=/var/db/fb25/oltp25.fdb
+dbnm=/var/db/fb25/oltp25-upd_row.fdb
 
-# Should 'SET TRANSACTION' command include NO AUTO UNDO clause ?
+# Should SET TRANSACTION statement include NO AUTO UNDO clause (1=yes, 0=no) ? 
+# Performance can be increased if this option is set to 1:
+# SuperServer:   5 -  6%
+# SuperClassic: 10 - 11%
 # Recommended value: 1
 no_auto_undo=1
 
@@ -43,7 +46,7 @@ use_mtee=1
 # Value=1 will cause "oltp_misc_debug.sql" be called when build database.
 # NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
 # (see oltp_main_filling.sql)
-make_debug_dbos=0
+make_debug_dbos=1
 
 # Add in ISQL logs detailed info for each iteration (select from perf_log...) ?
 # Recommended value: 0
@@ -88,5 +91,5 @@ idle_time=0
 # for this command scenario:
 usr=SYSDBA
 pwd=masterke
-host=127.0.0.1
-port=3050
+host=192.168.0.220
+port=3252

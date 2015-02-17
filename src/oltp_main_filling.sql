@@ -260,7 +260,7 @@ insert into settings(working_mode, mcode, svalue)
 -- update settings set svalue='1' where mcode='LOG_PK_VIOLATION';
 -- Removing PK from these tables see at the end of **THIS** script.
 insert into settings(working_mode, mcode,                      svalue,  init_on)
-              values('COMMON',     'LOG_PK_VIOLATION',   '1',     'db_prepare');
+              values('COMMON',     'LOG_PK_VIOLATION',   '0',     'db_prepare');
 
 -- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
 -- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
