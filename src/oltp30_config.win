@@ -65,7 +65,7 @@ mon_unit_perf=0
 # Command scenario will compare number of existing document with this
 # and create new ones only if <init_docs> still greater than obtained.
 # Recommended value: at least 30000 
-init_docs=300
+init_docs=30000
 
 # Number of pages for usage during init data population ("-c" switch for ISQL).
 # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
