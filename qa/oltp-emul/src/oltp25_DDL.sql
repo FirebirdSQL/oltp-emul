@@ -5572,7 +5572,9 @@ order by
     iif(s.working_mode starting with 'SMALL',  1,
     iif(s.working_mode starting with 'MEDIUM', 2,
     iif(s.working_mode starting with 'LARGE',  3,
-    iif(s.working_mode starting with 'HUGE',  4, null) ) ) ) )
+    iif(s.working_mode starting with 'HEAVY',  5,
+    null) ) ) ) )
+    nulls last
    ,s.working_mode
 ;
 

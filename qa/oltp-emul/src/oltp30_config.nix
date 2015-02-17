@@ -20,7 +20,10 @@ is_embed=0
 # full path and file name. No spaces or non-latin characters can be here!
 dbnm=/var/db/fb30/oltp30.fdb
 
-# Should set transaction command include NO AUTO UNDO clause ?
+# Should SET TRANSACTION statement include NO AUTO UNDO clause (1=yes, 0=no) ? 
+# Performance can be increased if this option is set to 1:
+# SuperServer:   5 -  6%
+# SuperClassic: 10 - 11%
 # Recommended value: 1
 no_auto_undo=1
 
