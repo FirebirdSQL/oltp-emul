@@ -667,7 +667,7 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-20
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544640, 'collation_requires_text', 'Invalid use of CHARACTER SET or COLLATE.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544662, 'dsql_blob_type_unknown', 'BLOB SUB_TYPE @1 is not defined.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544759, 'bad_default_value', 'Can not define a not null column with NULL as default value.');
-insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544760, 'invalid_clause', 'Invalid clause--- ''@1''.');
+insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544760, 'invalid_clause', 'Invalid clause: ''@1''.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544800, 'too_many_contexts', 'Too many Contexts of Relation/Procedure/Views. Maximum allowed is 255.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544817, 'bad_limit_param', 'Invalid parameter to FIRST. Only integers >= 0 are allowed.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-204, 335544818, 'bad_skip_param', 'Invalid parameter to SKIP. Only integers >= 0 are allowed.');
@@ -1017,7 +1017,7 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-90
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 335544365, 'req_wrong_db', 'Request referenced an unavailable database.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330797, 'gbak_missing_bkup_desc', 'Expected backup description record.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330798, 'gbak_string_trunc', 'String truncated.');
-insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330799, 'gbak_cant_rest_record', 'warning-- record could not be restored.');
+insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330799, 'gbak_cant_rest_record', 'warning record could not be restored.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330800, 'gbak_send_failed', 'Gds_$send failed.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 335544369, 'segstr_no_read', 'Attempted read of a new, open BLOB.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336330801, 'gbak_no_tbl_name', 'No table name for data.');
@@ -1100,7 +1100,7 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-90
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331012, 'gbak_page_buffers_restore', 'Page buffers is allowed only on restore or create.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331014, 'gbak_inv_size', 'Size specification either missing or incorrect for file @1.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331015, 'gbak_file_outof_sequence', 'File @1 out of sequence.');
-insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331016, 'gbak_join_file_missing', 'Can''t join-- one of the files missing.');
+insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331016, 'gbak_join_file_missing', 'Can''t join: one of the files missing.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331017, 'gbak_stdin_not_supptd', 'Standard input is not supported when using join operation.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331018, 'gbak_stdout_not_supptd', 'Standard output is not supported when using split operation.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-901, 336331019, 'gbak_bkup_corrupt', 'Backup file @1 might be corrupt.');
@@ -1207,7 +1207,7 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-90
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544404, 'corrupt', 'Database corrupted.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544405, 'badpage', 'Checksum error on database page @1.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544406, 'badindex', 'Index is broken.');
-insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544409, 'trareqmis', 'Transaction--request mismatch (synchronization error).');
+insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544409, 'trareqmis', 'Transaction request mismatch (synchronization error).');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544410, 'badhndcnt', 'Bad handle count.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544411, 'wrotpbver', 'Wrong version of transaction parameter block.');
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values(-902, 335544412, 'wroblrver', 'Unsupported BLR version (expected @1, encountered @2).');
