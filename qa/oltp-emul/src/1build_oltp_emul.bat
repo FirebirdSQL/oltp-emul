@@ -15,8 +15,133 @@ goto no_arg1
 :ok
 
 set cfg=oltp%fb%_config.win
-for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %cfg%') do (
-  set %%a
+set err_setenv=0
+
+if .%batch_mode%.==.0. (
+	@rem Following was copied from 1run_oltp_emul.bat:
+	
+	@rem ===### begin of copied block for parsing config ###===
+	echo Parsing config file ^>%cfg%^<. Please wait. . .
+	@rem Extract only non-empty lines with only names of parameters:
+
+	for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
+	  if "%%a" neq "" (
+
+		@rem Detect whether value of parameter contain quotes or no. If yes than this
+		@rem value should NOT be changed by removing its whitespaces.
+
+		echo %%a|find """">nul
+
+		if errorlevel 1 ( 
+		  @rem @echo ^|%%a^| - does NOT contain quotes
+		  for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+			@rem echo Parsed-NON-quoted: param="%%i" val="%%j"
+			if "%%j"=="" (
+			  set err_setenv=1
+			  echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+			) else (
+
+			  @rem _NAME_ and _VALUE_ of parameter (both can be with leading and trailing whitespaces):
+			  set par=%%i
+			  set val=%%j
+
+			  @rem -----------------------------------
+			  @rem When "delims=" clause is NOT specified then default delimeters are TAB and SPACE.
+			  @rem If we take 1st token from such string than it will be WITHOUT whitespaces.
+			  @rem Similarly for _VALUE_ of parameter:
+			  @rem -----------------------------------
+			  for /F "tokens=1" %%p in ("!par!") do (
+				@rem echo param=^|%%i^|, name w/o white-spaces=^|%%p^|
+				for /F "tokens=1" %%u in ("!val!") do (
+				  set %%p=%%u
+				  @rem echo param=^|%%p^|, value w/o white-spaces=^|%%u^|
+				)
+			  )
+			)
+		  )
+
+		) else (
+
+		  @rem @echo ^|%%a^| - DOES contain quotes
+		  for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+			@rem echo Parsed-quoted: param="%%i" val="%%j"
+			set par=%%i
+
+			if "%%j"=="" (
+			  set err_setenv=1
+			  echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
+			) else (
+			  @rem We can remove all white-spaces only from _NAME_ of parameter
+			  @rem but NOT from its _VALUE_
+			  for /F "tokens=1" %%p in ("!par!") do (
+				set %%p=%%j
+				@rem echo param=^|%%p^|, value w/o white-spaces=^|%%j^|
+			  )
+			)
+		  )
+		)
+	  )
+	) 
+
+
+	if .%err_setenv%.==.1. goto err_setenv
+
+	@rem Removing trailing backslash from %fbc% and %tmpdir% if any.
+	@rem NB: `command error` will be here in case when value ends with double quote
+	@rem      so we have to remove it before comparision with trailing backslash.
+	@rem See: stackoverflow.com/questions/535975/dealing-with-quotes-in-windows-batch-scripts
+
+	set fbc_deq=!fbc:"=!
+	if .%fbc_deq:~-1%.==.\. (
+	  set fbc=%fbc:~0,-1%
+	)
+
+	set tmp_deq=!tmpdir:"=!
+	if .%tmp_deq:~-1%.==.\. (
+	  set tmpdir=%tmpdir:~0,-1%
+	)
+
+	echo. && echo Config parsing finished. Result:
+
+	for %%v in (tmpdir,fbc,is_embed,dbnm,no_auto_undo,use_mtee,detailed_info,init_docs,init_buff,wait_for_copy,warm_time,test_time,idle_time) do (
+	  if "!%%v!"=="" (
+		echo. && echo ### MISSED: %%v ### && echo.
+		set err_setenv=1
+	  ) else (
+		echo Param: ^|%%v^|, value: ^|!%%v!^|
+	  )
+
+	)
+
+	if .%is_embed%.==.0. (
+	  for %%v in (usr,pwd,host,port) do (
+		if "!%%v!"=="" (
+		  echo. && echo ### MISSED: %%v ### && echo.
+		  set err_setenv=1
+		) else (
+		  echo Param: ^|%%v^|, value: ^|!%%v!^|
+		)
+	  )
+	)
+
+	if .%1.==.30. (
+	  for %%v in (mon_unit_perf) do (
+		if "!%%v!"=="" (
+		  echo. && echo ### MISSED: %%v ### && echo.
+		  set err_setenv=1
+		) else (
+		  echo Param: ^|%%v^|, value: ^|!%%v!^|
+		)
+	  )
+	)
+
+	if .%err_setenv%.==.1. goto no_env
+
+    @rem ===### end of copied block for parsing config ###===
+
+) else (
+	echo.
+	echo Config already has been parsed in caller batch - skip this phase.
 )
 
 md %tmpdir% 2>nul
@@ -29,6 +154,7 @@ set tmp=%tmpdir%\%~n0_%fb%.tmp
 echo log=%log%, err=%err%
 
 echo Check settings (read from config file %cfg%)
+echo ##################################################
 echo.
 echo Path to FB client: fbc = ^>%fbc%^<; version of isql:
 %fbc%\isql -z -? 2>nul
@@ -38,6 +164,8 @@ echo.
 echo Database name/alias: ^>%dbnm%^<
 echo.
 echo User name and password: ^>%usr%^< ^>%pwd%^<
+echo.
+echo Directory for temporary logs: tmpdir=^>%tmpdir%^<
 echo.
 echo Test connect and analyze engine version for matching to arg. ^>%fb%^<
 
@@ -168,7 +296,6 @@ echo show proc;>>%bld%
 @echo -------------------------------
 type %bld%
 @echo -------------------------------
-
 
 echo.
 echo Build test database. Please wait. . . 
