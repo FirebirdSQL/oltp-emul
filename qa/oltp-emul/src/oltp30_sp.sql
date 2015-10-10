@@ -5,7 +5,7 @@
 set bail on;
 set autoddl off;
 set list on;
-select 'oltp30_sp.sql start' as msg, current_timestamp from rdb$database;
+select 'oltp30_sp.sql start at ' || current_timestamp as msg from rdb$database;
 set list off;
 commit;
 
@@ -54,7 +54,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_fill_shopping_cart(
-    a_optype_id dm_ids,
+    a_optype_id dm_idb,
     a_rows2add int default null, 
     a_maxq4row int default null)
 returns(
@@ -63,12 +63,12 @@ returns(
 )
 as
     declare v_doc_rows int;
-    declare v_id dm_ids;
-    declare v_ware_id type of dm_ids;
+    declare v_id dm_idb;
+    declare v_ware_id type of dm_idb;
     declare v_qty dm_qty;
     declare v_cost_purchase dm_cost;
     declare v_cost_retail dm_cost;
-    declare v_snd_optype_id dm_ids;
+    declare v_snd_optype_id dm_idb;
     declare v_storno_sub smallint;
     declare v_ctx_max_rows type of dm_ctxnv;
     declare v_ctx_max_qty type of dm_ctxnv;
@@ -128,11 +128,11 @@ begin
               );
 
     -- 17.07.2014: for some cases we allow to skip 'ORDER BY ID' clause
-    -- in fn_get_random_id when it will generate SQL expr for ES,
+    -- in sp_get_random_id when it will generate SQL expr for ES,
     -- because all such randomly choosen IDs are handled in so way
     -- that thay will be unavaliable in the source view
     -- after this handling after it successfully ends.
-    -- Since 11.09.2014, start usage id desc in fn_get_random_id,
+    -- Since 11.09.2014, start usage id desc in sp_get_random_id,
     -- bitmaps building is very expensive ==> always set this var = 0.
     v_can_skip_order_clause = 0;
 
@@ -172,58 +172,34 @@ begin
     delete from tmp$shopping_cart where 1=1;
     row_cnt = 0;
     qty_sum = 0;
-    while ( v_doc_rows > 0 ) do begin
 
+    for
+        select p.id_selected
+        from
+                sp_get_random_id(
+                    :v_source_for_random_id,
+                    :v_source_for_min_id,
+                    :v_source_for_max_id,
+                    :v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
+                    :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
+                    :v_find_using_desc_index, -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
+                    :v_doc_rows
+                ) p
+         into v_ware_id
+    do
+    begin
         v_qty = coalesce(a_maxq4row, fn_get_random_quantity( v_ctx_max_qty ));
-
         if ( a_optype_id = fn_oper_order_by_customer() ) then
-            begin
-                if ( rdb$get_context('USER_SESSION','ENABLE_FILL_PHRASES')='1' -- enable check performance of similar_to
-                     and
-                     exists( select * from phrases )
-                   ) then
-                    begin
-                        -- For checking performance of SIMILAR TO:
-                        -- search using preliminary generated patterns
-                        -- (generation of them see in oltp_fill_data.sql):
-                        select p.pattern from phrases p
-                        where p.id = (select fn_get_random_id('phrases',null,null, :v_raise_exc_on_nofind) from rdb$database)
-                        into v_pattern;
-                        v_stt = 'select id from wares where '||v_pattern||' rows 1';
-                        execute statement(v_stt) into v_ware_id;
-                        if ( v_ware_id is null ) then
-                          exception ex_record_not_found using ('wares', v_pattern);
-                    end
-                else
-                    v_ware_id =
-                    fn_get_random_id(
-                        v_source_for_random_id,
-                        null,
-                        null,
-                        :v_raise_exc_on_nofind
-                    ); -- <<< take random ware from price list
-
-                -- Define cost of ware being added in customer order,
-                -- in purchasing and retailing prices (allow them to vary):
-                select
-                     round( w.price_purchase + rand() * 300, -2) * :v_qty
-                    ,round( w.price_retail + rand() * 300, -2) * :v_qty
-                from wares w
-                where w.id = :v_ware_id
-                into v_cost_purchase, v_cost_retail;
-            end
-        else -- a_optype_id <> fn_oper_order_by_customer()
-            begin
-                v_ware_id =
-                fn_get_random_id(
-                    v_source_for_random_id,
-                    v_source_for_min_id,
-                    v_source_for_max_id,
-                    v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
-                    v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
-                    v_find_using_desc_index -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
-                );
-            end
+        begin
+            -- Define cost of ware being added in customer order,
+            -- in purchasing and retailing prices (allow them to vary):
+            select
+                 round( w.price_purchase + rand() * 300, -2) * :v_qty
+                ,round( w.price_retail + rand() * 300, -2) * :v_qty
+            from wares w
+            where w.id = :v_ware_id
+            into v_cost_purchase, v_cost_retail;
+        end
 
         if ( v_ware_id is not null ) then
         begin
@@ -250,7 +226,7 @@ begin
             );
             row_cnt = row_cnt + 1; -- out arg, will be used in getting batch IDs for doc_data (reduce lock-contention of GEN page)
             qty_sum = qty_sum + ceiling( v_qty ); -- out arg, will be passed to s`p_multiply_rows_for_pdistr, s`p_make_qty_storno
-
+        
         when any
             do begin
                 if ( fn_is_uniqueness_trouble(gdscode) ) then
@@ -261,9 +237,100 @@ begin
                     exception; -- anonimous but in WHEN block
             end
         end -- v_ware_id not null
-        v_doc_rows = v_doc_rows -1;
+    end
 
-    end -- while ( v_doc_rows > 0 ) 
+--    while ( v_doc_rows > 0 ) do begin
+--
+--        v_qty = coalesce(a_maxq4row, fn_get_random_quantity( v_ctx_max_qty ));
+--
+--        if ( a_optype_id = fn_oper_order_by_customer() ) then
+--            begin
+--                if ( rdb$get_context('USER_SESSION','ENABLE_FILL_PHRASES')='1' -- enable check performance of similar_to
+--                     and
+--                     exists( select * from phrases )
+--                   ) then
+--                    begin
+--                        -- For checking performance of SIMILAR TO:
+--                        -- search using preliminary generated patterns
+--                        -- (generation of them see in oltp_fill_data.sql):
+--                        select p.pattern from phrases p
+--                        where p.id = (select sp_get_random_id('phrases',null,null, :v_raise_exc_on_nofind) from rdb$database)
+--                        into v_pattern;
+--                        v_stt = 'select id from wares where '||v_pattern||' rows 1';
+--                        execute statement(v_stt) into v_ware_id;
+--                        if ( v_ware_id is null ) then
+--                          exception ex_record_not_found using ('wares', v_pattern);
+--                    end
+--                else
+--                    v_ware_id =
+--                    sp_get_random_id(
+--                        v_source_for_random_id,
+--                        null,
+--                        null,
+--                        :v_raise_exc_on_nofind
+--                    ); -- <<< take random ware from price list
+--
+--                -- Define cost of ware being added in customer order,
+--                -- in purchasing and retailing prices (allow them to vary):
+--                select
+--                     round( w.price_purchase + rand() * 300, -2) * :v_qty
+--                    ,round( w.price_retail + rand() * 300, -2) * :v_qty
+--                from wares w
+--                where w.id = :v_ware_id
+--                into v_cost_purchase, v_cost_retail;
+--            end
+--        else -- a_optype_id <> fn_oper_order_by_customer()
+--            begin
+--                v_ware_id =
+--                sp_get_random_id(
+--                    v_source_for_random_id,
+--                    v_source_for_min_id,
+--                    v_source_for_max_id,
+--                    v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
+--                    v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
+--                    v_find_using_desc_index -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
+--                );
+--            end
+--
+--        if ( v_ware_id is not null ) then
+--        begin
+--            -- All the views v_r`andom_finx_xxx have checking clause like
+--            -- "where NOT exists(select * from tmp$shopping_cart c where ...)"
+--            -- so we can immediatelly do INSERT rather than update+check row_count=0
+--            insert into tmp$shopping_cart(
+--                id,
+--                snd_optype_id,
+--                rcv_optype_id,
+--                qty,
+--                storno_sub,
+--                cost_purchase,
+--                cost_retail
+--            )
+--            values (
+--                :v_ware_id,
+--                :v_snd_optype_id,
+--                :a_optype_id,
+--                :v_qty,
+--                :v_storno_sub,
+--                :v_cost_purchase,
+--                :v_cost_retail
+--            );
+--            row_cnt = row_cnt + 1; -- out arg, will be used in getting batch IDs for doc_data (reduce lock-contention of GEN page)
+--            qty_sum = qty_sum + ceiling( v_qty ); -- out arg, will be passed to s`p_multiply_rows_for_pdistr, s`p_make_qty_storno
+--
+--        when any
+--            do begin
+--                if ( fn_is_uniqueness_trouble(gdscode) ) then
+--                    update tmp$shopping_cart t
+--                    set t.dup_cnt = t.dup_cnt+1 -- 4debug only
+--                    where t.id = :v_ware_id;
+--                else
+--                    exception; -- anonimous but in WHEN block
+--            end
+--        end -- v_ware_id not null
+--        v_doc_rows = v_doc_rows -1;
+--
+--    end -- while ( v_doc_rows > 0 ) 
 
     if ( not exists(select * from tmp$shopping_cart) ) then
         exception ex_no_rows_in_shopping_cart using( v_source_for_random_id ); -- 'shopping_cart is empty, check source ''@1'''
@@ -302,10 +369,10 @@ create or alter procedure sp_client_order(
     dbg_maxq4row int default null
 )
 returns (
-    doc_list_id type of dm_ids,
-    agent_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    agent_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty,
     purchase type of dm_cost, -- purchasing cost for qty
     retail type of dm_cost, -- retail cost
@@ -316,14 +383,14 @@ returns (
 as
     declare c_gen_inc_step_dd int = 20; -- size of `batch` for get at once new IDs for doc_data (reduce lock-contention of gen page)
     declare v_gen_inc_iter_dd int; -- increments from 1  up to c_gen_inc_step_dd and then restarts again from 1
-    declare v_gen_inc_last_dd dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_dd)
+    declare v_gen_inc_last_dd dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_dd)
 
     declare c_gen_inc_step_nt int = 20; -- size of `batch` for get at once new IDs for invnt_turnover_log (reduce lock-contention of gen page)
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_dd and then restarts again from 1
-    declare v_gen_inc_last_nt dm_ids; -- last got value after call gen_id (..., c_gen_inc_step_dd)
+    declare v_gen_inc_last_nt dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_dd)
 
-    declare v_oper_order_by_customer dm_ids;
-    declare v_nt_new_id dm_ids;
+    declare v_oper_order_by_customer dm_idb;
+    declare v_nt_new_id dm_idb;
     declare v_clo_for_our_firm dm_sign = 0;
     declare v_rows_added int = 0;
     declare v_qty_sum dm_qty = 0;
@@ -368,7 +435,8 @@ begin
     if ( rand()*100 <= cast(rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT') as int) ) then
         begin
             v_clo_for_our_firm = 1;
-            agent_id = fn_get_random_id('v_our_firm', null, null, 0);
+            --agent_id = sp_get_random_id('v_our_firm', null, null, 0);
+            select id_selected from sp_get_random_id('v_our_firm', null, null, 0) into agent_id;
         end
     else
         agent_id = fn_get_random_customer();
@@ -534,14 +602,14 @@ end
 ------------------------------------------------------------------------------
 
 create or alter procedure sp_cancel_client_order(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     dbg int default 0
 )
 returns (
-    doc_list_id type of dm_ids,
-    agent_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    agent_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty,
     purchase type of dm_cost, -- purchasing cost for qty
     retail type of dm_cost, -- retail cost
@@ -576,12 +644,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_client_order' -- a_view_for_search
+                            (select id_selected from
+                            sp_get_random_id( 'v_cancel_client_order' -- a_view_for_search
                                               ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                               ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
+                                              ,:c_raise_exc_when_no_found
+                                              ,:c_can_skip_order_clause
                                             )
+                            )
                           );
 
     -- Find doc ID (with checking in view v_*** is need) and try to LOCK it.
@@ -660,10 +730,10 @@ create or alter procedure sp_supplier_order(
     dbg_maxq4row int default null
 )
 returns (
-    doc_list_id type of dm_ids,
-    agent_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    agent_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty, -- amount that we ordered for client
     purchase type of dm_cost, -- purchasing cost for qty
     retail type of dm_cost, -- retail cost
@@ -779,10 +849,10 @@ create or alter procedure sp_supplier_invoice (
     dbg_maxq4row int default null
 )
 returns (
-    doc_list_id type of dm_ids,
-    agent_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    agent_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty,
     purchase type of dm_cost,
     retail type of dm_cost,
@@ -894,14 +964,14 @@ end
 -----------------------------------------
 
 create or alter procedure sp_cancel_supplier_invoice(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 )
 returns(
-    doc_list_id type of dm_ids, -- id of created invoice
-    agent_id type of dm_ids, -- id of supplier
-    doc_data_id type of dm_ids, -- id of created records in doc_data
-    ware_id type of dm_ids, -- id of wares that we will get from supplier
+    doc_list_id type of dm_idb, -- id of created invoice
+    agent_id type of dm_idb, -- id of supplier
+    doc_data_id type of dm_idb, -- id of created records in doc_data
+    ware_id type of dm_idb, -- id of wares that we will get from supplier
     qty type of dm_qty, -- amount that supplier will send to us
     purchase type of dm_cost, -- total purchasing cost for qty
     retail type of dm_cost, -- assigned retail cost
@@ -940,12 +1010,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_supplier_invoice' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
-                                            )
+                            ( select id_selected from
+                              sp_get_random_id(  'v_cancel_supplier_invoice' -- a_view_for_search
+                                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                                ,:c_raise_exc_when_no_found
+                                                ,:c_can_skip_order_clause
+                                              )
+                            )
                           );
     -- upd. log with doc id whic is actually handling now:
     execute procedure sp_upd_in_perf_log( v_this, null, 'dh='||doc_list_id);
@@ -1036,18 +1108,18 @@ end
 -----------------------------------------
 
 create or alter procedure sp_fill_shopping_cart_clo_res(
-    a_client_order_id dm_ids
+    a_client_order_id dm_idb
 )
 returns (
     row_cnt int, -- number of rows added to tmp$shop_cart
     qty_sum dm_qty -- total on QTY field in tmp$shop_cart
 )
 as
-    declare v_oper_invoice_add dm_ids;
-    declare v_oper_retail_reserve dm_ids;
-    declare v_oper_order_by_customer dm_ids;
-    declare v_ware_id dm_ids;
-    declare v_dd_id dm_ids;
+    declare v_oper_invoice_add dm_idb;
+    declare v_oper_retail_reserve dm_idb;
+    declare v_oper_order_by_customer dm_idb;
+    declare v_ware_id dm_idb;
+    declare v_dd_id dm_idb;
     declare v_clo_qty_need_to_reserve dm_qty;
     declare v_this dm_dbobj = 'sp_fill_shopping_cart_clo_res';
 begin
@@ -1068,14 +1140,16 @@ begin
         -- 16.09.2014 PLAN SORT (JOIN (D INDEX (FK_DOC_DATA_DOC_LIST), Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC)))
         -- (much faster than old: from qdistr where q.doc_id = :a_client_order_id and snd_op = ... and rcv_op = ...)
         from doc_data d
-        LEFT -- !! force to fix plan JOIN (D INDEX (FK_DOC_DATA_DOC_LIST), Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC)
-        join qdistr q on
-             q.snd_optype_id = :v_oper_order_by_customer
+        LEFT -- !! force to fix plan with 'doc_data' as drive table, see CORE-4926
+        join v_qdistr_source q on
+             -- :: NB :: full match on index range scan must be here!
+             q.ware_id = d.ware_id
+             and q.snd_optype_id = :v_oper_order_by_customer
              and q.rcv_optype_id = :v_oper_retail_reserve
              and q.snd_id = d.id --- :: NB :: full match on index range scan must be here!
         where
             d.doc_id = :a_client_order_id
-            and q.id is not null -- 17.09.2014 23:12!
+            and q.id is not null
         group by d.ware_id, d.id
     into v_ware_id, v_dd_id, v_clo_qty_need_to_reserve
     do begin
@@ -1129,13 +1203,13 @@ end
 -----------------------------------------
 
 create or alter procedure sp_customer_reserve(
-    a_client_order_id type of dm_ids default null,
+    a_client_order_id type of dm_idb default null,
     dbg integer default 0)
 returns (
-    doc_list_id type of dm_ids,
-    client_order_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    client_order_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty,
     purchase type of dm_cost,
     retail type of dm_cost,
@@ -1147,7 +1221,7 @@ as
     declare v_rows_added int;
     declare v_qty_sum dm_qty;
     declare v_dbkey dm_dbkey;
-    declare v_agent_id type of dm_ids;
+    declare v_agent_id type of dm_idb;
     declare v_raise_exc_on_nofind dm_sign;
     declare v_can_skip_order_clause dm_sign;
     declare v_find_using_desc_index dm_sign;
@@ -1189,21 +1263,24 @@ begin
     else if ( a_client_order_id is null ) then
         begin
             v_raise_exc_on_nofind = 0;   -- do NOT raise exc if random seacrh will not find any record
-            v_can_skip_order_clause = 0; -- do NOT skip `order by` clause in fn_get_random_id (if order by id DESC will be used!)
+            v_can_skip_order_clause = 0; -- do NOT skip `order by` clause in sp_get_random_id (if order by id DESC will be used!)
             v_find_using_desc_index = 0; -- 22.09.2014; befo: 1; -- use 'order by id DESC' (11.09.2014)
             -- First of all try to search among client_orders which have
             -- at least one row with NOT_fully reserved ware.
-            -- Call fn_get_random_id with arg NOT to raise exc`eption if
+            -- Call sp_get_random_id with arg NOT to raise exc`eption if
             -- it will not found such documents:
-            a_client_order_id =
-                fn_get_random_id(
+            select id_selected
+            from
+                sp_get_random_id(
                     'v_random_find_clo_res',
                     'v_min_id_clo_res',
                     'v_max_id_clo_res',
-                    v_raise_exc_on_nofind,
-                    v_can_skip_order_clause,
-                    v_find_using_desc_index
-                );
+                    :v_raise_exc_on_nofind,
+                    :v_can_skip_order_clause,
+                    :v_find_using_desc_index
+                )
+            into
+                a_client_order_id;
         end
 
     v_qty_sum = 0;
@@ -1318,14 +1395,14 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure sp_cancel_customer_reserve(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 )
 returns (
-    doc_list_id type of dm_ids, -- id of new created reserve doc
-    client_order_id type of dm_ids, -- id of client order (if current reserve was created with link to it)
-    doc_data_id type of dm_ids, -- id of created records in doc_data
-    ware_id type of dm_ids, -- id of wares that we resevre for customer
+    doc_list_id type of dm_idb, -- id of new created reserve doc
+    client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
+    doc_data_id type of dm_idb, -- id of created records in doc_data
+    ware_id type of dm_idb, -- id of wares that we resevre for customer
     qty type of dm_qty, -- amount that we can reserve (not greater than invnt_saldo.qty_avl)
     purchase type of dm_cost, -- cost in purchasing prices
     retail type of dm_cost, -- cost in retailing prices
@@ -1333,7 +1410,7 @@ returns (
     qty_avl type of dm_qty, -- new value of corresp. row
     qty_res type of dm_qty -- new value of corresp. row
 ) as
-    declare v_linked_client_order type of dm_ids;
+    declare v_linked_client_order type of dm_idb;
     declare v_stt varchar(255);
     declare v_ibe smallint;
     declare v_dummy bigint;
@@ -1366,13 +1443,15 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id(
+                            ( select id_selected from
+                              sp_get_random_id(
                                 'v_cancel_customer_reserve' -- a_view_for_search
                                 ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                 ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                ,c_raise_exc_when_no_found
-                                ,c_can_skip_order_clause
+                                ,:c_raise_exc_when_no_found
+                                ,:c_can_skip_order_clause
                                             )
+                            )
                           );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
@@ -1482,14 +1561,14 @@ end
 -----------------------------------------
 
 create or alter procedure sp_cancel_write_off(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 )
 returns (
-    doc_list_id type of dm_ids, -- id of invoice being added to stock
-    client_order_id type of dm_ids, -- id of client order (if current reserve was created with link to it)
-    doc_data_id type of dm_ids, -- id of created records in doc_data
-    ware_id type of dm_ids, -- id of wares that we will get from supplier
+    doc_list_id type of dm_idb, -- id of invoice being added to stock
+    client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
+    doc_data_id type of dm_idb, -- id of created records in doc_data
+    ware_id type of dm_idb, -- id of wares that we will get from supplier
     qty type of dm_qty,
     purchase type of dm_cost,
     retail type of dm_cost,
@@ -1501,8 +1580,8 @@ as
     declare v_dummy bigint;
     declare v_ibe smallint;
     declare v_stt varchar(255);
-    declare v_agent_id type of dm_ids;
-    declare v_linked_client_order type of dm_ids;
+    declare v_agent_id type of dm_idb;
+    declare v_linked_client_order type of dm_idb;
     declare v_this dm_dbobj = 'sp_cancel_write_off';
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
@@ -1535,13 +1614,15 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id(
+                            ( select id_selected from
+                              sp_get_random_id(
                                 'v_cancel_write_off' -- a_view_for_search
                                 ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                 ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                ,c_raise_exc_when_no_found
-                                ,c_can_skip_order_clause
-                                            )
+                                ,:c_raise_exc_when_no_found
+                                ,:c_can_skip_order_clause
+                                              )
+                            )
                           );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
@@ -1621,23 +1702,24 @@ end
 
 -------------------------------------------------------------------------------
 
-create or alter procedure sp_get_clo_for_invoice( a_selected_doc_id dm_ids )
+create or alter procedure sp_get_clo_for_invoice( a_invoice_doc_id dm_idb )
 returns (
-    clo_doc_id type of dm_ids,
-    clo_agent_id type of dm_ids -- 23.07.2014
+    clo_doc_id type of dm_idb,
+    clo_agent_id type of dm_idb -- 23.07.2014
 )
 as
     declare v_dbkey dm_dbkey;
     declare v_qty_acc dm_qty;
     declare v_qty_sup type of dm_qty;
+    declare v_snd_qty dm_qty;
     declare v_qty_clo_still_not_reserved dm_qty;
-    declare v_clo_doc_id dm_ids;
-    declare v_clo_agent_id dm_ids;
-    declare v_ware_id dm_ids;
+    declare v_clo_doc_id dm_idb;
+    declare v_clo_agent_id dm_idb;
+    declare v_ware_id dm_idb;
     declare v_cnt int = 0;
     declare v_this dm_dbobj = 'sp_get_clo_for_invoice';
-    declare v_oper_order_by_customer dm_ids;
-    declare v_oper_retail_reserve dm_ids;
+    declare v_oper_order_by_customer dm_idb;
+    declare v_oper_retail_reserve dm_idb;
 begin
 
     -- Aux SP: find client orders which have at least one unit of amount of
@@ -1653,7 +1735,7 @@ begin
     v_oper_order_by_customer =  fn_oper_order_by_customer();
     v_oper_retail_reserve = fn_oper_retail_reserve();
 
-    delete from tmp$dep_docs d where d.base_doc_id = :a_selected_doc_id;
+    delete from tmp$dep_docs d where d.base_doc_id = :a_invoice_doc_id;
 
     -- :: NB :: We need handle rows via CURSOR here because of immediate leave
     -- from cursor when limit (invoice doc_data.qty as v_qty_sup) will be exceeded
@@ -1662,37 +1744,53 @@ begin
     for
         select d.ware_id, d.qty
         from doc_data d
-        where d.doc_id = :a_selected_doc_id -- invoice which we are closing now
+        where d.doc_id = :a_invoice_doc_id -- invoice which we are closing now
         into v_ware_id, v_qty_sup
     do begin
         v_qty_acc = 0;
+
+        -- Gather REMAINDER of initial amount in ALL client orders
+        -- that still not yet reserved.
+        -- 05.09.2015. Note: we have to stop scrolling on QDistr for each ware
+        -- from invoice as soon as number of scrolled records will be >= v_qty_sup
+        -- (because we can`t put in reserve more than we got from supplier;
+        -- also because of performance: there are usially **LOT** of rows in QDistr
+        -- for the same value of {ware, snd_op, rcv_op})
         for
-            select x.clo_doc_id, x.clo_qty, h.agent_id
-            from (
-                -- Checked 16.09.2014: PLAN (Q ORDER QDISTR_DOC_SND INDEX (QDISTR_WARE_SNDOP_RCVOP))
-                select
-                    q.doc_id as clo_doc_id, -- id of customer order
-                    sum(q.snd_qty) as clo_qty -- REST of initial amount in client order that still not yet reserved
-                from qdistr q
+        select
+            q.doc_id as clo_doc_id, -- id of customer order
+            q.snd_qty as clo_qty -- always = 1 (in current implementation)
+        from v_qdistr_source q
+        where
+            -- :: NB :: PARTIAL match on index range scan will be here.
+            -- For that reason we have to STOP scrolling as soon as possible!
+            q.ware_id = :v_ware_id
+            and q.snd_optype_id = :v_oper_order_by_customer
+            and q.rcv_optype_id = :v_oper_retail_reserve
+            and not exists(
+                select * from tmp$dep_docs t
                 where
-                    q.ware_id = :v_ware_id
-                    and q.snd_optype_id = :v_oper_order_by_customer
-                    and q.rcv_optype_id = :v_oper_retail_reserve
-                group by q.doc_id
-            ) x
-            join doc_list h on
-                x.clo_doc_id = h.id
-                and h.optype_id = :v_oper_order_by_customer -- 31.07.2014: exclude cancelled customer orders!
-            into v_clo_doc_id, v_qty_clo_still_not_reserved, v_clo_agent_id
+                    t.base_doc_id = :a_invoice_doc_id
+                    and t.dependend_doc_id = q.doc_id
+                -- prevent from building index bitmap (has effect only in 3.0; do NOT repeat in 2.5!):
+                order by t.base_doc_id, t.dependend_doc_id
+            )
+        order by q.ware_id, q.snd_optype_id, q.rcv_optype_id, q.snd_id -- ==> 3.0: plan_order, avoid bild bitmap
+        into v_clo_doc_id, v_snd_qty
         do begin
-            -- NB: BASE_DOC_ID,DEPENDEND_DOC_ID ==> unique
-            insert into tmp$dep_docs( base_doc_id, dependend_doc_id, dependend_doc_agent_id, ware_id, base_doc_qty, dependend_doc_qty )
-            values(:a_selected_doc_id, :v_clo_doc_id, :v_clo_agent_id, :v_ware_id, :v_qty_sup, :v_qty_clo_still_not_reserved );
+            v_qty_acc = v_qty_acc + v_snd_qty;
             v_cnt = v_cnt + 1;
-            v_qty_acc = v_qty_acc + v_qty_clo_still_not_reserved;
-            if ( v_qty_acc >= v_qty_sup ) then
-                leave;
-        when any do
+
+            update or insert into tmp$dep_docs(
+                base_doc_id,
+                dependend_doc_id)
+            values (
+                :a_invoice_doc_id,
+                :v_clo_doc_id)
+            matching(base_doc_id, dependend_doc_id);
+
+            if ( v_qty_acc >= v_qty_sup ) then leave; -- we can`t put in reserve more than we got from supplier
+        when any do -- added 10.09.2014: strange 'concurrent transaction' error occured on GTT!
             -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
             -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
             -- catched it's kind of exception!
@@ -1703,18 +1801,21 @@ begin
                 if ( NOT fn_is_uniqueness_trouble(gdscode) ) then exception;
             end
         end
+
     end
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
-    execute procedure sp_add_perf_log(0, v_this, null, 'doc_id='||a_selected_doc_id||', clo_cnt='||v_cnt);
-    -- check qry: select base_doc_id,dependend_doc_id,dependend_doc_agent_id,base_doc_qty,dependend_doc_qty as qty_clo_still_not_reserved,ware_id from tmp$dep_docs
+    execute procedure sp_add_perf_log(0, v_this, null, 'doc_id='||a_invoice_doc_id||', gather_qd_rows='||v_cnt);
 
     for
-        select f.dependend_doc_id, f.dependend_doc_agent_id
+        select f.dependend_doc_id, h.agent_id
         from tmp$dep_docs f
-        where f.base_doc_id = :a_selected_doc_id
-        order by f.dependend_doc_id
+        join doc_list h on
+                f.dependend_doc_id = h.id
+                and h.optype_id = :v_oper_order_by_customer -- 31.07.2014: exclude cancelled customer orders!
+        where f.base_doc_id = :a_invoice_doc_id
+        -- not needed! >>> group by f.dependend_doc_id, h.agent_id
         into clo_doc_id, clo_agent_id
     do
         suspend;
@@ -1727,7 +1828,7 @@ when any do  -- added 10.09.2014: strange 'concurrent transaction' error occured
         execute procedure sp_add_to_abend_log(
             '',
             gdscode,
-            'doc_id='||coalesce(a_selected_doc_id,'<null>'),
+            'doc_id='||coalesce(a_invoice_doc_id,'<null>'),
             v_this,
             fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
         );
@@ -1739,21 +1840,22 @@ when any do  -- added 10.09.2014: strange 'concurrent transaction' error occured
 
 end
 
+
 ^  -- sp_get_clo_for_invoice
 
 -------------------------------------------------------------------------------
 
 create or alter procedure sp_add_invoice_to_stock(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_cancel_mode dm_sign default 0,
     a_skip_lock_attempt dm_sign default 0, -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
     dbg int default 0
 )
 returns (
-    doc_list_id type of dm_ids, -- id of invoice being added to stock
-    agent_id type of dm_ids, -- id of supplier
-    doc_data_id type of dm_ids, -- id of created records in doc_data
-    ware_id type of dm_ids, -- id of wares that we will get from supplier
+    doc_list_id type of dm_idb, -- id of invoice being added to stock
+    agent_id type of dm_idb, -- id of supplier
+    doc_data_id type of dm_idb, -- id of created records in doc_data
+    ware_id type of dm_idb, -- id of wares that we will get from supplier
     qty type of dm_qty, -- amount that supplier will send to us
     purchase type of dm_cost, -- how much we must pay to supplier for this ware
     qty_sup type of dm_qty, -- new value of corresponding row in invnt_saldo
@@ -1768,12 +1870,12 @@ as
     declare v_ibe smallint;
     declare v_stt varchar(255);
     declare v_info dm_info;
-    declare v_new_doc_state type of dm_ids;
-    declare v_old_oper_id type of dm_ids;
-    declare v_new_oper_id type of dm_ids;
-    declare v_client_order type of dm_ids;
-    declare v_linked_reserve_id type of dm_ids;
-    declare v_linked_reserve_state type of dm_ids;
+    declare v_new_doc_state type of dm_idb;
+    declare v_old_oper_id type of dm_idb;
+    declare v_new_oper_id type of dm_idb;
+    declare v_client_order type of dm_idb;
+    declare v_linked_reserve_id type of dm_idb;
+    declare v_linked_reserve_state type of dm_idb;
     declare v_view_for_search dm_dbobj;
     declare v_this dm_dbobj = 'sp_add_invoice_to_stock';
     declare c_raise_exc_when_no_found dm_sign = 1;
@@ -1837,12 +1939,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( v_view_for_search -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
-                                            )
+                            (select id_selected
+                             from sp_get_random_id( :v_view_for_search -- a_view_for_search
+                                                    ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                                    ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                                    ,:c_raise_exc_when_no_found
+                                                    ,:c_can_skip_order_clause
+                                                  )
+                            )
                           );
 
 
@@ -2017,15 +2121,15 @@ end
 ^ -- end of sp_add_invoice_to_stock
 
 create or alter procedure sp_cancel_adding_invoice(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_skip_lock_attempt dm_sign default 0, -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
     dbg int default 0
 )
 returns (
-    doc_list_id type of dm_ids, -- id of invoice being added to stock
-    agent_id type of dm_ids, -- id of supplier
-    doc_data_id type of dm_ids, -- id of created records in doc_data
-    ware_id type of dm_ids, -- id of wares that we will get from supplier
+    doc_list_id type of dm_idb, -- id of invoice being added to stock
+    agent_id type of dm_idb, -- id of supplier
+    doc_data_id type of dm_idb, -- id of created records in doc_data
+    ware_id type of dm_idb, -- id of wares that we will get from supplier
     qty type of dm_qty, -- amount that supplier will send to us
     purchase type of dm_cost, -- how much we must pay to supplier for this ware
     qty_sup type of dm_qty, -- new value of corresponding row in invnt
@@ -2108,12 +2212,12 @@ end -- sp_cancel_adding_invoice
 --------------------------------------------------------------------------------
 
 create or alter procedure sp_cancel_supplier_order(
-    a_selected_doc_id type of dm_ids default null)
+    a_selected_doc_id type of dm_idb default null)
 returns (
-    doc_list_id type of dm_ids,
-    agent_id type of dm_ids,
-    doc_data_id type of dm_ids,
-    ware_id type of dm_ids,
+    doc_list_id type of dm_idb,
+    agent_id type of dm_idb,
+    doc_data_id type of dm_idb,
+    ware_id type of dm_idb,
     qty type of dm_qty, -- amount that we ordered for client
     purchase type of dm_cost, -- purchasing cost for qty
     retail type of dm_cost, -- retail cost
@@ -2168,12 +2272,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_supplier_order' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
-                                            )
+                            (select id_selected from
+                              sp_get_random_id( 'v_cancel_supplier_order' -- a_view_for_search
+                                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
+                                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
+                                                ,:c_raise_exc_when_no_found
+                                                ,:c_can_skip_order_clause
+                                              )
+                            )
                           );
     v_info = 'dh='||doc_list_id;
     -- upd. log with doc id whic is actually handling now:
@@ -2322,12 +2428,12 @@ end
 
 --------------------------------------------------------------------------------
 
-create or alter procedure sp_reserve_write_off(a_selected_doc_id type of dm_ids default null)
+create or alter procedure sp_reserve_write_off(a_selected_doc_id type of dm_idb default null)
 returns (
-    doc_list_id type of dm_ids, -- id of customer reserve doc
-    client_order_id type of dm_ids, -- id of client order (if current reserve was created with link to it)
-    doc_data_id type of dm_ids, -- id of processed records in doc_data
-    ware_id type of dm_ids, -- id of ware
+    doc_list_id type of dm_idb, -- id of customer reserve doc
+    client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
+    doc_data_id type of dm_idb, -- id of processed records in doc_data
+    ware_id type of dm_idb, -- id of ware
     qty type of dm_qty, -- amount that is written-offf
     purchase type of dm_cost, -- cost in purchasing prices
     retail  type of dm_cost, -- cost in retailing prices
@@ -2336,7 +2442,7 @@ returns (
     qty_out type of dm_qty  -- new value of corresponding row in invnt_saldo
 )
 as
-    declare v_linked_client_order type of dm_ids;
+    declare v_linked_client_order type of dm_idb;
     declare v_ibe smallint;
     declare v_stt varchar(255);
     declare v_dummy bigint;
@@ -2369,12 +2475,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_reserve_write_off' -- a_view_for_search
+                            (select id_selected from
+                             sp_get_random_id( 'v_reserve_write_off' -- a_view_for_search
                                               ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                               ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
+                                              ,:c_raise_exc_when_no_found
+                                              ,:c_can_skip_order_clause
                                             )
+                            )
                           );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
@@ -2451,13 +2559,13 @@ end -- sp_reserve_write_off
 -------------------------------------------------------------------------------
 
 create or alter procedure sp_payment_common(
-    a_payment_oper dm_ids, -- fn_oper_pay_from_customer() or  fn_oper_pay_to_supplier()
-    a_selected_doc_id type of dm_ids default null,
+    a_payment_oper dm_idb, -- fn_oper_pay_from_customer() or  fn_oper_pay_to_supplier()
+    a_selected_doc_id type of dm_idb default null,
     a_total_pay type of dm_cost default null
 )
 returns (
-    source_doc_id type of dm_ids, -- id of doc which is paid (reserve or invoice)
-    agent_id type of dm_ids,
+    source_doc_id type of dm_idb, -- id of doc which is paid (reserve or invoice)
+    agent_id type of dm_idb,
     current_pay_sum type of dm_cost
 )
 as
@@ -2527,15 +2635,16 @@ begin
 
     if ( :a_selected_doc_id is null ) then
         begin
-            source_doc_id =
-                fn_get_random_id(
-                                   v_source_for_random_id,
-                                   v_source_for_min_id,
-                                   v_source_for_max_id,
+            select id_selected
+            from sp_get_random_id(
+                                   :v_source_for_random_id,
+                                   :v_source_for_min_id,
+                                   :v_source_for_max_id,
                                    0, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
-                                   v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
-                                   v_find_using_desc_index -- 11.09.2014
-                                 );
+                                   :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
+                                   :v_find_using_desc_index -- 11.09.2014
+                                 )
+            into source_doc_id;
             if ( source_doc_id is not null ) then
             begin
                 select agent_id from doc_list h where h.id = :source_doc_id into agent_id;
@@ -2573,7 +2682,7 @@ begin
         end
     else -- source_doc_id is null
         begin
-            agent_id = fn_get_random_id( view_to_search_agent, null, null, 0 );
+            select id_selected from sp_get_random_id( :view_to_search_agent, null, null, 0 ) into agent_id;
             if ( a_total_pay is null ) then
                 begin
                     if (a_payment_oper = fn_oper_pay_from_customer() ) then
@@ -2616,14 +2725,14 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure sp_pay_from_customer(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_total_pay type of dm_cost default null,
     dbg int default 0
 )
 returns (
-    agent_id type of dm_ids,
-    prepayment_id type of dm_ids, -- id of prepayment that was done here
-    realization_id type of dm_ids, -- id of reserve realization doc that 'receives' this advance
+    agent_id type of dm_idb,
+    prepayment_id type of dm_idb, -- id of prepayment that was done here
+    realization_id type of dm_idb, -- id of reserve realization doc that 'receives' this advance
     current_pay_sum type of dm_cost
 )
 as
@@ -2693,11 +2802,11 @@ end
 ^  -- sp_pay_from_customer
 
 create or alter procedure sp_cancel_pay_from_customer(
-    a_selected_doc_id type of dm_ids default null
+    a_selected_doc_id type of dm_idb default null
 )
 returns (
-    doc_list_id type of dm_ids, -- id of selected doc (prepayment that is deleted)
-    agent_id type of dm_ids, -- id of customer
+    doc_list_id type of dm_idb, -- id of selected doc (prepayment that is deleted)
+    agent_id type of dm_idb, -- id of customer
     prepayment_sum type of dm_cost -- customer's payment (in retailing prices)
 )
 as
@@ -2722,12 +2831,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_customer_prepayment' -- a_view_for_search
+                            (select id_selected from
+                             sp_get_random_id( 'v_cancel_customer_prepayment' -- a_view_for_search
                                               ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                               ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
-                                            )
+                                              ,:c_raise_exc_when_no_found
+                                              ,:c_can_skip_order_clause
+                                             )
+                            )
                           );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
@@ -2771,20 +2882,20 @@ end
 
 
 create or alter procedure sp_pay_to_supplier(
-    a_selected_doc_id type of dm_ids default null,
+    a_selected_doc_id type of dm_idb default null,
     a_total_pay type of dm_cost default null,
     dbg int default 0
 )
 returns (
-    agent_id type of dm_ids,
-    prepayment_id type of dm_ids, -- id of prepayment that was done here
-    invoice_id type of dm_ids, -- id of open supplier invoice(s) that 'receives' this advance
+    agent_id type of dm_idb,
+    prepayment_id type of dm_idb, -- id of prepayment that was done here
+    invoice_id type of dm_idb, -- id of open supplier invoice(s) that 'receives' this advance
     current_pay_sum type of dm_cost -- total sum of prepayment (advance)
 )
 as
     declare v_dbkey dm_dbkey;
     declare v_round_to smallint;
-    declare v_id type of dm_ids;
+    declare v_id type of dm_idb;
     declare v_this dm_dbobj = 'sp_pay_to_supplier';
 begin
 
@@ -2849,11 +2960,11 @@ end
 ^  -- sp_pay_to_supplier
 
 create or alter procedure sp_cancel_pay_to_supplier(
-    a_selected_doc_id type of dm_ids default null
+    a_selected_doc_id type of dm_idb default null
 )
 returns (
-    doc_list_id type of dm_ids, -- id of selected doc
-    agent_id type of dm_ids, -- id of customer
+    doc_list_id type of dm_idb, -- id of selected doc
+    agent_id type of dm_idb, -- id of customer
     prepayment_sum type of dm_cost
 )
 as
@@ -2878,12 +2989,14 @@ begin
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            fn_get_random_id( 'v_cancel_payment_to_supplier' -- a_view_for_search
+                            (select id_selected from
+                             sp_get_random_id( 'v_cancel_payment_to_supplier' -- a_view_for_search
                                               ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                               ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,c_raise_exc_when_no_found
-                                              ,c_can_skip_order_clause
+                                              ,:c_raise_exc_when_no_found
+                                              ,:c_can_skip_order_clause
                                             )
+                            )
                           );
 
     -- Try to LOCK just selected doc, raise exc if can`t:
@@ -2930,7 +3043,7 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure srv_make_invnt_saldo(
-    a_selected_ware_id type of dm_ids default null
+    a_selected_ware_id type of dm_idb default null
 )
 returns (
     msg dm_info,
@@ -2939,7 +3052,7 @@ returns (
     del_rows int
 )
 as
-    declare v_semaphore_id type of dm_ids;
+    declare v_semaphore_id type of dm_idb;
     declare v_deferred_to_next_time boolean = false;
     declare v_gdscode int = null;
     declare v_catch_bitset bigint;
@@ -3171,7 +3284,7 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure srv_make_money_saldo(
-    a_selected_agent_id type of dm_ids default null
+    a_selected_agent_id type of dm_idb default null
 )
 returns (
     msg dm_info,
@@ -3255,40 +3368,45 @@ begin
     del_rows = 0;
     v_dts_beg = 'now';
     for
-        select
-            m.rdb$db_key,
-            m.agent_id,
-            o.m_supp_debt,
-            o.m_cust_debt,
-            m.cost_purchase,
-            m.cost_retail
-        from money_turnover_log m
-        join optypes o on m.optype_id = o.id
+        select x.agent_id,
+                sum( o.m_supp_debt * x.sum_purchase ) sum_purchase,
+                sum( o.m_cust_debt * x.sum_retail ) sum_retail
+        from (
+            select
+                m.agent_id,
+                m.optype_id,
+                sum( m.cost_purchase ) sum_purchase,
+                sum( m.cost_retail ) sum_retail
+            from money_turnover_log m
+            -- 27.09.2015: added index on (agent_id, optype_id)
+            group by m.agent_id, m.optype_id
+        ) x
+        join optypes o on x.optype_id = o.id
+        group by x.agent_id
     into
-        v_dbkey,
         agent_id,
-        m_supp_debt, -- mutually excl. with m_cust_debt
-        m_cust_debt, -- mutually excl. with m_supp_debt
         cost_purchase,
         cost_retail
     do begin
 
-        delete from money_turnover_log m where m.rdb$db_key = :v_dbkey;
-        del_rows = del_rows + 1;
+        delete from money_turnover_log m
+        where m.agent_id = :agent_id;
+        del_rows = del_rows + row_count;
 
         update money_saldo
-        set cost_purchase = cost_purchase + :m_supp_debt * :cost_purchase,
-            cost_retail = cost_retail + :m_cust_debt * :cost_retail
+        set cost_purchase = cost_purchase + :cost_purchase,
+            cost_retail = cost_retail +  :cost_retail
         where agent_id = :agent_id;
 
         if ( row_count = 0 ) then
             begin
                 insert into money_saldo( agent_id, cost_purchase, cost_retail )
-                values( :agent_id, :m_supp_debt * :cost_purchase, :m_cust_debt * :cost_retail);
+                values( :agent_id, :cost_purchase, :cost_retail);
+
                 ins_rows = ins_rows + 1;
             end
         else
-            upd_rows = upd_rows + 1;
+            upd_rows = upd_rows + row_count;
 
     end -- cursor for money_turnover_log m join optypes o on m.optype_id = o.id
 
@@ -3328,7 +3446,7 @@ create or alter procedure srv_recalc_idx_stat returns(
     elapsed_ms int
 )
 as
-    declare v_semaphore_id type of dm_ids;
+    declare v_semaphore_id type of dm_idb;
     declare v_deferred_to_next_time boolean = false;
     declare v_dummy bigint;
     declare idx_stat_befo double precision;
@@ -3408,6 +3526,7 @@ begin
 
                 v_start='now';
                 execute statement( 'set statistics index '||idx_name );
+                elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
                 --with autonomous transaction; -- ::: nb ::: result of this recal will be seen in TIL = READ COMMITTED
 
                 execute procedure sp_add_perf_log(0, v_this||'_'||idx_name,null,tab_name, idx_stat_befo);
@@ -3435,6 +3554,46 @@ end
 --------------------------------------------------------------------------
 -- ###########################    R E P O R T S   ########################
 --------------------------------------------------------------------------
+
+create or alter procedure srv_get_last_launch_beg_end(
+    a_last_hours smallint default 3,
+    a_last_mins smallint default 0)
+returns (
+     last_launch_beg timestamp
+    ,last_launch_end timestamp
+) as
+begin
+    -- Auxiliary SP: finds moments of start and finish business operations in perf_log
+    -- on timestamp interval that is [L, N] where:
+    -- "L" = latest from {-abs( :a_last_hours * 60 + :a_last_mins ), 'perf_watch_interval'}
+    -- "N" = latest record in perf_log table
+    select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
+    from (
+        select p.dts_beg as last_job_start_dts
+        from perf_log p
+        where p.unit = 'perf_watch_interval'
+        order by dts_beg desc rows 1
+    ) x
+    cross join
+    (
+        select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
+        from perf_log p
+        where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
+        order by p.dts_beg desc
+        rows 1
+    ) y
+    into last_launch_beg;
+
+    select p.dts_end as report_end
+    from perf_log p
+    where p.dts_beg >= :last_launch_beg
+    order by p.dts_beg desc
+    rows 1
+    into last_launch_end;
+    suspend;
+end
+
+^ -- srv_get_last_launch_beg_end
 
 create or alter procedure srv_mon_perf_total(
     a_last_hours smallint default 3,
@@ -3581,6 +3740,9 @@ begin
 
     -- 15.09.2014 Get performance results 'in dynamic': split all job time to N
     -- intervals, where N is specified by 1st input argument.
+    -- 03.09.2015 Removed cross join perf_log and CTE 'inp_args as i' because
+    -- of inefficient plan. Input parameters are injected inside DT.
+    -- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
 
     a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
     a_last_hours = abs( a_last_hours );
@@ -3599,13 +3761,7 @@ begin
         ,stack
     )
     with
-    i as(
-        select
-            -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-            ,:a_intervals_number as intervals_number
-        from rdb$database
-    )
-    ,a as(
+    a as(
         -- reduce needed number of minutes from most last event of some SP starts:
         -- 18.07.2014: handle only data which belongs to LAST job.
         -- Record with p.unit = 'perf_watch_interval' is added in
@@ -3622,15 +3778,34 @@ begin
         ) x
         join (
             select
-                dateadd( i.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
+                dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
                 ,p.dts_beg as last_job_finish_dts
-                ,i.intervals_number
-            from perf_log p
-            join i on 1=1
+                ,p.intervals_number
+            from
+            ( -- since 03.09.2015:
+                select
+                    p.*
+                    , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
+                    , :a_intervals_number as intervals_number
+                from perf_log p
+            ) p
             -- nb: do NOT use inner join here (bad plan with sort)
             where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
             order by p.dts_beg desc
             rows 1
+-- Before 03.09.2015
+-- (inefficient plan with nested loops of all pef_log rows + SORT, 'rows 1' was ignored!
+-- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
+--            select
+--                dateadd( i.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
+--                ,p.dts_beg as last_job_finish_dts
+--                ,i.intervals_number
+--            from perf_log p
+--            join i on 1=1  -- CTE 'i' was: "with i as(select :a_intervals_number, :a_last_hours, :a_last_mins from rdb$database)
+--            -- nb: do NOT use inner join here (bad plan with sort)
+--            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
+--            order by p.dts_beg desc
+--            rows 1
         ) y on 1=1
     )
     ,d as(
@@ -3772,8 +3947,8 @@ returns (
     cnt_stack_trc integer, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
     cnt_zero_gds integer,  -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
     cnt_other_exc integer,
-    dts_beg timestamp,
-    dts_end timestamp
+    job_beg varchar(16),
+    job_end varchar(16)
 )
 as
 begin
@@ -3941,8 +4116,8 @@ begin
             ,cnt_stack_trc
             ,cnt_zero_gds
             ,cnt_other_exc
-            ,dts_beg
-            ,dts_end
+            ,left(cast(dts_beg as varchar(24)),16)
+            ,left(cast(dts_end as varchar(24)),16)
         from tmp$perf_mon
         --order by dy desc nulls first,hr desc, unit
     into unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
@@ -3954,8 +4129,8 @@ begin
         ,cnt_stack_trc
         ,cnt_zero_gds
         ,cnt_other_exc
-        ,dts_beg
-        ,dts_end
+        ,job_beg
+        ,job_end
     do
         suspend;
 
@@ -3978,8 +4153,8 @@ returns (
     cnt_lk_confl integer,
     cnt_user_exc integer,
     cnt_other_exc integer,
-    dts_beg timestamp,
-    dts_end timestamp
+    job_beg varchar(16),
+    job_end varchar(16)
 )
 AS
 declare v_dummy int;
@@ -4001,8 +4176,8 @@ begin
             ,s.cnt_lk_confl
             ,s.cnt_user_exc
             ,s.cnt_other_exc
-            ,s.dts_beg
-            ,s.dts_end
+            ,left(cast(s.dts_beg as varchar(24)),16)
+            ,left(cast(s.dts_end as varchar(24)),16)
         from business_ops o
         left join tmp$perf_mon s on o.unit=s.unit
         order by o.sort_prior
@@ -4018,8 +4193,8 @@ begin
         ,cnt_lk_confl
         ,cnt_user_exc
         ,cnt_other_exc
-        ,dts_beg
-        ,dts_end
+        ,job_beg
+        ,job_end
     do
         suspend;
 
@@ -4490,7 +4665,7 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure srv_fill_tmp_mon(
-    a_rowset dm_ids,
+    a_rowset dm_idb,
     a_ignore_system_tables smallint default 1,
     a_unit dm_unit default null,
     a_info dm_info default null,
@@ -4505,6 +4680,7 @@ as
     declare v_this dm_dbobj = 'srv_fill_tmp_mon';
     declare v_total_stat_added_rows int;
     declare v_table_stat_added_rows int;
+    declare v_info dm_info;
 begin
     rows_added = -1;
 
@@ -4672,7 +4848,10 @@ begin
     v_table_stat_added_rows = row_count;
 
     -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(0, v_this, null, 'rows added: total_stat='||v_total_stat_added_rows||', table_stat='||v_table_stat_added_rows );
+    v_info = 'unit: '||coalesce(a_unit,'<?>')
+            || ', rowset='||coalesce(a_rowset,'<?>')
+            || ', rows added: total_stat='||v_total_stat_added_rows||', table_stat='||v_table_stat_added_rows;
+    execute procedure sp_add_perf_log(0, v_this, null, v_info );
 
     rows_added = v_total_stat_added_rows + v_table_stat_added_rows; -- out arg
 
@@ -4699,9 +4878,369 @@ end
 
 ^ -- srv_fill_tmp_mon
 
-create or alter procedure srv_test_work returns(ret_code int)
+create or alter procedure srv_mon_stat_per_units (
+    a_last_hours smallint default 3,
+    a_last_mins smallint default 0 )
+returns (
+    unit dm_unit
+   ,iter_counts bigint
+   ,avg_elap_ms bigint
+   ,avg_rec_reads_sec numeric(12,2)
+   ,avg_rec_dmls_sec numeric(12,2)
+   ,avg_bkos_sec numeric(12,2)
+   ,avg_purg_sec numeric(12,2)
+   ,avg_xpng_sec numeric(12,2)
+   ,avg_fetches_sec numeric(12,2)
+   ,avg_marks_sec numeric(12,2)
+   ,avg_reads_sec numeric(12,2)
+   ,avg_writes_sec numeric(12,2)
+   ,avg_seq bigint
+   ,avg_idx bigint
+   ,avg_rpt bigint
+   ,avg_bkv bigint
+   ,avg_frg bigint
+   ,avg_bkv_per_rec numeric(12,2)
+   ,avg_frg_per_rec numeric(12,2)
+   ,avg_ins bigint
+   ,avg_upd bigint
+   ,avg_del bigint
+   ,avg_bko bigint
+   ,avg_pur bigint
+   ,avg_exp bigint
+   ,avg_fetches bigint
+   ,avg_marks bigint
+   ,avg_reads bigint
+   ,avg_writes bigint
+   ,avg_locks bigint
+   ,avg_confl bigint
+   ,max_seq bigint
+   ,max_idx bigint
+   ,max_rpt bigint
+   ,max_bkv bigint
+   ,max_frg bigint
+   ,max_bkv_per_rec numeric(12,2)
+   ,max_frg_per_rec numeric(12,2)
+   ,max_ins bigint
+   ,max_upd bigint
+   ,max_del bigint
+   ,max_bko bigint
+   ,max_pur bigint
+   ,max_exp bigint
+   ,max_fetches bigint
+   ,max_marks bigint
+   ,max_reads bigint
+   ,max_writes bigint
+   ,max_locks bigint
+   ,max_confl bigint
+   ,job_beg varchar(16)
+   ,job_end varchar(16)
+) as
+    declare v_report_beg timestamp;
+    declare v_report_end timestamp;
+begin
+    -- SP for detailed performance analysis: count of operations
+    -- (NOT only business ops; including BOTH successful and failed ones),
+    -- count of errors (including by their types)
+    a_last_hours = abs( coalesce(a_last_hours, 3) );
+    a_last_mins = coalesce(a_last_mins, 0);
+    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+
+    select p.last_launch_beg, p.last_launch_end
+    from srv_get_last_launch_beg_end( :a_last_hours, :a_last_mins ) p
+    into v_report_beg, v_report_end;
+
+    for
+        -- 29.08.2014: data from measuring statistics per each unit
+        -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
+        -- 25.01.2015: added rec_locks, rec_confl.
+        -- 06.02.2015: reorder columns, made all `max` values most-right
+        select
+             m.unit
+            ,count(*) iter_counts
+            -------------- speed -------------
+            ,avg(m.elapsed_ms) avg_elap_ms
+            ,avg(1000.00 * ( (m.rec_seq_reads + m.rec_idx_reads + m.bkv_reads ) / nullif(m.elapsed_ms,0))  ) avg_rec_reads_sec
+            ,avg(1000.00 * ( (m.rec_inserts + m.rec_updates + m.rec_deletes ) / nullif(m.elapsed_ms,0))  ) avg_rec_dmls_sec
+            ,avg(1000.00 * ( m.rec_backouts / nullif(m.elapsed_ms,0))  ) avg_bkos_sec
+            ,avg(1000.00 * ( m.rec_purges / nullif(m.elapsed_ms,0))  ) avg_purg_sec
+            ,avg(1000.00 * ( m.rec_expunges / nullif(m.elapsed_ms,0))  ) avg_xpng_sec
+            ,avg(1000.00 * ( m.pg_fetches / nullif(m.elapsed_ms,0)) ) avg_fetches_sec
+            ,avg(1000.00 * ( m.pg_marks / nullif(m.elapsed_ms,0)) ) avg_marks_sec
+            ,avg(1000.00 * ( m.pg_reads / nullif(m.elapsed_ms,0)) ) avg_reads_sec
+            ,avg(1000.00 * ( m.pg_writes / nullif(m.elapsed_ms,0)) ) avg_writes_sec
+            -------------- reads ---------------
+            ,avg(m.rec_seq_reads) avg_seq
+            ,avg(m.rec_idx_reads) avg_idx
+            ,avg(m.rec_rpt_reads) avg_rpt
+            ,avg(m.bkv_reads) avg_bkv
+            ,avg(m.frg_reads) avg_frg
+            ,avg(m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
+            ,avg(m.frg_per_seq_idx_rpt) avg_frg_per_rec
+            ---------- modifications ----------
+            ,avg(m.rec_inserts) avg_ins
+            ,avg(m.rec_updates) avg_upd
+            ,avg(m.rec_deletes) avg_del
+            ,avg(m.rec_backouts) avg_bko
+            ,avg(m.rec_purges) avg_pur
+            ,avg(m.rec_expunges) avg_exp
+            --------------- io -----------------
+            ,avg(m.pg_fetches) avg_fetches
+            ,avg(m.pg_marks) avg_marks
+            ,avg(m.pg_reads) avg_reads
+            ,avg(m.pg_writes) avg_writes
+            ----------- locks and conflicts ----------
+            ,avg(m.rec_locks) avg_locks
+            ,avg(m.rec_confl) avg_confl
+            --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
+            ,max(m.rec_seq_reads) max_seq
+            ,max(m.rec_idx_reads) max_idx
+            ,max(m.rec_rpt_reads) max_rpt
+            ,max(m.bkv_reads) max_bkv
+            ,max(m.frg_reads) max_frg
+            ,max(m.bkv_per_seq_idx_rpt) max_bkv_per_rec
+            ,max(m.frg_per_seq_idx_rpt) max_frg_per_rec
+            ,max(m.rec_inserts) max_ins
+            ,max(m.rec_updates) max_upd
+            ,max(m.rec_deletes) max_del
+            ,max(m.rec_backouts) max_bko
+            ,max(m.rec_purges) max_pur
+            ,max(m.rec_expunges) max_exp
+            ,max(m.pg_fetches) max_fetches
+            ,max(m.pg_marks) max_marks
+            ,max(m.pg_reads) max_reads
+            ,max(m.pg_writes) max_writes
+            ,max(m.rec_locks) max_locks
+            ,max(m.rec_confl) max_confl
+            ,left(cast(:v_report_beg as varchar(24)),16)
+            ,left(cast(:v_report_end as varchar(24)),16)
+        from mon_log m
+        where m.dts between :v_report_beg and :v_report_end
+        group by unit
+    into
+        unit
+       ,iter_counts
+       ,avg_elap_ms
+       ,avg_rec_reads_sec
+       ,avg_rec_dmls_sec
+       ,avg_bkos_sec
+       ,avg_purg_sec
+       ,avg_xpng_sec
+       ,avg_fetches_sec
+       ,avg_marks_sec
+       ,avg_reads_sec
+       ,avg_writes_sec
+       ,avg_seq
+       ,avg_idx
+       ,avg_rpt
+       ,avg_bkv
+       ,avg_frg
+       ,avg_bkv_per_rec
+       ,avg_frg_per_rec
+       ,avg_ins
+       ,avg_upd
+       ,avg_del
+       ,avg_bko
+       ,avg_pur
+       ,avg_exp
+       ,avg_fetches
+       ,avg_marks
+       ,avg_reads
+       ,avg_writes
+       ,avg_locks
+       ,avg_confl
+       ,max_seq
+       ,max_idx
+       ,max_rpt
+       ,max_bkv
+       ,max_frg
+       ,max_bkv_per_rec
+       ,max_frg_per_rec
+       ,max_ins
+       ,max_upd
+       ,max_del
+       ,max_bko
+       ,max_pur
+       ,max_exp
+       ,max_fetches
+       ,max_marks
+       ,max_reads
+       ,max_writes
+       ,max_locks
+       ,max_confl
+       ,job_beg
+       ,job_end
+    do
+        suspend;
+end
+
+^ -- srv_mon_stat_per_units
+
+create or alter procedure srv_mon_stat_per_tables (
+    a_last_hours smallint default 3,
+    a_last_mins smallint default 0 )
+returns (
+    table_name dm_dbobj
+   ,unit dm_unit
+   ,iter_counts bigint
+   ,avg_seq bigint
+   ,avg_idx bigint
+   ,avg_rpt bigint
+   ,avg_bkv bigint
+   ,avg_frg bigint
+   ,avg_bkv_per_rec numeric(12,2)
+   ,avg_frg_per_rec numeric(12,2)
+   ,avg_ins bigint
+   ,avg_upd bigint
+   ,avg_del bigint
+   ,avg_bko bigint
+   ,avg_pur bigint
+   ,avg_exp bigint
+   ,avg_locks bigint
+   ,avg_confl bigint
+   --,elapsed_minutes int
+   ,max_seq bigint
+   ,max_idx bigint
+   ,max_rpt bigint
+   ,max_bkv bigint
+   ,max_frg bigint
+   ,max_bkv_per_rec numeric(12,2)
+   ,max_frg_per_rec numeric(12,2)
+   ,max_ins bigint
+   ,max_upd bigint
+   ,max_del bigint
+   ,max_bko bigint
+   ,max_pur bigint
+   ,max_exp bigint
+   ,max_locks bigint
+   ,max_confl bigint
+   ,job_beg varchar(16)
+   ,job_end varchar(16)
+) as
+    declare v_report_beg timestamp;
+    declare v_report_end timestamp;
+begin
+    -- SP for detailed performance analysis: count of operations
+    -- (NOT only business ops; including BOTH successful and failed ones),
+    -- count of errors (including by their types)
+    a_last_hours = abs( coalesce(a_last_hours, 3) );
+    a_last_mins = coalesce(a_last_mins, 0);
+    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+
+    select p.last_launch_beg, p.last_launch_end
+    from srv_get_last_launch_beg_end( :a_last_hours, :a_last_mins ) p
+    into v_report_beg, v_report_end;
+
+    for
+    select
+         t.table_name
+        ,t.unit
+        ,count(*) iter_counts
+        --------------- reads ---------------
+        ,avg(t.rec_seq_reads) avg_seq
+        ,avg(t.rec_idx_reads) avg_idx
+        ,avg(t.rec_rpt_reads) avg_rpt
+        ,avg(t.bkv_reads) avg_bkv
+        ,avg(t.frg_reads) avg_frg
+        ,avg(t.bkv_per_seq_idx_rpt) avg_bkv_per_rec
+        ,avg(t.frg_per_seq_idx_rpt) avg_frg_per_rec
+        ---------- modifications ----------
+        ,avg(t.rec_inserts) avg_ins
+        ,avg(t.rec_updates) avg_upd
+        ,avg(t.rec_deletes) avg_del
+        ,avg(t.rec_backouts) avg_bko
+        ,avg(t.rec_purges) avg_pur
+        ,avg(t.rec_expunges) avg_exp
+        ----------- locks and conflicts ----------
+        ,avg(t.rec_locks) avg_locks
+        ,avg(t.rec_confl) avg_confl
+        --,datediff( minute from min(t.dts) to max(t.dts) ) elapsed_minutes
+        --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
+        ,max(t.rec_seq_reads) max_seq
+        ,max(t.rec_idx_reads) max_idx
+        ,max(t.rec_rpt_reads) max_rpt
+        ,max(t.bkv_reads) max_bkv
+        ,max(t.frg_reads) max_frg
+        ,max(t.bkv_per_seq_idx_rpt) max_bkv_per_rec
+        ,max(t.frg_per_seq_idx_rpt) max_frg_per_rec
+        ,max(t.rec_inserts) max_ins
+        ,max(t.rec_updates) max_upd
+        ,max(t.rec_deletes) max_del
+        ,max(t.rec_backouts) max_bko
+        ,max(t.rec_purges) max_pur
+        ,max(t.rec_expunges) max_exp
+        ,max(t.rec_locks) max_locks
+        ,max(t.rec_confl) max_confl
+        ,left(cast(:v_report_beg as varchar(24)),16)
+        ,left(cast(:v_report_end as varchar(24)),16)
+    from mon_log_table_stats t
+    where
+        t.dts between :v_report_beg and :v_report_end
+        and
+          t.rec_seq_reads
+        + t.rec_idx_reads
+        + t.rec_rpt_reads
+        + t.bkv_reads
+        + t.frg_reads
+        + t.rec_inserts
+        + t.rec_updates
+        + t.rec_deletes
+        + t.rec_backouts
+        + t.rec_purges
+        + t.rec_expunges
+        + t.rec_locks
+        + t.rec_confl
+        > 0
+    group by t.table_name, t.unit
+    into
+        table_name
+       ,unit
+       ,iter_counts
+       ,avg_seq
+       ,avg_idx
+       ,avg_rpt
+       ,avg_bkv
+       ,avg_frg
+       ,avg_bkv_per_rec
+       ,avg_frg_per_rec
+       ,avg_ins
+       ,avg_upd
+       ,avg_del
+       ,avg_bko
+       ,avg_pur
+       ,avg_exp
+       ,avg_locks
+       ,avg_confl
+       --,elapsed_minutes
+       ,max_seq
+       ,max_idx
+       ,max_rpt
+       ,max_bkv
+       ,max_frg
+       ,max_bkv_per_rec
+       ,max_frg_per_rec
+       ,max_ins
+       ,max_upd
+       ,max_del
+       ,max_bko
+       ,max_pur
+       ,max_exp
+       ,max_locks
+       ,max_confl
+       ,job_beg
+       ,job_end
+    do
+        suspend;
+end
+
+^ -- srv_mon_stat_per_tables
+
+
+create or alter procedure srv_test_work
+returns (
+    ret_code integer)
 as
-    declare v_bak int;
+    declare v_bak_ctx1 int;
+    declare v_bak_ctx2 int;
     declare n bigint;
     declare v_clo_id bigint;
     declare v_ord_id bigint;
@@ -4710,8 +5249,12 @@ as
 begin
     -- "express test" for checking that main app units work OK.
     -- NB: all tables must be EMPTY before this SP run.
-    v_bak = rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT');
+    v_bak_ctx1 = rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT');
+    v_bak_ctx2 = rdb$get_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE');
+
     rdb$set_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT',0);
+    rdb$set_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE',1);
+
     select min(p.doc_list_id) from sp_client_order(0,1,1) p into v_clo_id;
     select count(*) from srv_make_invnt_saldo into n;
     select min(p.doc_list_id) from sp_supplier_order(0,1,1) p into v_ord_id;
@@ -4720,14 +5263,24 @@ begin
     select count(*) from srv_make_invnt_saldo into n;
     select count(*) from sp_add_invoice_to_stock(:v_inv_id) into n;
     select count(*) from srv_make_invnt_saldo into n;
+
+    select h.id
+    from doc_list h
+    where h.optype_id = fn_oper_retail_reserve()
+    rows 1
+    into :v_res_id;
+
     select count(*) from sp_reserve_write_off(:v_res_id) into n;
     select count(*) from srv_make_invnt_saldo into n;
     select count(*) from sp_cancel_client_order(:v_clo_id) into n;
     select count(*) from srv_make_invnt_saldo into n;
     select count(*) from sp_cancel_supplier_order(:v_ord_id) into n;
     select count(*) from srv_make_invnt_saldo into n;
-    rdb$set_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT',v_bak);
-    ret_code = iif( exists(select * from qdistr) or exists(select * from qdistr), 1, 0);
+
+    rdb$set_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT', v_bak_ctx1);
+    rdb$set_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE', v_bak_ctx2);
+
+    ret_code = iif( exists(select * from v_qdistr_source ) or exists(select * from v_qstorned_source ), 1, 0);
     ret_code = iif( exists(select * from invnt_turnover_log), bin_or(ret_code, 2), ret_code );
     ret_code = iif( NOT exists(select * from invnt_saldo), bin_or(ret_code, 4), ret_code );
     
@@ -4736,10 +5289,10 @@ begin
     from invnt_saldo s
     where NOT
     (
-    s.qty_clo=1 and s.qty_clr = 1
-    and s.qty_ord = 0 and s.qty_sup = 0
-    and s.qty_avl = 0 and s.qty_res = 0
-    and s.qty_inc = 0 and s.qty_out = 0
+        s.qty_clo=1 and s.qty_clr = 1
+        and s.qty_ord = 0 and s.qty_sup = 0
+        and s.qty_avl = 0 and s.qty_res = 0
+        and s.qty_inc = 0 and s.qty_out = 0
     )
     rows 1
     into n;
@@ -4757,7 +5310,8 @@ commit;
 drop exception ex_exclusive_required;
 drop exception ex_not_suitable_fb_version;
 set list on;
-select 'oltp30_sp.sql finish' as msg, current_timestamp from rdb$database;
+set echo off;
+select 'oltp30_sp.sql finish at ' || current_timestamp as msg from rdb$database;
 set list off;
 commit;
 

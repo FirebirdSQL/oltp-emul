@@ -18,35 +18,38 @@ Please READ all this file carefully before making any attempt to run test.
 
 In case of any questions feel free to contact: p519446@yandex.ru
 
-(C) Pavel Zotov, Moscow, Russia. 2014.
+(C) Pavel Zotov, Moscow, Russia. 2014-2015.
 
 ===============================================================================
 
-0. Ensure that following Firebird console utilities present on machine from which
+1. Ensure that following Firebird console utilities present on machine from which
    you are intend to run this test:
    * isql
    * fbsvcmgr
    * gfix
-   * gstat
 
-1. Create database and add its name to aliases.conf (databases.conf in FB 3.0).
+2. Create database and add its name to aliases.conf (databases.conf in FB 3.0).
    You can skip creating database and just specify its name in the test configuration
    file 'src/oltp{fb_version}_config.{os_name}' (see below item "4" about it) 
    - but in such case:
    a) it must contain full path (/var/db/firebird/oltptest.fdb etc);
    b) path and file name can NOT contain spaces or non-latin characters.
 
-2. Edit your firebird.conf and UNCOMMENT setting: 
+3. Edit your firebird.conf and UNCOMMENT setting: 
 
                              ExternalFileAccess 
 
-   Set its value to folder where you will create special file 'stoptest.txt'
-   to force all attaches to cancel their operations and close ISQL sessions.
+   Set its value to path where special file with name 'stoptest.txt' could be created
+   by Firebird server process. This file is used  to force all attachments to cancel 
+   their operations (by themselves) and close ISQL sessions.
 
    Example:
    ExternalFileAccess  = Restrict /var/db/fb30
 
-   It is highly recommended to increase values of following parameters:
+   NOTE. Ensure that file 'stoptest.txt' is EMPTY before *each* time you are going 
+   to launch this test (you have to manually clear content of this file).
+
+4. It is highly recommended to increase values of following parameters in firebird.conf:
 
    * DefaultDBCachePages
    * TempCacheLimit
@@ -70,15 +73,14 @@ In case of any questions feel free to contact: p519446@yandex.ru
       LockHashSlots = 22111
 
 
-3. For Windows users: ensure that you have environment variable 'TEMP' and 
-   verify that its value does NOT contain spaces or non-latin characters. 
+5. For Windows users: ensure that you have environment variable 'TEMP'.
    Test command script will create folder with name 'logs.oltpNN' under your 
-   %TEMP% directory and this folder will contain different logs of work.
+   %TEMP% directory and this folder will contain logs of ISQL sessions work.
 
-4. Change directory to 'src'. 
+6. Change directory to 'src'. 
 
-   Main command scenario (which creates database, fill it with documents and 
-   finally open multiple ISQL sessions) has name '1run_oltp_emul'.
+   Main command scenario which creates database, fill it with documents and 
+   finally open multiple ISQL sessions has name '1run_oltp_emul'.
 
    Its extension depends on your OS:
    * '.sh' - for running this scenario under Linux
@@ -95,24 +97,14 @@ In case of any questions feel free to contact: p519446@yandex.ru
    Change settings in this file according to your ones: host, port, dbnm etc
 
    Pay attention to the following parameters:
-   ----------- QUOTE ----------
-	# number of documents, total of all types, for initial data population
-	# (only new documents creation occurs, no removals):
-	# recommended value: at least 30000 
-	init_docs=30000
-
-	# should script be PAUSED after finish creating <init_docs> documents
-	# (for making copy of .fdb and restore it on the following runs thus
-	# avoiding to make init_docs again):
-	wait_for_copy=0
-
-	# time (in minutes) to warm-up database after initial data population
-	# will finish and before all following operations will be measured:
-	warm_time=10
-
-	# max time (in minutes) to measure operations before test autostop itself:
-	test_time=60
-   -------- END OF QUOTE -------
+   * create_with_fw
+   * create_with_sweep
+   * init_docs
+   * wait_for_copy
+   * working_mode
+   * warm_time
+   * test_time
+   * mon_unit_perf
 
    For the first time you can assign to 'init_docs' some low value, e.g. 500 or 1000.
    Test will start with populating data up to <init_docs> value and only after this
@@ -121,10 +113,10 @@ In case of any questions feel free to contact: p519446@yandex.ru
    2) measurement of further business actions during <test_time> minutes.
   
 
-5. STOP ANY ANTIVIRUS on that machine when you will run command scenario, otherwise 
+7. STOP ANY ANTIVIRUS on that machine when you will run command scenario, otherwise 
    it can block creation of scripts and logs filling!
 
-6. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
+8. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
 
    1run_oltp_emul.os NN KK
 
@@ -141,21 +133,36 @@ In case of any questions feel free to contact: p519446@yandex.ru
    until building process finishes.
   
 
-7. After time which is calculated as: warm_time + test_time test will stop itself.
+9. After time which is calculated as: warm_time + test_time test will stop itself.
+
+   First launched ISQL session will make final report in plain text format.
+   If ISQL session is running on Windows and setting 'make_html' has value 1, final report
+   wil also created in HTML format, but in that case time of this report creation will be
+   increased approx. twice.
 
    Change to folder with name defined by parameter 'tmpdir' in your oltpNN_config file.
 
-   The file with name like this: 
+   The file with name like this:  oltpNN.report.txt   (where 'NN' = 25 or 30)
+                                  #################
+   -- will contain:
 
-       oltpNN_%COMPUTERNAME%-001.performance_report.txt // (or $HOSTNAME for Linux)
+   * FB architecture name, database and test settings;
+   * overall performance results: total, dynamic for 10 time intervals, detailed per each unit;
+   * when test config setting 'mon_unit_perf' is 1: gathered monitoring data about performance
+     with detalization down to: 1) for FB 2.5 - application units; for FB 3.0 - application
+     units and tables;
+   * exceptions that occured during test;
+   * database statistics after test finish (only for tables that was modified);
+   * database validation report;
+   * comparison of firebird.log that was before and after test finish (only for FB 3.0).
 
-   - will contain overall performance results: dynamic in 10 time intervals and total for 
-   last three hours or time of actual work (minimal of these two values is taken in account).
+   Pay note on performance reports.
 
    In the first report (which contain rows with text 'interval #   N, overall') you can
    estimate performance for each of time interval in the column 'CNT_OK_PER_MINUTE': this is
    the number of business per one minute actions that finished SUCCESSFULLY in bounds of each
    interval.
+
    In the second report (which contains row with text "*** OVERALL *** for N minutes") you can
    estimate aggregated value of performance for last three hours or time of actual work. Value
    in the column "AVG_TIMES_PER_MINUTE" has the same sence: average number of business actions
@@ -166,7 +173,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
    SQL> select * from srv_mon_perf_dynamic;
    SQL> select * from srv_mon_perf_total;
 
-8. In order to run test again (2nd, 3rd times etc) go to SERVER and change there to the folder 
+10. In order to run test again (2nd, 3rd times etc) go to SERVER and change there to the folder 
    which was specified in firebird.conf by value of parameter ExternalFileAccess ('/var/db/fb30' etc).
 
    Look for the file with name 'stoptest.txt': it will have some non-zero size.
@@ -175,8 +182,9 @@ In case of any questions feel free to contact: p519446@yandex.ru
    you will get messages about this when attempt to run batch scenario ('1run_oltp_emul.{os}')
 
    You can force to stop all working ISQLs at any time (i.e. beforehand) by opening 'stoptest.txt' 
-   and type any single character in it followed by newline. In case when this file (and FB) is on 
-   Windows host, run Notepad.exe, add some letter and press CR/LF, than save this new file to 
-   'stoptest.txt' in the folder {ExternalFileAccess}.
+   and type any single character in it followed by newline. 
+   In case when this file (and FB) is on Windows host, run Notepad.exe, add type any character 
+   and press CR/LF, than choose File / Save As. Specify the *same* name, i.e. overwrite this file.
 
-9. Full description of test: doc/oltp_emul_test_for_firebird_25_and_30_-_description.doc (rus)
+11. Full description of test: oltp_emul_test_fb_25_30_-_rus.htm (currently only in Russian).
+

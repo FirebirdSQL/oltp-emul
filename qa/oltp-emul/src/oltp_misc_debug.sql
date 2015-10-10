@@ -1,11 +1,18 @@
 -- ###################################
 -- Begin of script oltp_misc_debug.sql  // ###   O P T I O N A L   ###
 -- ###################################
--- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0
+-- ::: NB ::: This scipt is COMMON for both FB 2.5 and 3.0 and should be called after oltp_main_filling.sql (if needed)
 
 -- It creates some OPTIONAL debug views and procedures.
 -- Need only when some troubles in algorithms are detected.
 -- Call of this script should be AFTER running oltpNN_DDL.sql and oltpNN_sp.sql
+set bail on;
+
+set list on;
+select 'oltp_misc_debug.sql start at ' || current_timestamp as msg from rdb$database;
+set list off;
+
+commit;
 
 -------------------------------------------------------
 --  ************   D E B U G   T A B L E S   **********
@@ -58,14 +65,14 @@ recreate table zdoc_list(
 commit;
 
 recreate table zdoc_data(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
+   id dm_idb
+  ,doc_id dm_idb
+  ,ware_id dm_idb
   ,qty dm_qty
   ,cost_purchase dm_cost
   ,cost_retail dm_cost
   ,dts_edit timestamp
-  ,optype_id dm_ids
+  ,optype_id dm_idb
   ,dump_att bigint
   ,dump_trn bigint
 );
@@ -88,11 +95,11 @@ recreate table zinvnt_turnover_log(
 );
 
 recreate table zqdistr(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
+   id dm_idb
+  ,doc_id dm_idb
+  ,ware_id dm_idb
+  ,snd_optype_id dm_idb
+  ,snd_id dm_idb
   ,snd_qty dm_qty
   ,rcv_optype_id bigint
   ,rcv_id bigint -- nullable! ==> doc_data.id of "receiver"
@@ -107,16 +114,18 @@ recreate table zqdistr(
   ,dump_trn bigint
 );
 create index zqdistr_id on zqdistr(id); -- NON unique!
+create index zqdistr_ware_sndop_rcvop on zqdistr(ware_id, snd_optype_id, rcv_optype_id);
+
 
 recreate table zqstorned(
-   id dm_ids
-  ,doc_id dm_ids
-  ,ware_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
+   id dm_idb
+  ,doc_id dm_idb
+  ,ware_id dm_idb
+  ,snd_optype_id dm_idb
+  ,snd_id dm_idb
   ,snd_qty dm_qty
-  ,rcv_optype_id dm_ids
-  ,rcv_id dm_ids
+  ,rcv_optype_id dm_idb
+  ,rcv_id dm_idb
   ,rcv_qty dm_qty
   ,snd_purchase dm_cost
   ,snd_retail dm_cost
@@ -128,14 +137,17 @@ recreate table zqstorned(
   ,dump_trn bigint
 );
 create index zqstorned_id on zqstorned(id); -- NON unique!
+create index zqstorned_doc_id on zqstorned(doc_id); -- confirmed 16.09.2014, see s`p_lock_dependent_docs
+create index zqstorned_snd_id on zqstorned(snd_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
+create index zqstorned_rcv_id on zqstorned(rcv_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
 
 recreate table zpdistr(
-   id dm_ids
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
+   id dm_idb
+  ,agent_id dm_idb
+  ,snd_optype_id dm_idb
+  ,snd_id dm_idb
   ,snd_cost dm_qty
-  ,rcv_optype_id dm_ids
+  ,rcv_optype_id dm_idb
   ,trn_id bigint
   ,dump_att bigint
   ,dump_trn bigint
@@ -143,13 +155,13 @@ recreate table zpdistr(
 create index zpdistr_id on zpdistr(id); -- NON unique!
 
 recreate table zpstorned(
-   id dm_ids
-  ,agent_id dm_ids
-  ,snd_optype_id dm_ids
-  ,snd_id dm_ids
+   id dm_idb
+  ,agent_id dm_idb
+  ,snd_optype_id dm_idb
+  ,snd_id dm_idb
   ,snd_cost dm_cost
-  ,rcv_optype_id dm_ids
-  ,rcv_id dm_ids
+  ,rcv_optype_id dm_idb
+  ,rcv_id dm_idb
   ,rcv_cost dm_cost
   ,trn_id bigint
   ,dump_att bigint
@@ -211,14 +223,14 @@ end
 --------------------------------------------------------------------------------
 
 create or alter procedure z_get_dependend_docs(
-    a_doc_list_id dm_ids,
-    a_doc_oper_id dm_ids default null -- = (for invoices which are to be 'reopened' - old_oper_id)
+    a_doc_list_id dm_idb,
+    a_doc_oper_id dm_idb default null -- = (for invoices which are to be 'reopened' - old_oper_id)
 ) returns (
-  dependend_doc_id dm_ids, 
-  dependend_doc_state dm_ids
+  dependend_doc_id dm_idb, 
+  dependend_doc_state dm_idb
 )
 as
-    declare v_rcv_optype_id dm_ids;
+    declare v_rcv_optype_id dm_idb;
 begin
     -- former: s`p_get_dependend_docs; now need only for debug
     if ( a_doc_oper_id is null ) then
@@ -242,7 +254,7 @@ begin
             -- Checked plan 13.07.2014:
             -- PLAN (Q ORDER QSTORNED_RCV_ID INDEX (QSTORNED_DOC_ID))
             select q.rcv_doc_id dependend_doc_id -- q.rcv_id dependend_doc_data_id
-            from qstorned q
+            from v_qstorned_source q
             where
                 q.doc_id =  :a_doc_list_id -- choosen invoice which is to be re-opened
                 and q.snd_optype_id = :a_doc_oper_id -- fn_oper_invoice_add()
@@ -260,6 +272,19 @@ end
 
 set term ;^
 commit;
+
+--------------------------------------------------------------------------------
+
+create or alter view z_perf_trn as
+select * from perf_log p where p.trn_id = current_transaction
+;
+
+-------------------------------------------------------------------------------
+
+create or alter view z_random_bop as
+select b.sort_prior as id, b.unit, b.info
+from business_ops b
+;
 
 --------------------------------------------------------------------------------
 
@@ -616,8 +641,8 @@ create or alter view z_mism_dd_qd_qs_orphans as
 select d.doc_id,h.optype_id,d.id,d.ware_id,d.qty
 from doc_data d
 join doc_list h on d.doc_id = h.id
-left join qdistr q on d.id=q.snd_id
-left join qstorned s on d.id in(s.snd_id, s.rcv_id)
+left join v_qdistr_source q on d.id=q.snd_id
+left join v_qstorned_source s on d.id in(s.snd_id, s.rcv_id)
 where h.optype_id<>1100 and q.id is null and s.id is null
 ;
 
@@ -630,20 +655,20 @@ select d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum,coalesce(sum(qs.snd_qty),0) qs_
 from(
     select d.doc_id, d.id, d.optype_id, d.qty,coalesce(sum(qd.snd_qty),0) qd_sum
     from (
-        select d.doc_id, d.id, iif(h.optype_id=3400, 3300, h.optype_id) as optype_id, d.qty
+        select d.doc_id, d.id, d.ware_id, iif(h.optype_id=3400, 3300, h.optype_id) as optype_id, d.qty
         from doc_data d
         join doc_list h on d.doc_id = h.id
     ) d
     inner join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
-    left join qdistr qd on
-        d.id=qd.snd_id
-        and p.snd_optype_id=qd.snd_optype_id
-        and p.rcv_optype_id is not distinct from qd.rcv_optype_id
+    left join v_qdistr_source qd on
+        qd.ware_id = d.ware_id
+        and qd.snd_optype_id = p.snd_optype_id
+        and qd.rcv_optype_id is not distinct from p.rcv_optype_id
     where d.optype_id<>1100 -- client refused from order
     group by d.doc_id, d.id, d.optype_id, d.qty
 ) d
 join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
-left join qstorned qs on
+left join v_qstorned_source qs on
     d.id=qs.snd_id
     and p.snd_optype_id=qs.snd_optype_id
     and p.rcv_optype_id is not distinct from  qs.rcv_optype_id
@@ -660,14 +685,14 @@ select d.doc_id, d.id,d.optype_id,d.qty,d.qd_sum,coalesce(sum(qs.snd_qty),0) qs_
 from(
     select d.doc_id, d.id, d.optype_id, d.qty,coalesce(sum(qd.snd_qty),0) qd_sum
     from (
-        select d.doc_id, d.id, iif(d.optype_id=3400, 3300, d.optype_id) as optype_id, d.qty
+        select d.doc_id, d.id, d.ware_id, iif(d.optype_id=3400, 3300, d.optype_id) as optype_id, d.qty
         from zdoc_data d
     ) d
     inner join rules_for_qdistr p on d.optype_id=p.snd_optype_id and coalesce(p.storno_sub,1)=1
     left join zqdistr qd on
-        d.id=qd.snd_id
-        and p.snd_optype_id=qd.snd_optype_id
-        and p.rcv_optype_id is not distinct from qd.rcv_optype_id
+        qd.ware_id = d.ware_id
+        and qd.snd_optype_id = p.snd_optype_id
+        and qd.rcv_optype_id is not distinct from p.rcv_optype_id
     where d.optype_id<>1100 -- client refused from order
     group by d.doc_id, d.id, d.optype_id, d.qty
 ) d
@@ -1035,17 +1060,17 @@ end
 
 create or alter procedure srv_diag_qty_distr
 returns(
-    doc_id dm_ids,
-    optype_id dm_ids,
-    rcv_optype_id dm_ids,
-    doc_data_id dm_ids,
+    doc_id dm_idb,
+    optype_id dm_idb,
+    rcv_optype_id dm_idb,
+    doc_data_id dm_idb,
     qty dm_qty,
     qdqs_sum dm_qty,
     qdistr_q dm_qty,
     qstorned_q dm_qty
 ) as
 begin
-    -- Looks for mismatches between records count in qdistr + qstorned and doc_data
+    -- Looks for mismatches between records count in v_qdistr + v_qstorned and doc_data
     -- Must be run ONLY in TIL = SNAPSHOT!
     -- ###################################
     -- Check that current Tx run in NO wait or with lock_timeout.
@@ -1068,10 +1093,13 @@ begin
             from doc_data d
             join doc_list h on d.doc_id = h.id
             join rules_for_qdistr r on h.optype_id = r.snd_optype_id
-            left join qdistr qd on d.id = qd.snd_id and r.snd_optype_id=qd.snd_optype_id and r.rcv_optype_id=qd.rcv_optype_id
+            left join v_qdistr_source qd on
+                d.ware_id = qd.ware_id
+                and qd.snd_optype_id = r.snd_optype_id
+                and qd.rcv_optype_id is not distinct from r.rcv_optype_id
             group by d.doc_id, h.optype_id, r.rcv_optype_id, d.id, d.qty
         ) b
-        left join qstorned qs on b.id = qs.snd_id and b.optype_id=qs.snd_optype_id and b.rcv_optype_id=qs.rcv_optype_id
+        left join v_qstorned_source qs on b.id = qs.snd_id and b.optype_id=qs.snd_optype_id and b.rcv_optype_id=qs.rcv_optype_id
         group by
             b.doc_id,
             b.optype_id,
@@ -1079,7 +1107,7 @@ begin
             b.id,
             b.qty,
             b.qdistr_q
-        having b.qty < b.qdistr_q + coalesce(sum(qs.snd_qty),0)
+        having b.qty <> b.qdistr_q + coalesce(sum(qs.snd_qty),0)
         into
             doc_id,
             optype_id,
@@ -1099,6 +1127,7 @@ commit ^
 --------------------------------------------------------------------------------
 -- #############    D E B U G:     D U M P    D I R T Y     D A T A  ###########
 --------------------------------------------------------------------------------
+
 create or alter procedure zdump4dbg(
        a_doc_list_id bigint default null,
        a_doc_data_id bigint default null,
@@ -1158,7 +1187,7 @@ begin
     -- See oltp_main_filling.sql for definition of bitset var `QMISM_VERIFY_BITSET`:
     -- bit#0 := 1 ==> perform calls of srv_catch_qd_qs_mism in doc_list_aiud => sp_add_invnt_log
     --                in order to register mismatches b`etween doc_data.qty and total number of rows
-    --                in qdistr + qstorned for doc_data.id
+    --                in v_qdistr_source + v_qstorned_source for doc_data.id
     -- bit#1 := 1 ==> perform calls of SRV_CATCH_NEG_REMAINDERS from INVNT_TURNOVER_LOG_AI
     --                (instead of totalling turnovers to `invnt_saldo` table)
     -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
@@ -1367,7 +1396,7 @@ begin
     end
     ----------------------------------------------------------------------------
     -- 27.06.2014 dump dirty data from  ### q d i s t r  ###
-    select 0, max(id) from qdistr into i,v_max_id; -- for verbosing in perf_log.stack
+    select 0, max(id) from v_qdistr_source into i,v_max_id; -- for verbosing in perf_log.stack
     for
         select
             id
@@ -1385,7 +1414,7 @@ begin
             ,rcv_retail
             ,trn_id
             ,dts
-        from qdistr d
+        from v_qdistr_source d
         where d.ware_id between coalesce(:a_ware_id, -9223372036854775807) and coalesce(:a_ware_id, 9223372036854775807)
         --as cursor cq
         into
@@ -1407,7 +1436,7 @@ begin
     do
     begin
         in autonomous transaction do
-        insert into zqdistr(
+        insert into zqdistr (
             id
             ,doc_id
             ,ware_id
@@ -1447,13 +1476,13 @@ begin
         );
         if ( mod(i, v_step) = 0 ) then
             in autonomous transaction do
-            update perf_log g set g.stack = 'qdistr: id='||:id||', max='||:v_max_id
+            update perf_log g set g.stack = 'v_qdistr_source: id='||:id||', max='||:v_max_id
             where g.id = :v_perf_progress_id;
         i = i + 1;
     end
     ----------------------------------------------------------------------------
     -- 27.06.2014 dump dirty data from  ### q s t o r n e d  ###
-    select 0, max(id) from qstorned into i,v_max_id; -- for verbosing in perf_log.stack
+    select 0, max(id) from v_qstorned_source into i,v_max_id; -- for verbosing in perf_log.stack
     for
         select
             id
@@ -1471,7 +1500,7 @@ begin
             ,rcv_retail
             ,trn_id
             ,dts
-        from qstorned d
+        from v_qstorned_source d
         where d.ware_id between coalesce(:a_ware_id, -9223372036854775807) and coalesce(:a_ware_id, 9223372036854775807)
         into
             id
@@ -1532,7 +1561,7 @@ begin
          );
         if ( mod(i, v_step) = 0 ) then
             in autonomous transaction do
-            update perf_log g set g.stack = 'qstorned: id='||:id||', max='||:v_max_id
+            update perf_log g set g.stack = 'v_qstorned_source: id='||:id||', max='||:v_max_id
             where g.id = :v_perf_progress_id;
         i = i + 1;
     end
@@ -1670,6 +1699,13 @@ end
 set term ;^
 commit; 
 
+set list on;
+set echo off;
+select 'oltp_misc_debug.sql finish at ' || current_timestamp as msg from rdb$database;
+set list off;
+commit;
+
 -- #################################
 -- End of script oltp_misc_debug.sql  // ###   O P T I O N A L   ###
+-- Next run: oltp_split_heavy_tabs_0 | 1.sql - depending on config parameter 'create_with_split_heavy_tabs'
 -- #################################

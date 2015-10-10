@@ -1,11 +1,11 @@
 -- #####################################
 -- Begin of script oltp_main_filling.sql
 -- #####################################
--- ::: NB ::: This script is COMMON for both FB 2.5 and 3.0
+-- ::: NB ::: This script is COMMON for both FB 2.5 and 3.0 and should be called after oltpNN_sp.sql
 
 set bail on;
 set list on;
-select 'oltp_main_filling.sql start' as msg, current_timestamp from rdb$database;
+select 'oltp_main_filling.sql start at ' || current_timestamp as msg from rdb$database;
 set list off;
 commit;
 set term ^;
@@ -201,23 +201,43 @@ end
 set term ;^
 commit;
 
--- ::: NB ::: re-run oltp_data_filling.sql EVERY time you change this var:
+-- ::: NB ::: This record is created here only as 'stub'.
+-- Value of this variable will be replaced with config parameter 'working_mode'
+--  by 1run_oltp_emul.bat (.sh) every time test is launched.
 insert into settings(working_mode, mcode,           svalue)
-              values('INIT',       'WORKING_MODE',  'SMALL_03'); -- DEFAULT: 'SMALL_03'
+              values('INIT',       'WORKING_MODE',
+                     -- DEBUG_01'
+                     'SMALL_03'
+              ); -- DEFAULT: 'SMALL_03'
 -- DEBUG_01 DEBUG_1A DEBUG_02 DEBUG_03 DEBUG_04 SMALL_01  SMALL_02 SMALL_03
 -- MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
 -- HEAVY_01
 
 
--- List of units for which we want to gather info from mon$table_stats
--- (only for performance analysis in 3.0 when run from IBE, not from isql!):
-insert into settings(working_mode, mcode,                  svalue)
-              values('COMMON',       'TRACED_UNITS', ',,');
+-- List of units for which we want to gather info from mon$table_stats.
+-- Leave this INSERT statement with svalue = ',,'. 
+-- If you want to analyze performance of some units (procedures or triggers),
+-- use UPDATE statement after this:
+insert into settings(working_mode, mcode,                  svalue
+                    ,description)
+              values('COMMON',       'TRACED_UNITS', ',,'
+                    ,'Units that are subject to gathering MON$ statistics'
+              );
+
+-- This is the sample how to change list of units for which test should gather 
+-- statistics from MON$ tables for further analyzing:
+-- update settings set svalue = ',sp_make_qty_storno,sp_kill_qty_storno,sp_multiply_rows_for_qdistr,sp_multiply_rows_for_pdistr,'
+-- where working_mode = 'COMMON' and mcode = 'TRACED_UNITS';
+
+-- update settings set svalue = ',sp_make_qty_storno,sp_kill_qty_storno,sp_multiply_rows_for_qdistr,sp_multiply_rows_for_pdistr,'
+-- where working_mode = 'COMMON' and mcode = 'TRACED_UNITS';
+
 
 -- do we ALLOW to query mon$-tables in ALL cases (not only when some blocking bug encountered) ?
 -- update settings set svalue='0' where mcode='ENABLE_MON_QUERY';
 -- update settings set svalue='1' where mcode='ENABLE_MON_QUERY';
-insert into settings(working_mode, mcode, svalue)
+insert into settings(working_mode, mcode, svalue
+                    ,description)
               values( 'COMMON',
                       'ENABLE_MON_QUERY',
                       decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
@@ -225,6 +245,7 @@ insert into settings(working_mode, mcode, svalue)
                              ,'2.5', '0' -- do NOT set = '1' at all!
                              ,'0'
                             )
+                    ,'0 =  do not gather mon$ tables at all; 1 = gather mon$ tables before and after each Tx, in every ISQL session'
                     );
 
 -- Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
@@ -272,13 +293,13 @@ insert into settings(working_mode, mcode,                      svalue,  init_on)
 -- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
 --                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
 -- ##################################################################################
--- ::: NB ::: Correct value of config parameter 'make_debug_dbos' (set it = 1)
+-- ::: NB ::: Correct value of config parameter 'create_with_debug_objects' (set it = 1)
 -- if you need to create debug "Z-" tables and procedure for DUMP all data on errors.
 -- ##################################################################################
 -- update settings set svalue='3' where mcode='QMISM_VERIFY_BITSET';
 -- update settings set svalue='7' where mcode='QMISM_VERIFY_BITSET';
 insert into settings(working_mode, mcode,         svalue)
-              values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'
+              values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'; changed to '0' for branch 'create_with_split_heavy_tabs'
 
 -- How records should be handled when OLD one moves from QDistr to QStorned and
 -- NEW should be added in QDistr (when we create new document and search for rows
@@ -287,6 +308,7 @@ insert into settings(working_mode, mcode,         svalue)
 -- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
 -- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
 -- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10%. Confirmed 10.02.2015.
+-- 05.09.2015: left only 'DEL_INS' during deep refactoring with 'create_with_split_heavy_tabs' setting.
 insert into settings(working_mode, mcode,         svalue)
               values('COMMON',     'QDISTR_HANDLING_MODE',  'DEL_INS');
 
@@ -352,21 +374,36 @@ insert into settings(working_mode, mcode,              svalue)
 
 commit;
 
+-- 4debug on trivial working_mode:
+set term ^;
+execute block as
+begin
+  if ( (select s.svalue from settings s where s.working_mode = 'INIT' and s.mcode='WORKING_MODE') in ('DEBUG_01', 'DEBUG_02') ) then
+  begin
+    update settings s
+    set s.svalue='0'
+    where s.mcode in( 'ENABLE_RESERVES_WHEN_ADD_INVOICE', 'ORDER_FOR_OUR_FIRM_PERCENT' );
+  end
+end
+^
+set term ;^
+commit;
+
 --------------------------------------------------------------------------------
 -- #########  Filling OPTYPES, RULES_FOR_QDISTR and RULES_FOR_PDISTR ###########
 --------------------------------------------------------------------------------
 
 set term ^;
 execute block as
-    declare fn_oper_order_by_customer dm_ids;
-    declare fn_oper_order_for_supplier dm_ids;
-    declare fn_oper_invoice_get dm_ids;
-    declare fn_oper_invoice_add dm_ids;
-    declare fn_oper_retail_reserve dm_ids;
+    declare fn_oper_order_by_customer dm_idb;
+    declare fn_oper_order_for_supplier dm_idb;
+    declare fn_oper_invoice_get dm_idb;
+    declare fn_oper_invoice_add dm_idb;
+    declare fn_oper_retail_reserve dm_idb;
 
-    declare fn_oper_pay_from_customer dm_ids;
-    declare fn_oper_retail_realization dm_ids;
-    declare fn_oper_pay_to_supplier dm_ids;
+    declare fn_oper_pay_from_customer dm_idb;
+    declare fn_oper_retail_realization dm_idb;
+    declare fn_oper_pay_to_supplier dm_idb;
 begin
     delete from optypes;
     
@@ -438,7 +475,8 @@ begin
                           values( 'distr+new_doc', :fn_oper_invoice_add, :fn_oper_retail_reserve, 1 );
 
     insert into rules_for_qdistr( mode,           snd_optype_id,           rcv_optype_id)
-                          values( 'new_doc_only', :fn_oper_retail_reserve, null  );
+                          values( 'new_doc_only', :fn_oper_retail_reserve, :fn_oper_retail_realization  ); -- 12.09.2015
+                          --values( 'new_doc_only', :fn_oper_retail_reserve, null  );
 
     ----------------------------------------------------------------------------
     delete from rules_for_pdistr;
@@ -1368,12 +1406,17 @@ end
 set term ;^
 commit;
 
+-- moved into 1build_oltp_emul.bat: execute procedure init_autogen_qdistr_tables; -- 29.08.2015, branch: create_with_split_heavy_tabs
+
 set list on;
-select 'oltp_main_filling.sql finish' as msg, current_timestamp from rdb$database;
+set echo off;
+select 'oltp_main_filling.sql finish at ' || current_timestamp as msg from rdb$database;
 set list off;
 commit;
 -- #############################################################################
--- End of script oltp_main_filling.sql; next to be run: oltp_data_filling.sql
+-- End of script oltp_main_filling.sql; next to be run: 
 -- (common for both FB 2.5 and 3.0)
+-- 1) if config parameter 'create_with_split_heavy_tabs' = 1 then oltp_autogen_ddl.sql 
+-- 2) else oltp_data_filling.sql
 -- #############################################################################
 
