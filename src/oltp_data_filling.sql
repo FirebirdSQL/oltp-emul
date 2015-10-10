@@ -4,7 +4,7 @@
 -- ::: NB ::: This script is COMMON for both FB 2.5 and 3.0
 set bail on;
 set list on;
-select 'oltp_data_filling.sql start' as msg, current_timestamp from rdb$database;
+select 'oltp_data_filling.sql start at ' || current_timestamp as msg from rdb$database;
 set list off;
 commit;
 
@@ -18,8 +18,8 @@ commit;
 
 -- these GTTs need only for this script and will be removed at the end:
 recreate global temporary table tmp$wares(
-    id               dm_ids
-    ,group_id        dm_ids
+    id               dm_idb
+    ,group_id        dm_idb
     ,numb            dm_nums
     ,name            dm_name
     ,price_purchase  dm_cost
@@ -27,13 +27,13 @@ recreate global temporary table tmp$wares(
 ) on commit delete rows;
 
 recreate global temporary table tmp$agents(
-  id dm_ids primary key using index pk_tmp_agents,
+  id dm_idb primary key using index pk_tmp_agents,
   name_01 dm_name,
   name_02 dm_name
 ) on commit preserve rows;
 
 recreate global temporary table tmp$names(
-  id dm_ids primary key using index pk_tmp_names,
+  id dm_idb primary key using index pk_tmp_names,
   name dm_name -- varchar(50)
 ) on commit preserve rows;
 
@@ -57,7 +57,7 @@ set term ;^
 commit;
 
 recreate global temporary table tmp$aux(
-  id dm_ids primary key using index pk_tmp_aux,
+  id dm_idb primary key using index pk_tmp_aux,
   name dm_name
 ) on commit delete rows;
 commit;
@@ -15262,15 +15262,15 @@ execute block as
     declare v_purchase dm_cost;
     declare v_profit double precision;
     declare v_retail dm_cost;
-    declare i dm_ids;
-    declare v_group_id dm_ids;
+    declare i dm_idb;
+    declare v_group_id dm_idb;
     declare v_numb dm_nums;
     declare v_name dm_name;
     declare v_pattern dm_name;
-    declare v_gr_id_min dm_ids;
-    declare v_gr_id_max dm_ids;
-    declare v_nm_id_min dm_ids;
-    declare v_nm_id_max dm_ids;
+    declare v_gr_id_min dm_idb;
+    declare v_gr_id_max dm_idb;
+    declare v_nm_id_min dm_idb;
+    declare v_nm_id_max dm_idb;
     declare c_invoice_min_purchase double precision;
     declare c_invoice_max_purchase double precision;
     declare c_invoice_min_profit_prc double precision;
@@ -15741,14 +15741,14 @@ drop table tmp$wares;
 drop table tmp$agents;
 drop table tmp$names;
 
+alter trigger TRG_CONNECT active;
+commit;
 set list on;
-select 'oltp_data_filling.sql finish' as msg, current_timestamp from rdb$database;
+set echo off;
+select 'oltp_data_filling.sql finish at ' || current_timestamp as msg from rdb$database;
 set list off;
 
 commit;
---dis 30.09.2014!
---alter sequence g_common restart with 0;
---commit;
 
 -- ############################################################
 -- End of script oltp_data_filling.sql. Test is ready to be run.

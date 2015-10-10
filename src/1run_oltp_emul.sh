@@ -39,7 +39,7 @@ msg_nofile() {
   echo At least one of Firebird command line utilities NOT FOUND in the folder
   echo -e defined by variable \'fbc\' = \>\>\>$fbc\<\<\<
   echo
-  echo This folder has to contain following executable files: isql, gfix, fbsvcmgr
+  echo This folder must have following executable files: isql, fbsvcmgr
   echo
   echo Verify value of parameter \'fbc\' in the file \'$cfg\'!
   echo Script is now terminated.
@@ -82,18 +82,34 @@ db_create() {
   local tmpsql=$tmpdir/tmp_create_dbnm.sql
   local tmplog=$tmpdir/tmp_create_dbnm.log
   local run_isql
+  local fbspref
+  local run_fbs
+  local dbconn
+  local dbauth
+
   rm -f $tmpsql $tmplog $tmperr
-  if [ $is_embed == 1 ]; then
-    echo -e create database \'$dbnm\' page_size 8192\; commit\; show database\; exit\;>$tmpsql
-    run_isql="$fbc/isql -q -i $tmpsql"
-  else
-    #echo set echo on\;>>$tmpsql
-    echo -e create database \'$host/$port:$dbnm\'>>$tmpsql
-    echo -e page_size 8192' '>>$tmpsql
-    echo -e user \'$usr\' password \'$pwd\'\;>>$tmpsql
-    echo commit\; show database\; exit\;>>$tmpsql
-    run_isql="$fbc/isql -q -i $tmpsql"
-  fi
+  
+  [[ $is_embed == 0 ]] && dbconn=$host/$port:$dbnm || dbconn=$dbnm
+  [[ $is_embed == 0 ]] && dbauth="user '$usr' password '$pwd'"
+
+	cat <<- EOF >>$tmpsql
+      create database '$dbconn' page_size 8192 $dbauth;
+      show version;
+      set list on;
+      select 
+          m.mon\$database_name
+         ,m.mon\$creation_date
+         ,m.mon\$page_size
+         ,a.mon\$server_pid
+         ,a.mon\$attachment_id
+         ,a.mon\$remote_protocol
+         ,a.mon\$remote_address
+      from mon\$attachments a cross join mon\$database m
+      where a.mon\$attachment_id = current_connection;
+      exit;
+	EOF
+
+  run_isql="$fbc/isql -q -i $tmpsql"
   echo Command to be run:
   echo $run_isql
   echo Content of script $tmpsql:
@@ -103,7 +119,30 @@ db_create() {
 
   $run_isql 1>$tmplog 2>$tmperr
 
-  # both on win and nix: -Error while trying to create file
+  [[ $is_embed == 0 ]] && fbsrun=$host/$port:$dbnm || dbconn=$dbnm
+  if [[ $is_embed == 0 ]]; then
+     fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+  else
+     fbspref="$fbc/fbsvcmgr service_mgr "
+  fi
+
+  if [ $create_with_fw == async ]; then
+     echo Changing attribute FW to OFF.
+     run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_async"
+     echo Command:
+     echo $run_fbs
+     $run_fbs 1>>$tmplog 2>>$tmperr
+  fi
+  if [ $create_with_sweep != 0 ]; then
+     echo Changing attribute sweep interval to $create_with_sweep.
+     run_fbs="$fbspref action_properties dbname $dbnm prp_sweep_interval $create_with_sweep"
+     echo Command:
+     echo $run_fbs
+     $run_fbs 1>>$tmplog 2>>$tmperr
+  fi
+  run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
+  $run_fbs | grep -i "$dbnm\|creation date\|attributes\|forced\|sweep" 1>>$tmplog 2>>$tmperr
+
   if [ -s $tmperr ];then
     echo Error log $tmperr is NOT EMPTY!
     echo -------------------------------
@@ -113,12 +152,15 @@ db_create() {
     echo Script is now terminated.
     exit 1
   fi
-  echo RESULT: script finished OK, database has been created:
-  echo ------------------------------------------
+  echo RESULT: script finished OK, database has been created SUCCESSFULLY.
+  echo Content of $tmplog:
+  echo ---------------------------
   cat $tmplog
-  echo ------------------------------------------
+  echo ---------------------------
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
+
+  rm -f $tmperr $tmpsql $tmplog
 }
 
 # -------------------------------  d b _ b u i l d  -----------------------------------
@@ -126,7 +168,7 @@ db_create() {
 db_build() {
   echo
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
-
+  
   local prf=tmp_build_$fb
   local bld=$tmpdir/$prf.sql
   local log=$tmpdir/$prf.log
@@ -135,35 +177,116 @@ db_build() {
   local run_isql="$fbc/isql $dbconn -nod -i $bld $dbauth"
 
   rm -f $bld $log $err $tmp
-  # these scripts DIFFERS for each version of Firebird:
-  echo set bail on\;>>$bld
-  echo -e in \"$shdir/oltp"$fb"_DDL.sql\"\;>>$bld
-  echo -e in \"$shdir/oltp"$fb"_sp.sql\"\;>>$bld
 
-  if [ $make_debug_dbos=1 ]; then
+  cat <<- EOF >>$bld
+		set bail on;
+		in "$shdir/oltp$(($fb))_DDL.sql";
+		in "$shdir/oltp$(($fb))_sp.sql";
+	EOF
+
+  if [ $create_with_debug_objects=1 ]; then
     # this script contains DDL for miscelan debug views and SPs,
     # it is common for both version of Firebird:
-    echo in \"$shdir/oltp_misc_debug.sql\"\;>>$bld
+    cat <<- EOF >>$bld
+    in "$shdir/oltp_misc_debug.sql";
+	EOF
+  fi
+  
+  if [[ $create_with_split_heavy_tabs -eq 0 ]]; then
+    inject_for_compound_columns_order=$(
+	cat <<- SETVAR
+	-- Inject setting for making columns order in compound index
+	    -- according to the config setting 'create_with_compound_columns_order'
+	    -- (actual only when setting 'create_with_split_heavy_tabs' = 0):
+	    insert into settings(working_mode, mcode, context,svalue,init_on)
+	             values( 'COMMON'                       -- working_mode
+	                     ,'BUILD_WITH_QD_COMPOUND_ORDR'  -- mcode
+	                     ,'USER_SESSION'                 -- context
+	                     ,upper('$create_with_compound_columns_order') -- value from config
+	                     ,'db_prepare'                   -- init_on
+	                   );
+	SETVAR
+  )
   fi
 
-  # these scripts suitable for BOTH version of Firebird:
-  echo in \"$shdir/oltp_main_filling.sql\"\;>>$bld
-  echo in \"$shdir/oltp_data_filling.sql\"\;>>$bld
-  echo show collation\;>>$bld
-  echo show domain\;>>$bld
-  echo show exception\;>>$bld
-  echo show generator\;>>$bld
-  echo show table\;>>$bld
-  echo show view\;>>$bld
-  echo show trigger\;>>$bld
-  echo show proc\;>>$bld
+  cat <<- EOF >>$bld
+    in "$shdir/oltp_main_filling.sql";
+    
+    -- Inject setting which will force to create either single table QDistr
+    -- or several clones of it with names matching to patterh 'XQD_*'.
+    -- Similar action will be done for table QStorned and 'XQS_*' clones.
+    insert into settings(working_mode, mcode, context,svalue,init_on)
+               values(  'COMMON'                       -- working_mode
+                       ,'BUILD_WITH_SPLIT_HEAVY_TABS'  -- mcode
+                       ,'USER_SESSION'                 -- context
+                       ,$create_with_split_heavy_tabs             -- value from config
+                       ,'db_prepare'                   -- init_on
+                     );
+    -- Inject setting which will force to create either one compound index for table
+    -- QDistr (or its XQD* clones) or split columns on two separate indices.
+    -- When setting 'create_with_split_heavy_tabs' is 0 then one of these indices is
+    -- still compund but contain three fields instead of four.
+    -- When setting 'create_with_split_heavy_tabs' is 0 then each XQD* table will have
+    -- either compound index of two fields or two single-field indices.
+    insert into settings(working_mode, mcode, context,svalue,init_on)
+               values(  'COMMON'                       -- working_mode
+                       ,'BUILD_WITH_SEPAR_QDISTR_IDX'  -- mcode
+                       ,'USER_SESSION'                 -- context
+                       ,$create_with_separate_qdistr_idx             -- value from config
+                       ,'db_prepare'                   -- init_on
+                     );
+
+    $inject_for_compound_columns_order
+
+    commit;
+
+	EOF
+
+  local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$fb.tmp
+  rm -f $post_handling_out
+
+  cat <<- EOF >>$bld
+  set echo off;
+  -- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
+  out $post_handling_out;
+
+  -- result in .sql:
+  -- out "/var/tmp/.../oltp_split_heavy_tabs_n_25.tmp"; - where n=0|1.
+  -- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
+  in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql";
+
+  -- Result: previous OUT-command provides redirection of
+  -- |in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql"|
+  -- to the new temp file which will be applied on the next step.
+  -- Close current output:
+  out;
+  
+  -- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
+  in $post_handling_out;
+
+  -- Inject value of config parameter 'mon_unit_perf' into table SETTINGS:
+  update settings set svalue = $mon_unit_perf
+  where working_mode=upper('common') and mcode=upper('enable_mon_query');
+
+  -- Inject value of config parameter `working_mode` into table SETTINGS.
+  -- This will be taken in account in the final script 'oltp_data_filling.sql'
+  -- which created necessary amount of initial data in lookup tables:
+  update settings set svalue=upper('$working_mode')
+  where working_mode=upper('init') and mcode=upper('working_mode');
+  commit;
+
+  -- Finish building process: insert custom data to lookup tables:
+  in "$shdir/oltp_data_filling.sql";
+	EOF
 
   echo Content of building SQL script:
   echo -------------------------------
   cat $bld
   echo -------------------------------
+
   echo Command to be run:
   echo $run_isql
+
   echo
   echo Build test database. Please wait. . .
 
@@ -186,13 +309,96 @@ db_build() {
     echo Script is now terminated.
     exit 1
   fi
-  rm -f $bld $tmp
 
   echo Creation of database objects COMPLETED. See results in $log.
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
+
+  rm -f $err $tmp $post_handling_out
+  rm -f $bld $log
+
 }
 
+# -------------- s h o w    D B   a n d   t e s t   p a r a m s  -----------------
+
+show_db_and_test_params() {
+
+  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  local tmp_show_sql=$tmpdir/tmp_show.sql
+  local tmp_show_log=$tmpdir/tmp_show.log
+  local tmp_show_err=$tmpdir/tmp_show.err
+
+  echo Database parameters, workload level map and current test settings: > $tmp_show_log
+  
+  [[ $create_with_split_heavy_tabs == 0 ]] && inject_compound_ordr=",rdb\$get_context('USER_SESSION', 'BUILD_WITH_QD_COMPOUND_ORDR') build_with_qd_compound_ordr"
+  # NB: use quoted "EOF" in heredoc clause in order to avoid specifying backslash leftside of any special characters, like $:
+  cat <<- EOF >$tmp_show_sql
+         set list on;
+         set term ^;
+         execute block as
+            declare c varchar(255);
+         begin
+              if ( exists(select * from rdb\$procedures where rdb\$procedure_name = upper('sys_get_fb_arch')) ) then
+              begin
+                  select fb_arch
+                  from sys_get_fb_arch('$usr', '$pwd')
+                  into c;
+                  rdb\$set_context('USER_TRANSACTION', 'FB_ARCH', c);
+             end
+             else
+             begin
+                 rdb\$set_context('USER_TRANSACTION', 'FB_ARCH', 'UNKNOWN: missing procedure SYS_GET_FB_ARCH.' );
+             end
+         end
+         ^
+         set term ;^
+         select
+             coalesce( rdb\$get_context('USER_TRANSACTION', 'FB_ARCH'), 'UNKNOWN (EMBEDDED ?)') as fb_arch
+            ,m.mon\$database_name as db_name
+            ,iif(m.mon\$forced_writes=0,'OFF','ON') as forced_writes
+            ,m.mon\$sweep_interval as sweep_int
+            ,m.mon\$page_buffers as page_buffers
+            , m.mon\$page_size as page_size
+         from mon\$database m;
+         set list off;
+
+         set list off;
+         set width working_mode 12;
+         set width setting_name 40;
+         set width setting_value 20;
+         select * from z_settings_pivot;
+         select z.setting_name, z.setting_value from z_current_test_settings z;
+
+         set width tab_name 13;
+         set width idx_name 31;
+         set width idx_key 45;
+         select * from z_qd_indices_ddl;
+
+	EOF
+
+  $fbc/isql $dbconn $dbauth -i $tmp_show_sql 1>>$tmp_show_log 2>$tmp_show_err
+
+  if [ -s $tmp_show_err ];then
+    cat $tmp_show_err >> $log4all
+    echo Could NOT run script with commands for show database and test parameters.
+    echo SQL  file: $tmp_show_sql
+    echo Error log: $tmp_show_err
+    echo ------------------------------------------------------------------
+    cat $tmp_show_err
+    echo ------------------------------------------------------------------
+    echo
+    echo Script is now terminated.
+    exit 1
+  fi
+  rm -f $tmp_show_sql $tmp_show_err
+
+  # Display database and main test parameters + add them to main log:
+  cat $tmp_show_log
+  cat $tmp_show_log>>$log4all
+  rm -f $tmp_show_log
+  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+
+}
 
 # -------------------------------  c h e c k _ s t o p t e s t -----------------------------------
 
@@ -262,6 +468,7 @@ check_stoptest() {
       echo Script is now terminated.
       exit 1
     fi
+    rm -f $tmpchk $tmpclg $tmperr
   fi
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
@@ -284,8 +491,11 @@ upd_init_docs() {
   # check that total number of docs (count from doc_list table) is LESS than $init_docs
   # and correct $init_docs (reduce it) so that its new value + count will be equal to 
   # required total number of docs (which is specified in oltp_config.NN)
-  echo set list on\; set heading off\;>>$tmpchk
-  echo -e select count\(*\) as \"old_docs=\" from doc_list\;>>$tmpchk
+  cat <<- 'EOF' >$tmpchk
+      set list on;
+      set heading off;
+      select count(*) as "old_docs=" from doc_list;
+	EOF
 
   echo -e Count number of existing documents to compare it with \$init_docs setting.
   echo Command to be run:
@@ -334,42 +544,56 @@ upd_init_docs() {
     fi
   fi
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  rm -f $tmpchk $tmpclg $tmperr
   echo
 }
 
-# --------------------------  i n i t _ d o c s _ s e t _ f w _ o f f  -------------------------
-
-init_docs_set_fw_off() {
+# --------------------------  p r e p a r e:   set linger, change FW to OFF ------------------
+prepare_before_adding_init_data() {
   echo
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
 
-  local pfx=tmp_restart_init_pop_sequence
+  local pfx=tmp_before_adding_init_data
   local tmpsql=$tmpdir/$pfx.sql
   local tmplog=$tmpdir/$pfx.log
   local tmperr=$tmpdir/$pfx.err
-  local run_isql="$fbc/isql $dbconn -i $tmpsql -nod -n $dbauth"
+  local run_fbs
+  local fbspref
+  local run_isql="$fbc/isql $dbconn -i $tmpsql -q -nod -n $dbauth"
+  
+  if [[ $is_embed == 0 ]]; then
+     fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+  else
+     fbspref="$fbc/fbsvcmgr service_mgr "
+  fi
   rm -f $tmpsql $tmplog $tmperr
 
-  # LI-T3.0.0.31394 Firebird 3.0 Beta 1
-  [[ $fbb == *"Firebird 3"* ]] && echo alter database set linger to 15\; >>$tmpsql
-  echo commit\;>>$tmpsql
-  echo set transaction no wait\;>>$tmpsql
-  echo alter sequence g_init_pop restart with 0\;>>$tmpsql
-  echo commit\;>>$tmpsql
-
-  #  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-  #  G E T    I N I T I A L  S T A T E    O F    F O R C E D   W R I T E S 
-  #  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+  echo Changing attribute FW to OFF.
+  run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_async"
+  echo Command:
+  echo $run_fbs
+  $run_fbs 1>>$tmplog 2>>$tmperr
   
-  echo set list on\;>>$tmpsql 
-  echo select >>$tmpsql 
-  echo "   m.mon\$forced_writes as \"prev_fw=\"" >>$tmpsql 
-  echo "  ,iif( exists( select * from perf_log g"  >>$tmpsql 
-  echo "                where g.unit='fw_both_changes_done' and g.aux1=1 and g.aux2 is null"  >>$tmpsql 
-  echo "              ), '0', '1'"  >>$tmpsql 
-  echo "      ) as \"can_set_fw_off=\"" >>$tmpsql 
-  echo from mon\$database m\;>>$tmpsql
-  echo set list off\;>>$tmpsql
+  # LI-T3.0.0.31394 Firebird 3.0 Beta 1
+  #[[ $fbb == *"Firebird 3"* ]] && echo alter database set linger to 15\;commit\;select rdb\$linger from rdb$database\; >>$tmpsql
+  if [ $fbb == *"Firebird 3"* ]; then
+     cat <<-"EOF" >>$tmpsql
+       alter database set linger to 15;
+       commit;
+       select rdb$linger from rdb$database;
+	EOF
+  fi
+  
+  cat <<- "EOF" >>$tmpsql
+    commit;
+    set transaction no wait;
+    alter sequence g_init_pop restart with 0;
+    commit;
+    show sequence g_init_pop;
+    set list on;
+    select iif(m.mon$forced_writes=1, 'ON', 'OFF') as forced_writes from mon$database m;
+    set list off;
+	EOF
 
   echo Command that now to be run:
   echo $run_isql
@@ -378,10 +602,11 @@ init_docs_set_fw_off() {
   cat $tmpsql
   echo --------------------------
 
-  $run_isql 1>$tmplog 2>$tmperr
+  $run_isql 1>>$tmplog 2>>$tmperr
+
 
   if [ -s $tmperr ];then
-    echo Script which set FW for initial data population finished with ERROR!
+    echo Script which changes FW, restarts aux. sequence and, for FB-3, increases  value of linger - finished with ERROR!
     echo Name of script: $tmpsql
     echo Name of errlog: $tmperr
     echo -------------------------------
@@ -392,70 +617,15 @@ init_docs_set_fw_off() {
     echo Script is now terminated.
     exit 1
   fi
+
+  echo Result:
+  grep -v "^$" $tmplog
   
-  # obtain current setting of FW and change it - perhaps temply - to OFF:
-  # open log and parse it as config with 'param = value' string:
-  echo No errors detected when run $tmpsql
-  echo Obtain results from its log $tmplog
-
-  while IFS='=' read lhs rhs
-  do
-    if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
-      # | sed -e 's/^[ \t]*//'
-      lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
-      rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
-      declare $lhs=$rhs
-      echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
-    fi
-  done<$tmplog
-  fw_current=$prev_fw 
-  fw_can_upd=$can_set_fw_off
-  echo fw_current=$fw_current, fw_can_upd=$fw_can_upd
-
-  rm -f $tmpsql $tmplog $tmperr
-
-  # Save old value of FW (for restoring it after finish init doc filling):
-  if [ $fw_current = 1 ]; then
-    fw_mode=sync
-  else
-    fw_mode=async
-  fi
-
-  #  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-  #  T E M P L Y    S E T    F O R C E D   W R I T E S   =   O F F
-  #  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-  if [ $fw_can_upd = 1 ]; then
-    # 1. add to perf_log table our intention to FIRST change FW, always to OFF
-    echo "update or insert into perf_log (unit, aux1, aux2, dts_beg, dts_end)">>$tmpsql
-    echo "values('fw_both_changes_done', $fw_current, null, 'now', null)">>$tmpsql
-    echo "matching (unit);">>$tmpsql
-    echo commit\;>>$tmpsql
-
-    run_isql="$fbc/isql $dbconn -i $tmpsql -nod -n $dbauth"
-
-    echo Command that now to be run:
-    echo $run_isql
-    echo Content of script $tmpsql:
-    echo --------------------------
-    cat $tmpsql
-    echo --------------------------
-
-    $run_isql 1>$tmplog 2>$tmperr
-
-    # 2. run - perhaps LOCAL - gfix with command line for REMOTE database to set fw = OFF:
-    echo Temply change Forced Writes to OFF.
-    if [ $is_embed = 1 ];then
-      $fbc/gfix $dbnm -w async
-    else 
-      $fbc/gfix $host/$port:$dbnm -w async -user $usr -pas $pwd
-    fi
-    rm -f $tmpsql $tmplog $tmperr
-  fi
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
-} # end of: init_docs_set_fw_off()
+  rm -f $tmpsql $tmplog $tmperr
 
+} # end of: prepare_before_adding_init_data
 
 # --------------------------  g e n _ w o r k i n g _ s q l  -------------------------
 
@@ -477,29 +647,33 @@ gen_working_sql() {
  local idle=${6:-0}
 
  rm -f $sql
- echo Input arguments: 
- echo 1\) mode:			$mode
- echo 2\) sql:			$sql
- echo 3\) number-of-EB:		$lim
- echo 4\) Tx-undo-clause:	$nau
- echo 5\) show-detailed-info:	$nfo
- echo 6\) idle-time-seconds:	$idle
+ cat <<- EOF
+     Input arguments: 
+     1) mode:			$mode
+     2) sql:			$sql
+     3) number-of-EB:		$lim
+     4) Tx-undo-clause:	$nau
+     5) show-detailed-info:	$nfo
+     6) idle-time-seconds:	$idle
+	EOF
  
  #echo set tran option: $nau
  echo "-- ### WARNING: DO NOT EDIT ###">>$sql
  echo "-- Generated auto by $shname, routine: $FUNCNAME">>$sql
  if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-   echo>>$sql
-   echo "-- mode='$mode': get data from mon\$database for verifying settings of database">>$sql
-   echo "-- NB-1: FW must be (temply) set to OFF">>$sql
-   echo "-- NB-2: cache buffers temply set to pretty big value">>$sql
-   echo "set list on; select * from mon\$database; set list off;">>$sql
+   cat <<- EOF >>$sql
+		-- mode='$mode': get data from mon\$database for verifying settings of database
+		-- NB-1: FW must be (temply) set to OFF
+		-- NB-2: cache buffers temply set to pretty big value
+		set list on; 
+		select * from mon\$database; 
+		set list off;
+	EOF
  fi
-
- echo>>$sql
 
  for (( i=1; i<=$lim; i++ ))
  do
+    
     [[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
     echo "----------------- mode = $mode, iter # $i -----------------------">>$sql
     echo>>$sql
@@ -510,388 +684,488 @@ gen_working_sql() {
       echo commit\;>>$sql
     else
       if [ $idle -gt 0 ]; then
-        echo -- Take pause between transactions. Argument for \'sleep\' command       >>$sql 
-        echo -- is in SECONDS and is equal to \'idle_time\' parameter in config.      >>$sql 
-        echo set list on\;                                                            >>$sql 
-        echo set transaction read only read committed\;                               >>$sql 
-        echo select current_timestamp as \"Pause $idle seconds starting at: \"        >>$sql 
-        echo from rdb\$database\;                                                     >>$sql 
-        echo ----------------------------- p a u s e--------------------------------  >>$sql 
-        echo shell sleep $idle\;                                                      >>$sql 
-        echo -----------------------------------------------------------------------  >>$sql
-        echo select current_timestamp as \"Pause $idle seconds finished at: \"        >>$sql 
-        echo from rdb\$database\;                                                     >>$sql 
-        echo commit\;                                                                 >>$sql 
-        echo set list off\;                                                           >>$sql 
+	    cat <<-EOF >>$sql
+             -- Take pause between transactions. Argument for 'sleep' command
+             -- is in SECONDS and is equal to 'idle_time' parameter in config.
+             set list on;
+             commit;
+             select current_timestamp as "Pause $idle seconds starting at: "
+             from rdb\$database;
+             commit;
+             ----------------------------- p a u s e--------------------------------
+             shell sleep $idle;
+             -----------------------------------------------------------------------
+             set transaction read only read committed;
+             select current_timestamp as "Pause $idle seconds finished at: "
+             from rdb\$database;
+             commit;
+             set list off;
+		EOF
       else
-        echo>>$sql 
-        echo -- Pause between transactions is DISABLED.                >>$sql 
-        echo -- For enabling them set value of \'idle_time\' parameter >>$sql 
-        echo -- in test config file to some value \> 0.                >>$sql 
-        echo>>$sql 
+	    cat <<-EOF >>$sql
+
+             -- Pause between transactions is DISABLED.
+             -- For enabling them set value of 'idle_time' parameter
+             -- in test config file to some value > 0.
+
+		EOF
       fi
     fi
 
-    echo -- check oltp_config.NN for optional setting NO AUTO UNDO here: >>$sql
-    echo set transaction no wait $nau\;                                  >>$sql
 
-    if echo $mode | grep -i "^run_test$" > /dev/null ; then
-      echo set width test_ends_at 19\;                                           >>$sql
-      echo set width engine 6\;                                                  >>$sql
-      echo set width iter_info 16\;                                              >>$sql
-      echo set width mon_info 50\;                                               >>$sql
-      if [ $i = 1 ]; then
-        echo -n "select left( cast( p.dts_end as varchar(24) ), 19 ) "           >>$sql
-        echo      as test_ends_at                                                >>$sql
-        echo -n "        ,rdb\$get_context('SYSTEM','ENGINE_VERSION') "          >>$sql
-        echo      as engine                                                      >>$sql
-        echo -e "        ,$i||' of '||$lim as iter_info"                         >>$sql
-        echo from perf_log p                                                     >>$sql
-        echo "where p.unit = 'perf_watch_interval'"                              >>$sql
-        echo order by dts_beg desc                                               >>$sql
-        echo rows 1\;                                                            >>$sql
-      else # i > 1
-        echo select                                                              >>$sql
-        echo -ne "  left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') ">>$sql
-        echo -n                  "as varchar(24)"                                >>$sql
-        echo -ne  "), "                                                          >>$sql
-        echo -ne  "19)"                                                          >>$sql
-        echo -e  " as test_ends_at"                                              >>$sql
-        echo -e "  ,lpad( $i, 4,' ')||' of '||$lim as iter_info"                 >>$sql
-        if [ $fb = 30 ]; then
-          if [ $mon_unit_perf = 1 ]; then
-              echo -e "   -- this info set only in SP srv_fill_mon:"                >>$sql
-              echo -e "  ,rdb\$get_context('USER_SESSION','MON_INFO') as mon_info"  >>$sql
-          fi
-        fi
-        echo "from rdb\$database;"                                              >>$sql
-      fi # i =1 or -gt 1
-    fi # mode='run_test'
-    
-    echo "set term ^;"                                                      >>$sql
-    echo execute block as                                                   >>$sql
-    echo -e "    declare v_unit dm_name;"                                   >>$sql
-    echo begin                                                              >>$sql
+    cat <<-EOF >>$sql
+			-- check oltp_config.NN for optional setting NO AUTO UNDO here:
+			set transaction no wait $nau;
+	EOF
+
+    cat <<- EOF >>$sql
+		------ ##############################################
+		-----  R A N D O M    S E L E C T    A P P.   U N I T
+		------ ##############################################
+		set term ^;
+		execute block as
+		  declare v_unit dm_name;
+		begin
+	EOF
+	
+
       if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-        echo -e "     -- SKIP choise of application units which REMOVE documents:"    >>$sql
-        echo -e "     select p.unit"                                                  >>$sql
-        echo -e "     from srv_random_unit_choice("                                   >>$sql
-        echo -e "               '',"                                                  >>$sql
-        echo -e "               'creation,state_next,service,',"                      >>$sql
-        echo -e "               '',"                                                  >>$sql
-        echo -e "               'removal'"                                            >>$sql
-        echo -e "     ) p"                                                            >>$sql
-        echo -e "     into v_unit;"                                                   >>$sql
+        cat <<- EOF >>$sql
+			  -- SKIP choise of application units which REMOVE documents:
+			  select p.unit
+			  from srv_random_unit_choice(
+			     ''
+			    ,'creation,state_next,service,'
+			    ,''
+			    ,'removal'
+			  ) p
+			  into v_unit; 
+		EOF
       fi # $mode='init_pop'
  
       if echo $mode | grep -i "^run_test$" > /dev/null ; then #
-        echo -e "     if ( NOT exists( select * from ext_stoptest ) ) then"          >>$sql
-        echo -e "     begin"                                                         >>$sql
-        echo -e "       select p.unit"                                               >>$sql
-        echo -e "       from srv_random_unit_choice("                                >>$sql
-        echo -e "                 '',"                                               >>$sql
-        echo -e "                 '',"                                               >>$sql
-        echo -e "                 '',"                                               >>$sql
-        echo -e "                 ''"                                                >>$sql
-        echo -e "       ) p"                                                         >>$sql
-        echo -e "       into v_unit;"                                                >>$sql
-        echo -e "     end"                                                           >>$sql
-        echo -e "     else"                                                          >>$sql
-        echo -e "       v_unit = 'TEST_WAS_CANCELLED';"                              >>$sql
+        cat <<-EOF >>$sql
+			  if ( NOT exists( select * from ext_stoptest ) ) then
+			    begin
+			      select p.unit
+			      from srv_random_unit_choice(
+			         ''
+			         ,''
+			         ,''
+			         ,''
+			      ) p
+			      into v_unit;
+			    end
+			  else
+			    v_unit = 'TEST_WAS_CANCELLED';
+		EOF
       fi # # $mode='run_test'
-      echo -e "     -- This will be shown in .log of working SQL script:"      >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','SELECTED_UNIT', v_unit);"  >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','ADD_INFO', null);"         >>$sql
-    echo end^                                                                  >>$sql
-    echo "set term ;^"                                                         >>$sql
-
-
-    if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
-      if [ $fb = 30 ]; then
-          if [ $mon_unit_perf = 1 ]; then
-            echo "------ ###############################################  -------">>$sql
-            echo "-----  G A T H E R    M O N.    D A T A    B E F O R E  -------">>$sql
-            echo "------ ###############################################  -------">>$sql
-            echo "set term ^;"                                                   >>$sql
-            echo execute block as                                                >>$sql
-            echo -e "  declare v_dummy bigint;"                                         >>$sql
-            echo begin                                                                  >>$sql
-              echo -e "  -- define context var which will identify rowset field"        >>$sql
-              echo -e "  -- in mon_log and mon_log_table_stats:"                        >>$sql
-              echo -e "  -- (this value is ised after call app. unit):"                 >>$sql
-              echo -e "  rdb\$set_context('USER_SESSION','MON_ROWSET', gen_id(g_common,1));" >>$sql
-              echo                                                                      >>$sql
-              echo -e "  -- gather mon\$ tables BEFORE run app unit, only in FB 3.0"    >>$sql
-              echo -e "  -- add FIRST row to GTT tmp\$mon_log"                          >>$sql
-              echo -e "  select count(*)"                                               >>$sql
-              echo -e "  from srv_fill_tmp_mon("                                        >>$sql
-              echo -e "          rdb\$get_context('USER_SESSION','MON_ROWSET')    -- :a_rowset" >>$sql
-              echo -e "         ,1                                               -- :a_ignore_system_tables" >>$sql
-              echo -e "         ,rdb\$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit"   >>$sql
-              echo -e "                       )"                                        >>$sql
-              echo -e "  into v_dummy;"                                                 >>$sql
-              echo                                                                      >>$sql
-              echo -e "  -- result: tables tmp\$mon_log and tmp\$mon_log_table_stats"     >>$sql
-              echo -e "  -- are filled with counters BEFORE application unit call."     >>$sql
-              echo -e "  -- Field 'mult' in these tables is now negative: -1"           >>$sql
-            echo end                                                                    >>$sql
-            echo "^set term ;^"                                                         >>$sql
-            echo "commit; --  ##### C O M M I T  #####  after 1st gathering mon\$data"      >>$sql
-            echo "set transaction no wait $nau;"                                        >>$sql
-          fi # mon_unit_perf = 1
-      fi # fb = 30
-    fi # mode = 'run_test' - gather mon info BEFORE application unit call
-    echo>>$sql
-    echo set width dts 12\;                                                  >>$sql
-    echo set width trn 14\;                                                  >>$sql
-    echo set width unit 20\;                                                 >>$sql
-    echo set width elapsed_ms 10\;                                           >>$sql
-    echo set width msg 20\;                                                  >>$sql
-    echo set width add_info 40\;                                             >>$sql
-    echo set width mon_info 20\;                                             >>$sql
-
-    echo -- ensure that just before call application unit                   >>$sql
-    echo -- table tmp\$perf_log is really EMPTY:                             >>$sql
-    echo delete from tmp\$perf_log\;                                          >>$sql
-    echo>>$sql
-    echo --------------- before run app unit: show its NAME -------------- >>$sql
-    echo set list off\;                                                      >>$sql
-    echo select                                                             >>$sql
-    echo -e "    substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts," >>$sql
-    echo -e "    'tra_'||current_transaction trn,"                             >>$sql
-    echo -e "     rdb\$get_context('USER_SESSION','SELECTED_UNIT') as unit," >>$sql
-    echo -e "    'start' as msg,"                                                >>$sql
-    echo -e "    'att_'||current_connection as add_info"                       >>$sql
-    echo from rdb\$database\;                                                 >>$sql
-
-    echo>>$sql
-
-    echo "------ #########################################  -------">>$sql
-    echo "------ R U N    A P P L I C A T I O N    U N I T  -------">>$sql
-    echo "------ #########################################  -------">>$sql
-    echo "set term ^;"                                                           >>$sql
-    echo execute block as                                                        >>$sql
-    echo -e "    declare v_stt varchar(128);"                                    >>$sql
-    echo -e "    declare result int;"                                            >>$sql
-    echo -e "    declare v_old_docs_num int;"                                    >>$sql
-    echo begin                                                                   >>$sql
-      if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-        echo -e "  -- ::: nb ::: g_init_pop is always incremented by 1"            >>$sql
-        echo -e "  -- in sp_add_doc_list, even if fault will occur later"          >>$sql
-        echo -e "  -- set context var 'INIT_DATA_POP' to not-null for analyzing"   >>$sql
-        echo -e "  -- in sp_customer_reserve and others SPs and raise exception"   >>$sql 
-        echo -e "  rdb\$set_context('USER_TRANSACTION','INIT_DATA_POP',1);"        >>$sql
-        echo -e "  v_old_docs_num = gen_id( g_init_pop, 0);"                       >>$sql
-      fi # mode = 'init_pop'
-
-    echo   -e "  begin"                                                              >>$sql
-      echo -e "    -- save in ctx var timestamp of START app unit:"                  >>$sql
-      echo -e "    rdb\$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp));">>$sql
-      echo -e "    rdb\$set_context('USER_SESSION', 'GDS_RESULT', null);"            >>$sql
-      echo -e "    -- save value of current_transaction because we make COMMIT"      >>$sql
-      echo -e "    -- after gathering mon\$ tables when oltp_config.NN parameter"     >>$sql
-      echo -e "    -- mon_unit_perf=1"                                               >>$sql
-      echo -e "    rdb\$set_context('USER_SESSION', 'APP_TRANSACTION', current_transaction);" >>$sql
-      echo -e "    if ( rdb\$get_context('USER_SESSION','SELECTED_UNIT')"            >>$sql
-      echo -e "         is distinct from"                                            >>$sql
-      echo -e "         'TEST_WAS_CANCELLED'"                                        >>$sql
-      echo -e "       ) then"                                                        >>$sql
-      echo -e "      begin"                                                           >>$sql
-        echo -e "        v_stt='select count(*) from '"                            >>$sql
-        echo -e "               ||rdb\$get_context('USER_SESSION','SELECTED_UNIT');"      >>$sql
-        echo -e "        --- ##################################" >>$sql
-        echo -e "        --- e x e c u t e    s t a t e m e n t" >>$sql
-        echo -e "        --- ##################################" >>$sql
-        echo -e "        execute statement (v_stt) into result;"                   >>$sql
-        echo                                                                           >>$sql
-        echo -e "        rdb\$set_context('USER_SESSION', 'RUN_RESULT',"           >>$sql
-        echo -e "                         'OK, '|| result ||' rows');"              >>$sql
-      echo -e "      end"                                                             >>$sql
-      echo -e "   else -- test has been CANCELLED "                                 >>$sql
-      echo -e "      begin"                                                           >>$sql
-        echo -e "             rdb\$set_context('USER_SESSION','RUN_RESULT',"               >>$sql
-        echo -e "                        (select e.fb_mnemona"                            >>$sql
-        echo -e "                         from perf_log g"                                >>$sql
-        echo -e "                         join fb_errors e on g.fb_gdscode=e.fb_gdscode"  >>$sql
-        echo -e "                         where g.unit='sp_halt_on_error'"                >>$sql
-        echo -e "                         order by g.dts_end DESC rows 1"                 >>$sql
-        echo -e "                        )"                                              >>$sql
-        echo -e "                            );"                                         >>$sql
-      echo -e "      end"                                                                 >>$sql
-      echo -e "    -- add timestamp for FINISH app unit:"                                 >>$sql
-      echo -e "    rdb\$set_context( 'USER_SESSION','BAT_PHOTO_UNIT_DTS',"                >>$sql
-      echo -e "                     rdb\$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS')">>$sql
-      echo -e "                     || ' '"                                               >>$sql
-      echo -e "                     || cast('now' as timestamp)"                          >>$sql
-      echo -e "                    );"                                                    >>$sql
-      echo                                                                                >>$sql
-    echo -e "  when any do"                                                               >>$sql
-    echo -e "    begin"                                                                   >>$sql
-      echo -e "           rdb\$set_context('USER_SESSION', 'GDS_RESULT', gdscode);"      >>$sql
-      if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-        echo -e "           v_stt = 'alter sequence g_init_pop restart with '"            >>$sql
-        echo -e "                   ||v_old_docs_num;"                                    >>$sql
-        echo -e "           execute statement (v_stt);"                                   >>$sql
-      fi
-      echo -e "           rdb\$set_context('USER_SESSION', 'RUN_RESULT', 'error, gds='||gdscode);" >>$sql
-        echo -e "        --- ##############################" >>$sql
-        echo -e "        --- r a i s e    e x c e p t i o n" >>$sql
-        echo -e "        --- ##############################" >>$sql
-      echo -e "           exception;"                                                     >>$sql
-    echo -e "    end"                                                                     >>$sql
-    echo -e "  end"                                                                       >>$sql
-    echo end                                                                              >>$sql
-    echo "^set term ;^"                                                                   >>$sql
-    echo>>$sql
+      cat <<- EOF >>$sql
+			  -- This will be shown in .log of working SQL script:
+			  rdb\$set_context('USER_SESSION','SELECTED_UNIT', v_unit);
+			  rdb\$set_context('USER_SESSION','ADD_INFO', null);
+			end^
+			set term ;^
+		EOF
 
     if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
-      if [ $fb = 30 ]; then
-          if [ $mon_unit_perf = 1 ]; then
-            echo "------ ############################################  -------">>$sql
-            echo "-----  G A T H E R    M O N.    D A T A   A F T E R   -------">>$sql
-            echo "------ ############################################  -------">>$sql
-            echo "set term ^;"                                                   >>$sql
-            echo execute block as                                                >>$sql
-            echo -e "  declare v_dummy bigint;"                                         >>$sql
-            echo begin                                                                  >>$sql
-                echo -e "  -- gather mon\$ tables AFTER running app unit, only in FB 3.0">>$sql
-                echo -e "  -- add SECOND row to GTT tmp\$mon_log:"                      >>$sql
-                echo -e "  select count(*) from srv_fill_tmp_mon"                       >>$sql
-                echo -e "  ("                                                           >>$sql
-                echo -e "          rdb\$get_context('USER_SESSION','MON_ROWSET')     -- :a_rowset" >>$sql
-                echo -e "         ,1                                                -- :a_ignore_system_tables" >>$sql
-                echo -e "         ,rdb\$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit"   >>$sql
-                echo -e "         ,coalesce(                                        -- :a_info"   >>$sql
-                echo -e "               rdb\$get_context('USER_SESSION','ADD_INFO') -- aux info, set in APP units only" >>$sql
-                echo -e "              ,rdb\$get_context('USER_SESSION','RUN_RESULT')"  >>$sql
-                echo -e "             )"                                                >>$sql
-                echo -e "         ,rdb\$get_context('USER_SESSION', 'GDS_RESULT')   -- :a_gdscode" >>$sql
-                echo -e "  )"                                                           >>$sql
-                echo -e "  into v_dummy;"                                               >>$sql
-                echo                                                                    >>$sql
-                echo -e "  -- add pair of rows with aggregated differences of mon\$"    >>$sql
-                echo -e "  -- counters from GTT to fixed tables"                        >>$sql
-                echo -e "  -- (this SP also removes data from GTTs):"                   >>$sql
-                echo -e "  select count(*)"                                             >>$sql
-                echo -e "  from srv_fill_mon("                                          >>$sql
-                echo -e "    rdb\$get_context('USER_SESSION','MON_ROWSET') -- :a_rowset" >>$sql
-                echo -e "                   )"                                          >>$sql
-                echo -e "  into v_dummy;"                                               >>$sql
-                echo -e "  rdb\$set_context('USER_SESSION','MON_ROWSET', null);"         >>$sql
-            echo end                                                                    >>$sql
-            echo "^set term ;^"                                                         >>$sql
-            echo "commit; --  ##### C O M M I T  #####  after 2nd gathering mon\$data"  >>$sql
-            echo "set transaction no wait $nau;"                                        >>$sql
-
-          fi # mon_unit_perf = 1
-      fi # fb = 30
-    fi # mode = 'run_test'
-
-    echo -e "-- Output results of application unit run:"                           >>$sql
-    echo -e "select"                                                               >>$sql
-    echo -e "     substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts" >>$sql
-    echo -e "     ,'tra_'||rdb\$get_context('USER_SESSION','APP_TRANSACTION') trn" >>$sql
-    echo -e "     ,rdb\$get_context('USER_SESSION','SELECTED_UNIT') as unit"        >>$sql
-    echo -e "     ,lpad("                                                           >>$sql
-    echo -e "            cast("                                                     >>$sql
-    echo -e "                  datediff("                                           >>$sql
-    echo -e "                    millisecond"                                       >>$sql
-    echo -e "                    from cast(left(rdb\$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)">>$sql
-    echo -e "                    to   cast(right(rdb\$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)">>$sql
-    echo -e "                         )"                                           >>$sql
-    echo -e "                 as varchar(10)"                                      >>$sql
-    echo -e "                )"                                                    >>$sql
-    echo -e "           ,10"                                                        >>$sql
-    echo -e "           ,' '"                                                       >>$sql
-    echo -e "         ) as elapsed_ms"                                             >>$sql
-    echo -e "     ,rdb\$get_context('USER_SESSION', 'RUN_RESULT') as msg"           >>$sql
-    echo -e "     ,rdb\$get_context('USER_SESSION','ADD_INFO') as add_info"         >>$sql
-    echo -e "from rdb\$database;"                                                   >>$sql
-
-    if echo $mode | grep -i "^init_pop$" > /dev/null ; then # init_pop
-      echo>>$sql
-      echo -- Show current size of database and some other info from mon\$:         >>$sql
-      echo "set list on;"                                                           >>$sql
-      echo -e "set width db_name 80;"                                               >>$sql
-      echo -e "select"                                                              >>$sql
-      echo -e "     m.mon\$database_name db_name,"                                  >>$sql
-      echo -e "     rdb\$get_context('SYSTEM','ENGINE_VERSION') engine,"             >>$sql
-      echo -e "     mon\$FORCED_WRITES db_forced_writes,"                           >>$sql
-      echo -e "     mon\$PAGE_BUFFERS page_buffers,"                                >>$sql
-      echo -e "     m.mon\$page_size * m.mon\$pages as db_current_size,"            >>$sql
-      echo -e "     gen_id(g_init_pop,0) as new_docs_created"                       >>$sql
-      echo -e "from mon\$database m;"                                               >>$sql
-    fi # mode = 'init_pop'
-
-    if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
-      echo>>$sql
-      echo -- Check for STOP test:                                                  >>$sql
-      echo -e "set bail on; -- for catch test cancellation and stop all .sql"       >>$sql
-      echo -e "set term ^;"                                                         >>$sql
-      echo -e "execute block as"                                                    >>$sql
-      echo -e "begin"                                                               >>$sql
-      echo -e "     if ( rdb\$get_context('USER_SESSION','SELECTED_UNIT')"          >>$sql
-      echo -e "          is NOT distinct from"                                      >>$sql
-      echo -e "          'TEST_WAS_CANCELLED'"                                      >>$sql
-      echo -e "       ) then"                                                       >>$sql
-      echo -e "     begin"                                                          >>$sql
-      echo -e "        exception ex_test_cancellation;"                             >>$sql
-      echo -e "     end"                                                            >>$sql
-      echo -e "     -- REMOVE data from context vars, they will not be used more"   >>$sql
-      echo -e "     -- in this iteration:"                                          >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','SELECTED_UNIT', null);"        >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','RUN_RESULT',    null);"        >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','GDS_RESULT',    null);"        >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','ADD_INFO', null);"             >>$sql
-      echo -e "     rdb\$set_context('USER_SESSION','APP_TRANSACTION', null);"      >>$sql
-      echo -e "end"                                                                 >>$sql
-      echo -e "^set term ;^"                                                        >>$sql
-      echo -e "set bail off;"                                                       >>$sql
-      echo>>$sql
-      if [ $nfo = 1 ]; then
-        echo -e "-- Begin block to output DETAILED results of iteration."            >>$sql
-        echo -e "-- To disable this output change 'detailed_info' setting to 0"      >>$sql
-        echo -e "-- in test configuration file $cfg"                                 >>$sql
-        echo -e "set heading off;"                                                   >>$sql
-        echo -e "set list on;"                                                       >>$sql
-        echo -e "select '+++++++++  perf_log data for this Tx: ++++++++' as msg"     >>$sql
-        echo -e "from rdb\$database;"                                                 >>$sql
-        echo -e "set heading on;"                                                    >>$sql
-        echo -e "set list on;"                                                       >>$sql
-        echo -e "set width unit 35;"                                                 >>$sql
-        echo -e "set width info 80;"                                                 >>$sql
-        echo -e "select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,"    >>$sql
-        echo -e "       g.elapsed_ms, g.dts_beg, g.dts_end"                          >>$sql
-        echo -e "from perf_log g"                                                    >>$sql
-        echo -e "where g.trn_id = current_transaction;"                              >>$sql
-        echo -e "set list off;"                                                      >>$sql
-        echo -e "-- Finish block to output DETAILED results of iteration."           >>$sql
+      if [ $mon_unit_perf = 1 ]; then
+        cat <<- "EOF" >>$sql
+			------ ###############################################  -------
+			-----  G A T H E R    M O N.    D A T A    B E F O R E  -------
+			------ ###############################################  -------
+			set term ^;
+			execute block as
+			    declare v_dummy bigint;
+			begin
+			    rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', 
+					      datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+					    );
+			    -- define context var which will identify rowset field
+			    -- in mon_log and mon_log_table_stats:
+			    -- (this value is ised after call app. unit):
+			    rdb$set_context('USER_SESSION','MON_ROWSET', gen_id(g_common,1));
+			
+			    -- Gather mon$ tables BEFORE run app unit.
+			    -- Add FIRST row to GTT tmp\$mon_log - statistics on 'per unit' basis.
+			    -- Note: for FB 3.0 - also add first rowset into table tmp\$mon_log_table_stats.
+			    select count(*)
+			    from srv_fill_tmp_mon(
+			            rdb$get_context('USER_SESSION','MON_ROWSET')    -- :a_rowset
+			           ,1                                   -- :a_ignore_system_tables
+			           ,rdb$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit
+						        )
+			    into v_dummy;
+			  
+			    -- result: tables tmp\$mon_log and tmp\$mon_log_table_stats
+			    -- are filled with counters BEFORE application unit call.
+			    -- Field "mult" in these tables is now negative: -1
+			    rdb$set_context('USER_SESSION','MON_GATHER_0_END',
+					      datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+					    );
+			end
+			^
+			set term ;^
+		EOF
+		cat <<- EOF >>$sql
+			commit; --  ##### C O M M I T  #####  after gathering mon$data
+			set transaction no wait $nau;
+		EOF
       else
-        echo -e "-- Output of detailed results of iteration DISABLED."               >>$sql
-        echo -e "-- To enable this output change 'detailed_info' setting to 1"       >>$sql
-        echo -e "-- in test configuration file $cfg"                                 >>$sql
-      fi # nfo = 1 or 0
-      echo>>$sql
+        cat <<- EOF >>$sql
+			-- Gathering statistics data from MON$ tables DISABLED.
+			-- For enabling it set value of config parameter 'mon_unit_perf' to 1.
+		EOF
+      fi # mon_unit_perf = 1
+    fi # mode = 'run_test' - gather mon info BEFORE application unit call
+
+
+    cat <<- EOF >>$sql
+
+		------ ###############################################  -------
+		-----  S H O W   S E L E C T E D    U N I T    N A M E  -------
+		------ ###############################################  -------
+		set heading off;
+		select lpad('',40,'+') || ' Action # $i of $lim ' || rpad('',40,'+') as " " from rdb\$database;
+		set heading on;
+
+		set width dts 12;
+		set width trn 14;
+		set width att 14;
+		set width unit 31;
+		set width elapsed_ms 10;
+		set width msg 16;
+		set width add_info 40;
+		set width mon_logging_info 20;
+
+		-- ensure that just before call application unit
+		-- table tmp\$perf_log is really EMPTY:
+		delete from tmp\$perf_log;
+
+		set list off;
+		select
+		      substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts
+		      ,'tra_'||current_transaction                                     as trn
+		      ,'att_'||current_connection                                      as att
+		      , rdb\$get_context('USER_SESSION','SELECTED_UNIT')                as unit
+		      ,'start'                                                         as msg
+		      ,'iter # $i  of $lim'                                          as add_info
+		from rdb\$database;
+
+		SET STAT ON;
+
+		set term ^;
+		execute block as
+		      declare v_stt varchar(128);
+		      declare result int;
+		      declare v_old_docs_num int;
+		begin
+	EOF
+    if echo $mode | grep -i "^init_pop$" > /dev/null ; then
+      cat <<- "EOF" >>$sql
+		  -- ::: nb ::: g_init_pop is always incremented by 1
+		  -- in sp_add_doc_list, even if fault will occur later
+		  -- set context var 'INIT_DATA_POP' to not-null for analyzing
+		  -- in sp_customer_reserve and others SPs and raise ex~ception
+		  rdb$set_context('USER_TRANSACTION','INIT_DATA_POP',1);
+		  v_old_docs_num = gen_id( g_init_pop, 0);
+		EOF
+    fi
+    
+    cat <<- EOF >>$sql
+		  begin
+		    -- save in ctx var timestamp of START app unit:
+		    rdb\$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp));
+		    rdb\$set_context('USER_SESSION', 'GDS_RESULT', null);
+		    -- save value of current_transaction because we make COMMIT
+		    -- after gathering mon$ tables when oltp_config.NN parameter
+		    -- mon_unit_perf=1
+		    rdb\$set_context('USER_SESSION', 'APP_TRANSACTION', current_transaction);
+
+		    if ( rdb\$get_context('USER_SESSION','SELECTED_UNIT')
+		       is distinct from
+		       'TEST_WAS_CANCELLED'
+		    ) then
+		      begin
+			        v_stt='select count(*) from ' || rdb\$get_context('USER_SESSION','SELECTED_UNIT');
+			        ------   ######################################### ------
+			        ------   r u n    a p p l i c a t i o n    u n i t ------
+			        ------   ######################################### ------
+			        execute statement (v_stt) into result;
+			        rdb\$set_context('USER_SESSION', 'RUN_RESULT',  'OK, '|| result ||' rows');
+		      end
+		    else
+		      begin
+			        rdb\$set_context('USER_SESSION','RUN_RESULT',
+			            ( select e.fb_mnemona
+			              from perf_log g
+			              join fb_errors e on g.fb_gdscode=e.fb_gdscode
+			              where g.unit='sp_halt_on_error'
+			              order by g.dts_end DESC rows 1
+			            )
+			        );
+		    end
+		    -- add timestamp for FINISH app unit:
+		    rdb\$set_context( 'USER_SESSION','BAT_PHOTO_UNIT_DTS',
+			                rdb\$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS')
+			                || ' '
+			                || cast('now' as timestamp)
+			   );
+		  when any do
+		    begin
+		      rdb\$set_context('USER_SESSION', 'GDS_RESULT', gdscode);
+
+	EOF
+
+    if echo $mode | grep -i "^init_pop$" > /dev/null ; then
+      cat <<- EOF >>$sql
+		      v_stt = 'alter sequence g_init_pop restart with ' || v_old_docs_num;
+		      execute statement (v_stt);
+		EOF
+    fi
+
+    cat <<- EOF >>$sql
+		      rdb\$set_context('USER_SESSION', 'RUN_RESULT', 'error, gds=' || gdscode );
+		      --- ##############################
+		      --- r a i s e    e x c e p t i o n
+		      --- ##############################
+		      exception;
+		    end
+		  end
+		end
+		^
+		set term ;^
+		SET STAT OFF;
+	EOF
+
+    if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
+      if [ $mon_unit_perf = 1 ]; then
+        cat <<- EOF >>$sql
+			----- ###############################################  -------
+			-----  G A T H E R    M O N.    D A T A    A F T E R    -------
+			----- ###############################################  -------
+			set term ^;
+			execute block as
+			    declare v_dummy bigint;
+			begin
+			    rdb\$set_context('USER_SESSION','MON_GATHER_1_BEG', 
+			            datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+			    );
+			    -- Gather mon$ tables BEFORE run app unit.
+			    -- Add second row to GTT tmp\$mon_log - statistics on 'per unit' basis.
+			    -- Note: for FB 3.0 - also add first rowset into table tmp\$mon_log_table_stats.
+			    select count(*) from srv_fill_tmp_mon
+			    (
+			            rdb\$get_context('USER_SESSION','MON_ROWSET')    -- :a_rowset
+			           ,1                                                -- :a_ignore_system_tables
+			           ,rdb\$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit
+			           ,coalesce(                                        -- :a_info
+			                 rdb\$get_context('USER_SESSION','ADD_INFO') -- aux info, set in APP units only!
+			                ,rdb\$get_context('USER_SESSION','RUN_RESULT')
+			               )
+			           ,rdb\$get_context('USER_SESSION', 'GDS_RESULT')   -- :a_gdscode
+			    )
+			    into v_dummy;
+			    rdb\$set_context('USER_SESSION','MON_GATHER_1_END', 
+			            datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+			    );
+			    -- add pair of rows with aggregated differences of mon$
+			    -- counters from GTT to fixed tables
+			    -- (this SP also removes data from GTTs):
+			    select count(*)
+			    from srv_fill_mon(
+			                       rdb\$get_context('USER_SESSION','MON_ROWSET') -- :a_rowset
+			                     )
+			    into v_dummy;
+			    rdb\$set_context('USER_SESSION','MON_ROWSET', null);
+			end
+			^
+			set term ;^
+			commit; --  ##### C O M M I T  #####  after gathering mon$data
+			set transaction no wait $nau;
+		EOF
+      fi # mon_unit_perf = 1
+
+		cat <<- EOF >>$sql
+			----- ####################################################  -------
+			-----  S H O W    R E S U L T S    O F   E X E C U T I O N
+			----- ####################################################  -------
+		EOF
+		if [ $i = 1 ]; then
+		  end_time_dts="left( cast( p.dts_end as varchar(24) ), 19 )"
+		else
+		  end_time_dts="left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') as varchar(24)), 19)"
+		fi
+		cat <<- EOF >>$sql
+			set list on;
+			select
+			  $end_time_dts as test_ends_at
+		EOF
+		if [ $mon_unit_perf = 1 ]; then
+        	cat <<- EOF >>$sql
+				  -- this variable will be defined in SP srv_fill_mon:
+				  ,rdb\$get_context('USER_SESSION','MON_INFO') as mon_logging_info
+				  ,cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_END') as bigint)
+				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_BEG') as bigint)
+				     + cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_END') as bigint)
+				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_BEG') as bigint)
+				   as mon_gathering_time_ms
+				  ,rdb\$get_context('USER_SESSION','TRACED_UNITS') as traced_units
+			EOF
+		else
+        	cat <<- EOF >>$sql
+				  ,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
+			EOF
+		fi
+		cat <<- EOF >>$sql
+		  ,rdb\$get_context('USER_SESSION','WORKING_MODE') as workload_type
+		  ,rdb\$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
+		  ,rdb\$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as qmism_verify_bitset
+		EOF
+		if [ $i = 1 ]; then
+			cat <<- EOF >>$sql
+				from perf_log p
+				where p.unit = 'perf_watch_interval'
+				order by dts_beg desc
+				rows 1;
+				set list off;
+			EOF
+		else
+			cat <<- EOF >>$sql
+				from rdb\$database;
+				set list off;
+			EOF
+		fi
     fi # mode = 'run_test'
 
-    echo "--  F I N I S H    I T E R A T I O N    ### $i ###"                      >>$sql
-    echo commit\;                                                                    >>$sql
-    echo set list off\;                                                              >>$sql
+	cat <<- "EOF" >>$sql
+		-- Output results of application unit run:
+		set width msg 20;
+		select
+		    substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts
+		    ,'tra_' || rdb$get_context('USER_SESSION','APP_TRANSACTION') trn
+		    ,rdb$get_context('USER_SESSION','SELECTED_UNIT') as unit
+		    ,lpad(
+		           cast(
+		                 datediff(
+		                   millisecond
+		                   from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
+		                   to   cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
+		                        )
+		                as varchar(10)
+		               )
+		          ,10
+		          ,' '
+		        ) as elapsed_ms
+		    ,rdb$get_context('USER_SESSION', 'RUN_RESULT') as msg
+		    ,rdb$get_context('USER_SESSION','ADD_INFO') as add_info
+		from rdb$database;
+	EOF
+
+    if echo $mode | grep -i "^init_pop$" > /dev/null ; then
+		cat <<- "EOF" >>$sql
+		set list on;
+		set width db_name 80;
+		select
+		  m.mon$database_name db_name,
+		  rdb$get_context('SYSTEM','ENGINE_VERSION') engine,
+		  iif(mon$forced_writes=1,'ON','OFF') forced_writes,
+		  mon$page_buffers page_buffers,
+		  m.mon$page_size * m.mon$pages as db_current_size,
+		  gen_id( g_init_pop, 0) as new_docs_created
+		from mon$database m;
+		EOF
+    fi
+
+	cat <<- "EOF" >>$sql
+		set bail on; -- for catch test cancellation and stop all .sql
+		set term ^;
+		execute block as
+		begin
+		    if ( rdb$get_context('USER_SESSION','SELECTED_UNIT')
+		         is NOT distinct from
+		         'TEST_WAS_CANCELLED'
+		      ) then
+		    begin
+		       exception ex_test_cancellation;
+		    end
+		    -- REMOVE data from context vars, they will not be used more
+		    -- in this iteration:
+		    rdb$set_context('USER_SESSION','SELECTED_UNIT', null);
+		    rdb$set_context('USER_SESSION','RUN_RESULT',    null);
+		    rdb$set_context('USER_SESSION','GDS_RESULT',    null);
+		    rdb$set_context('USER_SESSION','ADD_INFO', null);
+		    rdb$set_context('USER_SESSION','APP_TRANSACTION', null);
+		    rdb$Set_context('USER_SESSION','MON_GATHER_0_BEG', null);
+		    rdb$Set_context('USER_SESSION','MON_GATHER_0_END', null);
+		    rdb$Set_context('USER_SESSION','MON_GATHER_1_BEG', null);
+		    rdb$Set_context('USER_SESSION','MON_GATHER_1_END', null);
+		end
+		^
+		set term ;^
+		set bail off;
+	EOF
+
+    if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
+      if [ $nfo = 1 ]; then
+		cat <<- EOF >>$sql
+			-- Begin block to output DETAILED results of iteration.
+			-- To disable this output change "detailed_info" setting to 0
+			-- in test configuration file "$cfg"
+			set heading off;
+			set list on;
+			select '+++++++++  perf_log data for this Tx: ++++++++' as msg
+			from rdb\$database;
+			set heading on;
+			set list on;
+			set width unit 35;
+			set width info 80;
+			select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
+			       g.elapsed_ms, g.dts_beg, g.dts_end
+			from perf_log g
+			where g.trn_id = current_transaction;
+			-- do NOT add:  order by id;
+			set list off;
+			-- Finish block to output DETAILED results of iteration.
+		EOF
+      else
+		cat <<- EOF >>$sql
+			-- Output of detailed results of iteration DISABLED.
+			-- To enable this output change "detailed_info" setting to 1
+			-- in test configuration file "$cfg"
+		EOF
+      fi # $nfo=1 or 0
+    fi # mode=run_test
+
+	cat <<- EOF >>$sql
+		commit;
+		set list off;
+	EOF
+
+    ################################
+    #DO NOT CHANGE FINAL MESSAGE: "FINISH packet" - it is used in decision about whether this .sql should be recreated or no.
+    ###############################
 
     if [ $i -eq $lim ]; then
-      echo set width msg 60\;                                                        >>$sql
-      echo select                                                                    >>$sql
-      echo -e "  current_timestamp dts,"                                             >>$sql
-      echo -e "  '### FINISH packet, disconnect, att=$current_connection ###' as msg">>$sql
-      echo from rdb\$database\;                                                      >>$sql
+		cat <<- EOF >>$sql
+			set width msg 60;
+			select
+			  current_timestamp dts,
+			  '### FINISH packet, disconnect ###' as msg
+			from rdb\$database;
+		EOF
     fi
+
 
  done # i=1..$lim
  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
  echo
+
+
 } # end of gen_working_sql()
 
 # --------------------------  a d d_ i n i t _ d o c s  -------------------------
+
 
 add_init_docs() {
   # $tmpsql $tmplog $srv_frq
@@ -910,7 +1184,6 @@ add_init_docs() {
   echo Action start at $t0
   rm -f $tmplog
   
-  # stop here 07.11.2014 2343, todo: see win batch, line 657
   local k=1
   local prf=tmp_chk_docs_count
   local tmpchk=$tmpdir/$prf.sql
@@ -920,14 +1193,24 @@ add_init_docs() {
 
     if [ $(( k % $srv_frq )) -eq 0  ]; then
       rm -f $tmpchk $tmpclg
-      echo -e "set list on; set heading on;"               >>$tmpchk
-      echo -e "commit; set transaction no wait;"           >>$tmpchk
-      echo -e "select count(*) as srv_make_invnt_saldo_result from srv_make_invnt_saldo;">>$tmpchk
-      echo -e "commit; set transaction no wait;"           >>$tmpchk
-      echo -e "select count(*) as srv_make_money_saldo_result from srv_make_money_saldo;">>$tmpchk
-      echo -e "commit; set transaction no wait;"           >>$tmpchk
-      echo -e "select count(*) as srv_recalc_idx_stat_result from srv_recalc_idx_stat;" >>$tmpchk
-      echo -e "commit;" >>$tmpchk
+
+		cat <<- EOF >>$tmpchk
+			set list on; 
+			set heading on;
+			commit;
+			set transaction no wait;
+			echo select count(*) as srv_make_invnt_saldo_result from srv_make_invnt_saldo;
+			select * from srv_make_invnt_saldo;
+			commit;
+			set transaction no wait;
+			echo select count(*) as srv_make_money_saldo_result from srv_make_money_saldo;
+			select * from srv_make_money_saldo;
+			commit;
+			set transaction no wait;
+			echo select count(*) as srv_recalc_idx_stat_result from srv_recalc_idx_stat;
+			select * from srv_recalc_idx_stat;
+			commit;
+		EOF
 
       echo -ne "$(date +'%H:%M:%S'), start service SPs... "
       # --------------- perform service: srv_make*_total, recalc index statistics -------------
@@ -944,10 +1227,8 @@ add_init_docs() {
     # Common application unit: create several documents
     # using .sql which was made in func gen_working_sql
     ###################################################
-    run_isql="$fbc/isql $dbconn -i $tmpsql -c $init_buff -m -o $tmplog $dbauth"
-    #echo Command to be run:
-    #echo $run_isql
-    
+    run_isql="$fbc/isql $dbconn -i $tmpsql -c $init_buff -m -m2 -o $tmplog $dbauth"
+
     $run_isql
 
     # result: one or more (in case of complex operations like sp_add_invoice_to_stock)
@@ -955,12 +1236,14 @@ add_init_docs() {
     # 'returned' to its previous value.
     # now we must check total number of docs:
     rm -f $tmpchk $tmpclg
-    echo -n "set list off; set heading off; "     >>$tmpchk
-    echo -n "select "                             >>$tmpchk
-    echo -n "'new_docs='||gen_id(g_init_pop,0) " >>$tmpchk
-    echo "from rdb\$database;"                 >>$tmpchk
+	cat <<- "EOF" >$tmpchk
+		set list on;
+		select gen_id( g_init_pop, 0 ) as "new_docs=" from rdb$database;
+		set list off;
+	EOF
 
     run_isql="$fbc/isql $dbconn -pag 0 -i $tmpchk -n $dbauth"
+
     #echo Obtain current number of documents. Command to be run:
     #echo $run_isql
     #echo Script $tmpchk:
@@ -984,58 +1267,15 @@ add_init_docs() {
         #echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
       fi
     done<$tmpclg
+
     echo -e "$(date +'%H:%M:%S'), packet $k finish: docs created: >>>$new_docs<<<, limit: $init_docs"
     [[ $new_docs -gt $init_docs ]] && break
     k=$(( k+1 ))
+
   done
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 } # end of add_init_docs()
-
-# --------------  i n i t _ d o c s _ r e s t o r e _ f w  ------------
-
-init_docs_restore_fw() {
-  echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
-  local fw_need_to_be_restored=${1:-0}
-  local fw_mode=$2
-  local fw_current=$3
-  local prf=tmp_fw_restore
-  local tmpsql=$tmpdir/$prf.sql
-  local tmplog=$tmpdir/$prf.log
-  local run_isql="$fbc/isql $dbconn -i $tmpsql -nod $dbauth"
-  
-  rm -f $tmpsql $tmplog
-  if [ $fw_need_to_be_restored = 1 ];then
-    echo RESTORE old value of FW.
-    echo
-    echo 1. Run gfix with command line for REMOTE database to set fw = $fw_mode
-    if [ $is_embed = 1  ]; then
-      $fbc/gfix $dbnm -w $fw_mode 2>$tmplog 1>&2
-      $fbc/gstat -h $dbnm >>$tmplog
-    else
-      $fbc/gfix $host/$port:$dbnm -w $fw_mode -user $usr -pas $pwd 2>$tmplog 1>&2
-      $fbc/gstat -h $host/$port:$dbnm -user $usr -pas $pwd >>$tmplog
-    fi
-
-    echo 2. Update in perf_log table our intention to REVERT change FW to its initial state
-    echo "set stat on; set echo on;">>$tmpsql
-    echo "update perf_log g set aux2=$fw_current, dts_end='now' where g.unit='fw_both_changes_done';">>$tmpsql
-    echo "commit;">>$tmpsql
-    echo "set stat off;">>$tmpsql
-    echo "select aux1, aux2, dts_beg, dts_end from perf_log g where g.unit='fw_both_changes_done';">>$tmpsql
-    echo Command to be run:
-    echo $run_isql
-    echo Script $tmpsql:
-    echo -------------------------------------
-    cat $tmpsql
-    echo -------------------------------------
-    $run_isql 1>>$tmplog 2>&1
-    echo Done, check log $tmplog
-  fi
-  echo Routine $FUNCNAME: finish.
-  echo
-} # end of init_docs_restore_fw()
 
 # --------------  l a u n c h _ p r e p a r i n g  -----------
 
@@ -1080,36 +1320,75 @@ launch_preparing() {
   local prf=tmp_add_aux_rows
   local tmpchk=$tmpdir/$prf.sql
   local tmpclg=$tmpdir/$prf.log
-  local run_isql="$fbc/isql $dbconn -i $tmpchk -n -m -o $tmpclg $dbauth"
+  local tmperr=$tmpdir/$prf.err
+  local run_isql="$fbc/isql $dbconn -i $tmpchk $dbauth"
   
   rm -f $tmpchk $tmpclg
   echo Add record for checking work to be stopped on timeout.
-  echo -e "commit; set transaction no wait;"                                        >>$tmpchk
-  echo -e "delete from perf_log g"                                                  >>$tmpchk
-  echo -e "where g.unit in ( 'perf_watch_interval',"                                >>$tmpchk
-  echo -e "                  'dump_dirty_data_semaphore',"                          >>$tmpchk
-  echo -e "                  'dump_dirty_data_progress'"                            >>$tmpchk
-  echo -e "                );"                                                      >>$tmpchk
-  echo -e "commit;"                                                                 >>$tmpchk
-  echo -e "insert into perf_log( unit,                  info,     exc_info,"        >>$tmpchk
-  echo -e "                      dts_beg, dts_end, elapsed_ms)"                     >>$tmpchk
-  echo -e "              values( 'perf_watch_interval', 'active', 'by $0',"         >>$tmpchk
-  echo -e "        dateadd( $warm_time minute to current_timestamp),"              >>$tmpchk
-  echo -e "        dateadd( $warm_time + $test_time minute to current_timestamp)," >>$tmpchk
-  echo -e "        -1 -- skip this record from being displayed in srv_mon_perf_detailed" >>$tmpchk
-  echo -e "        );"                                                              >>$tmpchk
-  echo -e "insert into perf_log( unit,                        info,  stack,"        >>$tmpchk
-  echo -e "                      dts_beg, dts_end, elapsed_ms)"                     >>$tmpchk
-  echo -e "              values( 'dump_dirty_data_semaphore', '',    'by $0',"    >>$tmpchk
-  echo -e "                      null, null, -1);"                                  >>$tmpchk
-  echo -e "commit;">>$tmpchk
+
+	cat <<- EOF >>$tmpchk
+		set bail on;
+		commit;
+		set transaction no wait;
+		delete from perf_log g
+		where g.unit in ( 'perf_watch_interval',
+		                  'dump_dirty_data_semaphore',
+		                  'dump_dirty_data_progress'
+		                );
+		commit;
+		insert into perf_log( unit,                  info,     exc_info,
+		                      dts_beg, dts_end, elapsed_ms)
+		              values( 'perf_watch_interval', 'active', 'by $0',
+		        dateadd( $warm_time minute to current_timestamp),
+		        dateadd( $warm_time + $test_time minute to current_timestamp),
+		        -1 -- skip this record from being displayed in srv_mon_perf_detailed
+		        );
+		insert into perf_log( unit,                        info,  stack,
+		                      dts_beg, dts_end, elapsed_ms)
+		              values( 'dump_dirty_data_semaphore', '',    'by $0',
+		                      null, null, -1);
+		commit;
+		set width unit 20;
+		set width add_info 30;
+		set width dts_measure_beg 19;
+		set width dts_measure_end 19;
+		set list on;
+		select
+		       g.dts_measure_beg
+		      ,g.dts_measure_end
+		from
+		(
+		  select p.unit, p.exc_info as add_info,
+		     left(replace(cast(p.dts_beg as varchar(24)),' ','_'),19) as dts_measure_beg,
+		     left(replace(cast(p.dts_end as varchar(24)),' ','_'),19) as dts_measure_end
+		  from perf_log p
+		       where p.unit = 'perf_watch_interval'
+		       order by dts_beg desc rows 1
+		) g;
+		set list off;
+	EOF
 
   echo Command to be run:
   echo $run_isql
 
-  $run_isql
+  $run_isql 1>$tmpclg 2>$tmperr
 
-  rm -f $tmpchk $tmpclg
+  if [ -s $tmperr ];then
+    echo Attempt to add singnal row for auto stop test finished with ERROR.
+    echo SQL  file: $tmpchk
+    echo Error log: $tmperr
+    echo ------------------------------------------------------------------
+    cat $tmperr
+    echo ------------------------------------------------------------------
+    echo
+    echo Script is now terminated.
+    exit 1
+  fi
+
+  echo Time limits for this test session:
+  cat $tmpclg
+  cat $tmpclg >> $log4all
+  rm -f $tmpchk $tmpclg $tmperr
 
   echo Routine $FUNCNAME: finish.
   echo
@@ -1144,6 +1423,7 @@ do
         # | sed -e 's/^[ \t]*//'
         lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
         rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
+        [[ ${rhs:0:1} == "$" ]] && rhs=$(eval "echo $rhs")
         declare $lhs=$rhs
         echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
     fi
@@ -1155,14 +1435,14 @@ tmpdir=${tmpdir%/}
 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
 echo -ne "Check that all necessary environment variables have values. . . "
-vars=(tmpdir fbc is_embed dbnm no_auto_undo use_mtee detailed_info init_docs init_buff wait_for_copy warm_time test_time idle_time)
+vars=(tmpdir fbc is_embed dbnm create_with_fw create_with_sweep wait_after_create no_auto_undo detailed_info create_with_debug_objects mon_unit_perf init_docs init_buff wait_for_copy warm_time test_time idle_time create_with_split_heavy_tabs create_with_separate_qdistr_idx)
 for i in ${vars[@]}; do
   #echo -e $i=\|${!i}\|
   [[ -z ${!i} ]] && msg_novar $i $cfg && exit 1
 done
 echo Ok.
 
-vars=(isql gfix fbsvcmgr)
+vars=(isql fbsvcmgr)
 echo -ne "Check that all necessary Firebird console utilities exist in directory '$fbc'. . . "
 for i in ${vars[@]}; do
   if [ ! -f "$fbc/${i}" ]
@@ -1214,15 +1494,85 @@ fi
 
 echo Check result of previous building database objects.
 rm -f $tmpchk $tmpclg
-echo -- check that all database objects already exist: >>$tmpchk
-echo -e set heading off\; set list on\;>>$tmpchk
-echo -n -e select iif\( exists\( select \* from semaphores where task=\'all_build_ok\' \), >>$tmpchk
-echo -n '1', >>$tmpchk
-echo -n '0'>>$tmpchk
-echo -e          \) as \"db_build_finished_ok=\" >>$tmpchk
-echo -e from rdb\$database\;>>$tmpchk
+rndname=$RANDOM
 
-run_isql="$fbc/isql $dbconn -i $tmpchk -nod -n -c 256 $dbauth"
+if [[ $fb = 30 ]]; then
+   fb30exc_1 = "using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY''')"
+   fb30exc_2 = "using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE''')"
+fi
+
+cat <<- EOF >>$tmpchk
+		 set heading off;
+		 set list on;
+		 set bail on;
+		 -- check that all database objects already exist:
+		 select iif( exists( select * from semaphores where task='all_build_ok' ),
+		                     'all_dbo_exists',
+		                     'some_dbo_absent'
+		           ) as "build_result="
+		 from rdb\$database;
+		 -- Check that database is not in read_only mode.
+		 -- NOTE: we create GTT in order to check *not* only ability to write into database file,
+		 -- but also to check that Firebird process has enough rights to WRITE into GTT files.
+		 -- These files are created in the folder that is defined by 1st environment variable:
+		 -- from following list: 1) FIREBIRD_TMP; 2) TMP; or in 3) /tmp (for POSIX).
+		 -- When Firebird process has no rights to that directory, test will fail with message:
+		 -- #####################################################
+		 -- Statement failed, SQLSTATE = 08001
+		 -- I/O error during "open O_CREAT" operation for file ""
+		 -- -Error while trying to create file
+		 -- -No such file or directory
+		 -- #####################################################
+		 -- See also: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1176238&msg=18172438
+		 recreate GLOBAL TEMPORARY table tmp\$$rndname(id int, s varchar(36) unique using index tmp_s_unq_$rndname );
+		 commit;
+		 set count on;
+		 insert into tmp\$$rndname(id, s) select rand()*1000, uuid_to_char(gen_uuid()) from rdb\$types;
+		 set list on;
+		 select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
+		 commit;
+		 drop table tmp\$$rndname;
+		 set term ^;
+		 execute block as
+		 begin
+			 begin
+			     -- Inject value of config parameter 'mon_unit_perf' into table SETTINGS.
+			     -- ::: NB ::: When test is launched from several hosts this DML can fail
+			     -- with update conflict or "deadlock" exception, so we have to suppress it:
+			     update settings set svalue=$mon_unit_perf
+			     where working_mode=upper('common') and mcode=upper('enable_mon_query');
+			     if (row_count = 0) then
+			         exception ex_record_not_found
+		       	  $fb30exc_1
+			     ;
+			 when any do
+			     begin
+		       	 if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) then exception;
+			     end
+			 end
+	
+			 begin
+			     -- Inject value of config parameter 'working_mode' into table SETTINGS.
+			     -- ::: NB ::: When test is launched from several hosts this DML can fail
+			     -- with update conflict or "deadlock" exception, so we have to suppress it:
+			     update settings set svalue = upper('$working_mode')
+			     where working_mode=upper('init') and mcode=upper('working_mode');
+			     if (row_count = 0) then
+			         exception ex_record_not_found
+			         $fb30exc_2
+			     ;
+			 when any do
+			     begin
+			        if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) then exception;
+			     end
+			 end 
+		 end
+		 ^
+		 set term ;^
+		 commit;
+EOF
+
+run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
 echo -e Command that is to be run:
 echo -e $run_isql
 echo
@@ -1235,14 +1585,28 @@ $run_isql 1>$tmpclg 2>$tmperr
 # We must stop this .sh only in case when database has unsupported ODS or offline etc.
 # We must CONTINUE if $tmpchk finished with error like 'table semaphores not found'.
 if [ $(grep -i "Error while trying to open" $tmperr | wc -l) -gt 0 ]; then
-  echo
-  echo -e '#########################################################'
-  echo -e Database \>$dbnm\< does NOT exist on host \>$host\<. 
-  echo
-  echo Press ENTER for attempt to CREATE it, Ctrl-C to QUIT. . .
-  echo -e '#########################################################'
+  cat <<- EOF
+		######################################################################
+		Database >$dbnm< does NOT exist 
+		on host >$host< 
+		or has a problem with ACCESS to it.
+		Content of error log:
+		--------------------
+	EOF
+
+  cat $tmperr
+  
+  cat <<- EOF
+		--------------------
+		Press ENTER for attempt to CREATE it, Ctrl-C to QUIT.
+		#####################################################
+	EOF
   pause
+
+  #........................  c r e a t e    d a t a b a s e  ..............
   db_create
+
+  # ....................... b u i l d    d b    o b j e c t s .............
   db_build
 
 else
@@ -1251,25 +1615,20 @@ else
   [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database exists and online"
 
   # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
+  db_build_finished_ok=0
   if [ -s $tmperr ];then
     echo Script that verifies finish of DB building process is NOT EMPTY.
     echo Name of script: $tmpclg
     echo Name of errlog: $tmperr
     echo
     echo Seems that at least one database object not found.
-    db_build_finished_ok=0
   else
     # open log and parse it as config with 'param = value' string:
     echo No errors detected when run $tmpchk
     echo Obtain results from its log $tmpclg
-    while IFS='=' read lhs rhs
-    do
-      if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
-        lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
-        rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
-        declare $lhs=$rhs
-      fi
-    done<$tmpclg
+    if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then    
+      db_build_finished_ok=1
+    fi
   fi
   echo db_build_finished_ok=\|$db_build_finished_ok\|
   echo -e -n Result:' ' && [[ $db_build_finished_ok -eq 1 ]] && echo database is READY for work. || echo database needs to be REBUILT.
@@ -1283,12 +1642,17 @@ else
     echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
     echo -e '################################################################################'
     pause
+
+    # ....................... b u i l d    d b    o b j e c t s .............
     db_build
+
   fi
 
 fi # grep "Error while trying to open" $tmperr ==> true or false
 
-# check that file 'stoptest.txt' is EMPTY
+rm -f $tmpclg $tmperr $tmpchk
+
+# ....................... check that file 'stoptest.txt' is EMPTY .....................
 check_stoptest
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1298,52 +1662,11 @@ log4all=$tmpdir/oltp$1.report.txt
 rm -f $log4all
 ##########################################
 
-tmp_show_sql=$tmpdir/tmp_show.sql
-tmp_show_log=$tmpdir/tmp_show.log
-tmp_show_err=$tmpdir/tmp_show.err
 
 echo Created by: $0>$log4all
 
-  echo Database parameters and main test settings: > $tmp_show_log
-  echo set list on\;                                                 >$tmp_show_sql
-  echo select                                                       >>$tmp_show_sql
-  echo     m.mon\$page_size as page_size                            >>$tmp_show_sql
-  echo    ,m.mon\$page_buffers as page_buffers                      >>$tmp_show_sql
-  echo    ,iif\(m.mon\$forced_writes=0,\'OFF\',\'ON\'\) as FW       >>$tmp_show_sql
-  echo    ,m.mon\$sweep_interval as sweep                           >>$tmp_show_sql
-  echo    ,right\(m.mon\$database_name,30\) as db_name              >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'WORKING_MODE\'          \) working_mode         >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'ENABLE_MON_QUERY\'      \) enable_mon_query     >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'HALT_TEST_ON_ERRORS\'   \) halt_test_on_errors  >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'LOG_PK_VIOLATION\'      \) log_pk_violations    >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'QDISTR_HANDLING_MODE\'  \) make_qty_storno_mode >>$tmp_show_sql
-  echo    ,rdb\$get_context\(\'USER_SESSION\', \'QMISM_VERIFY_BITSET\'   \) qmism_verify_bitset  >>$tmp_show_sql
-  echo from mon\$database m\;                                      >>$tmp_show_sql
-  echo set list off\;                                              >>$tmp_show_sql
-
-  if [ $is_embed == 1 ]; then
-    $fbc/isql $dbnm -i $tmp_show_sql 1>>$tmp_show_log 2>$tmp_show_err
-  else
-    $fbc/isql $host/$port:$dbnm -i $tmp_show_sql -user $usr -pas $pwd 1>>$tmp_show_log 2>$tmp_show_err
-  fi
-
-  if [ -s $tmp_show_err ];then
-    cat $tmp_show_err >> $log4all
-    echo Could NOT run script with commands for show database and test parameters.
-    echo SQL  file: $tmp_show_sql
-    echo Error log: $tmp_show_err
-    echo ------------------------------------------------------------------
-    cat $tmp_show_err
-    echo ------------------------------------------------------------------
-    echo
-    echo Script is now terminated.
-    exit 1
-  fi
-  rm -f $tmp_show_sql $tmp_show_err
-
-# Display database and main test parameters + add them to main log:
-cat $tmp_show_log
-cat $tmp_show_log>>$log4all
+# ...................... s h o w    D B   a n d    t e s t    p a r a m s  ............
+show_db_and_test_params
 
 # get number of currently existed documents and update value of $init_docs if need:
 export existing_docs=0
@@ -1366,9 +1689,9 @@ if [ $init_docs -gt 0 ]; then
   # 2. temply change FW to OFF with saving old value of it.
   # 3. alter sequence g_init_pop restart with 0;
   ####################
-  init_docs_set_fw_off
+  prepare_before_adding_init_data
+  # old: init_docs_set_fw_off -- remove it later
   ####################
-  echo stored value of FW: \>$fw_mode\<
 
   # 3. generate temp .sql script for initial filling:
   export init_pkq=50 # number of transactions in .sql (reduce re-connects)
@@ -1385,11 +1708,16 @@ if [ $init_docs -gt 0 ]; then
   add_init_docs $tmpsql $tmplog $srv_frq
   ######################################
 
-  # 5. Restore previous value of Forced Writes (it could be changed in func init_docs_set_fw_off)
-  echo Restore FW: fw_can_upd=\>$fw_can_upd\<, fw_mode=$fw_mode, fw_current=$fw_current
-  ####################
-  init_docs_restore_fw $fw_can_upd $fw_mode $fw_current
-  ####################
+  echo Setting attribute Forced Writes to value from config.
+  if [[ $is_embed == 0 ]]; then
+    fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+  else
+    fbspref="$fbc/fbsvcmgr service_mgr "
+  fi
+  run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
+  echo Command:
+  echo $run_fbs
+  $run_fbs 1>>$tmplog 2>>$tmperr
 
   echo $(date +'%y%m%d_%H%M%S') FINISH initial data population.
   echo
@@ -1421,69 +1749,17 @@ export sql=$tmpdir/sql/tmp_random_run.sql
 launch_preparing $sql
 #####################
 
-tmp_show_sql=$tmpdir/tmp_show.sql
-tmp_show_log=$tmpdir/tmp_show.log
-tmp_show_err=$tmpdir/tmp_show.err
-
-rm -f $tmp_show_sql $tmp_show_log $tmp_show_err
-
-echo Parameters for measuring:>>$tmp_show_log
-echo set list on\;                                                                     >>$tmp_show_sql
-echo select                                                                            >>$tmp_show_sql
-echo        g.dts_measure_beg                                                          >>$tmp_show_sql
-echo       ,g.dts_measure_end                                                          >>$tmp_show_sql
-echo       ,g.add_info                                                                 >>$tmp_show_sql
-echo from                                                                              >>$tmp_show_sql
-echo \(                                                                                >>$tmp_show_sql
-echo   select p.unit, p.exc_info as add_info,                                          >>$tmp_show_sql
-echo      left\(replace\(cast\(p.dts_beg as varchar\(24\)\),\' \',\'_\'\),19\) as dts_measure_beg, >>$tmp_show_sql
-echo      left\(replace\(cast\(p.dts_end as varchar\(24\)\),\' \',\'_\'\),19\) as dts_measure_end  >>$tmp_show_sql
-echo   from perf_log p                                                                 >>$tmp_show_sql
-echo        where p.unit = \'perf_watch_interval\'                                     >>$tmp_show_sql
-echo        order by dts_beg desc rows 1                                               >>$tmp_show_sql
-echo \) g\;                                                                            >>$tmp_show_sql
-echo set list off\;                                                                    >>$tmp_show_sql
-
-if [ $is_embed == 1 ]; then
-  $fbc/isql $dbnm -i $tmp_show_sql 1>>$tmp_show_log 2>$tmp_show_err
-else
-  $fbc/isql $host/$port:$dbnm -i $tmp_show_sql -user $usr -pas $pwd 1>>$tmp_show_log 2>$tmp_show_err
-fi
-
-if [ -s $tmp_show_err ];then
-    cat $tmp_show_err >> $log4all
-    echo Could NOT run script with commands for test being auto-stop.
-    echo SQL  file: $tmp_show_sql
-    echo Error log: $tmp_show_err
-    echo ------------------------------------------------------------------
-    cat $tmp_show_err
-    echo ------------------------------------------------------------------
-    echo
-    echo Script is now terminated.
-    exit 1
-fi
-rm -f $tmp_show_sql $tmp_show_err
-
-# Display database and main test parameters + add them to main log:
-cat $tmp_show_log
-cat $tmp_show_log>>$log4all
 
 echo Final report see in file: $log4all
-echo ##########################################################
-rm -f $tmp_show_sql $tmp_show_log $tmp_show_err
-
-echo
+echo ------------------------------------------------------------------
 export prf="$tmpdir/$mode"_"$HOSTNAME"
-echo prf=$prf
-echo Performance report will be in file: $log4all
-echo
+#echo prf=$prf
 echo Main SQL script: $sql
 echo Number of launched ISQL sessions: $winq
 
 #rm -f $tmpsql $tmplog
 
 echo launch $winq isqls. . .
-echo
 
 for i in `seq $winq`
 do
