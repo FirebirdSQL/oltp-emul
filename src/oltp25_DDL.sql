@@ -2364,13 +2364,13 @@ begin
     -- signalling that all data from GTT tmp$perf_log should be saved now via ATx.
     if ( a_gdscode is NOT null and nullif(a_exc_info, '') is null ) then -- this is standard error
     begin
-        select coalesce(f.fb_mnemona, 'no-mnemona')
+        select f.fb_mnemona
         from fb_errors f
         where f.fb_gdscode = :a_gdscode
         into a_exc_info;
     end
     -- For displaying in ISQL session logs:
-    rdb$set_context('USER_SESSION','ADD_INFO', left(a_exc_info, 255));
+    rdb$set_context('USER_SESSION','ADD_INFO', left( coalesce(a_exc_info, 'no-mnemona'), 255));
 
     v_last_unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT');
 
