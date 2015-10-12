@@ -4247,7 +4247,8 @@ begin
         select p.fb_gdscode, e.fb_mnemona, p.unit, count(*) cnt, min(p.dts_beg) dts_min, max(p.dts_beg) dts_max
         from perf_log p
         join a on p.dts_beg >= a.last_job_start_dts
-        join fb_errors e on p.fb_gdscode = e.fb_gdscode
+        LEFT -- !! some exceptions can missing in fb_errors !!
+            join fb_errors e on p.fb_gdscode = e.fb_gdscode
         where
             p.fb_gdscode > 0
             and p.exc_unit='#' -- 10.01.2015, see sp_add_to_abend_log: take in account only those units where exception occured, and skip callers of them
