@@ -1086,7 +1086,7 @@ if .%sid%.==.1. (
         echo %msg%>>%tmplog%
         
         echo %run_isql%
-        echo %run_isql%>>%log4all%
+        echo %run_isql%>>%tmplog%
         
         %run_isql% 1>%tmpclg% 2>%tmperr%
         
@@ -1115,7 +1115,7 @@ if .%sid%.==.1. (
 
             goto m1
         )
-    
+
     endlocal
 
 goto:eof
