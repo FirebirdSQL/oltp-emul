@@ -37,23 +37,6 @@ call :readcfg %cfg% !err_setenv!
 @rem      so we have to remove it before comparision with trailing backslash.
 @rem See: stackoverflow.com/questions/535975/dealing-with-quotes-in-windows-batch-scripts
 
-set q_fbc=2
-if defined fbc (
-    call :has_spaces %fbc% q_fbc
-    if .%q_fbc%.==.2. (
-        call :has_spaces "%fbc%" q_fbc
-    )
-    set fbc_deq=!fbc:"=!
-    if .!fbc_deq:~-1!.==.\. (
-        set fbc_deq=!fbc_deq:~0,-1!
-    )
-    if .!q_fbc!.==.1. (
-        set fbc="!fbc_deq!"
-    ) else (
-        set fbc=!fbc_deq!
-    )
-)
-
 set q_tmp=2
 if defined tmpdir (
     call :has_spaces %tmpdir% q_tmp
@@ -68,6 +51,35 @@ if defined tmpdir (
         set tmpdir="!tmp_deq!"
     ) else (
         set tmpdir=!tmp_deq!
+    )
+) else (
+  echo.
+  echo Missing variable with name 'tmpdir'.
+  echo.
+  goto :no_env
+)
+
+set q_fbc=2
+if defined fbc (
+    
+    if /i .%fbc%.==.*. (
+       echo Found asterisk instead of path to FB client binaries. 
+       echo Attempt to define path via detecting most appropriate FB service.
+       call :getfblst %fb% fbc
+    )
+
+    call :has_spaces %fbc% q_fbc
+    if .%q_fbc%.==.2. (
+        call :has_spaces "%fbc%" q_fbc
+    )
+    set fbc_deq=!fbc:"=!
+    if .!fbc_deq:~-1!.==.\. (
+        set fbc_deq=!fbc_deq:~0,-1!
+    )
+    if .!q_fbc!.==.1. (
+        set fbc="!fbc_deq!"
+    ) else (
+        set fbc=!fbc_deq!
     )
 )
 
@@ -3192,6 +3204,87 @@ goto:eof
 
     )
     endlocal
+goto:eof
+
+:getfblst
+    echo.
+    set msg=Internal routine: getfblst.
+
+    @rem call :getfblst %fb% fbc
+    @rem                 ^    ^-------- this will be defined here: path to FB binaries on local machine.
+    @rem                 +------------- first arg. to batch, relates to FB version: 25 or 30
+
+    echo !msg! 
+    echo.
+
+    setlocal
+
+    set qrx=%tmpdir%\tmp.sc.qryex.fb.all.tmp
+    set lst=%tmpdir%\tmp.fbservices.list.tmp
+
+    sc queryex state= all | findstr "FirebirdServer" 1>%qrx%
+
+    del %lst% 2>nul
+
+    for /f "tokens=2" %%s in ( %qrx% ) do (
+      @rem echo|set /p=Found FB service: %%s
+      for /f "tokens=3" %%k in ('REG.EXE query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\%%s ^| findstr /i /c:"ImagePath"') do (
+        set fn=%%k
+        set fp=%%~dpk
+        set fp=!fp:~0,-1!
+        if exist !fp!\fbsvcmgr.exe if exist !fp!\isql.exe (
+          for /f "tokens=3" %%v in ('echo. ^| !fp!\isql.exe -z -q') do (
+            for /f "tokens=4 delims=." %%b in ('echo %%v') do set build=%%b
+            set /a k=1000000+!build!
+            set build=!k:~1,6!
+            @rem echo !build! vers=%%v home=!fp! name=%%s >> %lst%
+            echo !build!^*%%v^*!fp!^*%%s >> %lst%
+          )
+        )
+      )
+    )
+
+    del %qrx% 2>nul
+
+    @rem Here we try to find most appropriate client when several FB instances present on machine.
+    @rem When %fb% = 25 then we first of all try to scan all folders where Firebird 2.5 instances are, 
+    @rem and only after this we start to search in folders with FB 3.0.
+    @rem For each FB major family (2.5 or 3.0) we first try to find RELEASE instance ('WI-V*') and only
+    @rem after it - testing ('WI-T*').
+
+    if .%1.==.25. (
+        set preflst=WI-V2.5.,WI-T2.5,WI-V3.,WI-T3.,WI-V,WI-T
+    ) else (
+        set preflst=WI-V3.,WI-T3.,WI-V2.5.,WI-T2.5,WI-V,WI-T
+    )
+
+    for %%k in (%preflst%) do (
+        findstr /i /c:"%%k" %lst% | sort /r >> %qrx%
+        if not errorlevel 1 goto :find_at_least_one_fb
+    )
+
+    :find_at_least_one_fb
+
+    @rem type %lst% | sort /r >%qrx%
+    set /p firstline=<%qrx%
+
+    for /f "tokens=3 delims=**" %%a in ('echo %firstline%') do (
+       set result=%%a
+    )
+    if .%result%.==.. (
+        echo.
+        echo ### ERROR ###
+        echo.
+        echo No found any installed Firebird services on that machine!
+    ) else ( 
+        echo Found most recent Firebird instance in the folder: 
+        echo %result%
+    )
+    del %qrx% 2>nul
+    del %lst% 2>nul
+
+    endlocal & set "%~2=%result%"
+
 goto:eof
 
 :nofbvers
