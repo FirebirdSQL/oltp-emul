@@ -15,13 +15,18 @@
 # Folder with Firebird console utilities (isql, fbsvcmgr).
 # Can be specified with spaces inside path.
 # Trailing backslash and double quotes are optional.
-# Allows referencing to existing OS environment variable by using "!" sign.
+# Allows referencing to existing OS environment variable by using exclamation sign ('!').
+# When value for this parameter is * (asterisk), batch will attempt to find directory
+# where most appropriate FB binaries present. It does this by analyzing output of Windows 
+# utilities sc.exe and reg.exe. This was implemented only for Windows and requires
+# that you have installed at least one FB service (which can be turned off, though).
 # Samples:
+# fbc = *
 # fbc = C:\Program Files\Firebird Database Server 3.0
 # fbc = !ProgramFiles!\Firebird Database Server 3.0\
 # fbc = C:\"Program Files"\"Firebird Database Server 3.0"\bin\
 
-fbc  = C:\MIX\firebird\fb30\
+fbc  = C:\firebird\fb30\
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
@@ -31,7 +36,7 @@ fbc  = C:\MIX\firebird\fb30\
 # dbnm = !appdata!\oltp emul 3.0\ test 3.0.fdb
 # dbnm = !temp!\oltp30.fdb
 
-dbnm = C:\MIX\firebird\OLTPTEST\oltp30.fdb
+dbnm = C:\firebird\oltp-emul\oltp30.fdb
 
 # Parameters for remote connection and authentication.
 # Will be ignored by command scenario if FB runs in embedded mode.
