@@ -3586,7 +3586,9 @@ begin
 
     select p.dts_end as report_end
     from perf_log p
-    where p.dts_beg >= :last_launch_beg
+    where
+        p.dts_beg >= :last_launch_beg
+        and p.dts_end is not null
     order by p.dts_beg desc
     rows 1
     into last_launch_end;
