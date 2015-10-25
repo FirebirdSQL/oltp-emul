@@ -151,7 +151,6 @@ begin
 
     if ( v_make_separate_qd_idx = 1 ) then -- create TWO indices for QDistr: one compound of three fields and second ordinary.
         begin
-            -- 02.10.2015 21:34: wait for results...
             if ( upper(v_build_with_qd_compound_ordr) = upper('least_selective_first') ) then
                 begin
                     v_idx_suff1 = 'sndop_rcvop_ware';

@@ -192,7 +192,7 @@ db_build() {
 	EOF
   fi
   
-  if [[ $create_with_split_heavy_tabs -eq 0 ]]; then
+  #if [[ $create_with_split_heavy_tabs -eq 0 ]]; then
     inject_for_compound_columns_order=$(
 	cat <<- SETVAR
 	-- Inject setting for making columns order in compound index
@@ -207,7 +207,7 @@ db_build() {
 	                   );
 	SETVAR
   )
-  fi
+  #fi
 
   cat <<- EOF >>$bld
     in "$shdir/oltp_main_filling.sql";
@@ -246,37 +246,53 @@ db_build() {
   rm -f $post_handling_out
 
   cat <<- EOF >>$bld
-  set echo off;
-  -- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
-  out $post_handling_out;
+	set echo off;
+	-- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
+	out $post_handling_out;
 
-  -- result in .sql:
-  -- out "/var/tmp/.../oltp_split_heavy_tabs_n_25.tmp"; - where n=0|1.
-  -- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
-  in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql";
+	-- result in .sql:
+	-- out "/var/tmp/.../oltp_split_heavy_tabs_n_25.tmp"; - where n=0|1.
+	-- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
+	in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql";
 
-  -- Result: previous OUT-command provides redirection of
-  -- |in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql"|
-  -- to the new temp file which will be applied on the next step.
-  -- Close current output:
-  out;
-  
-  -- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
-  in $post_handling_out;
+	-- Result: previous OUT-command provides redirection of
+	-- |in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql"|
+	-- to the new temp file which will be applied on the next step.
+	-- Close current output:
+	out;
 
-  -- Inject value of config parameter 'mon_unit_perf' into table SETTINGS:
-  update settings set svalue = $mon_unit_perf
-  where working_mode=upper('common') and mcode=upper('enable_mon_query');
+	-- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
+	in $post_handling_out;
 
-  -- Inject value of config parameter `working_mode` into table SETTINGS.
-  -- This will be taken in account in the final script 'oltp_data_filling.sql'
-  -- which created necessary amount of initial data in lookup tables:
-  update settings set svalue=upper('$working_mode')
-  where working_mode=upper('init') and mcode=upper('working_mode');
-  commit;
+	set term ^;
+	execute block as
+	begin
+		begin
+			-- Inject value of config parameter 'mon_unit_perf' into table SETTINGS:
+			update settings set svalue = $mon_unit_perf
+			where working_mode=upper('common') and mcode=upper('enable_mon_query');
+		when any do
+			if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
+			then exception;
+		end
 
-  -- Finish building process: insert custom data to lookup tables:
-  in "$shdir/oltp_data_filling.sql";
+		begin
+			-- Inject value of config parameter `working_mode` into table SETTINGS.
+			-- This will be taken in account in the final script 'oltp_data_filling.sql'
+			-- which created necessary amount of initial data in lookup tables:
+			update settings set svalue=upper('$working_mode')
+			where working_mode=upper('init') and mcode=upper('working_mode');
+		when any do
+			if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
+			then exception;
+		end
+	end
+	^
+	set term ^;
+	commit;
+
+	-- Finish building process: insert custom data to lookup tables:
+	in "$shdir/oltp_data_filling.sql";
 	EOF
 
   echo Content of building SQL script:
@@ -330,9 +346,10 @@ show_db_and_test_params() {
 
   echo Database parameters, workload level map and current test settings: > $tmp_show_log
   
-  [[ $create_with_split_heavy_tabs == 0 ]] && inject_compound_ordr=",rdb\$get_context('USER_SESSION', 'BUILD_WITH_QD_COMPOUND_ORDR') build_with_qd_compound_ordr"
+  # [[ $create_with_split_heavy_tabs == 0 ]] && inject_compound_ordr=",rdb\$get_context('USER_SESSION', 'BUILD_WITH_QD_COMPOUND_ORDR') build_with_qd_compound_ordr"
   # NB: use quoted "EOF" in heredoc clause in order to avoid specifying backslash leftside of any special characters, like $:
   cat <<- EOF >$tmp_show_sql
+
          set list on;
          set term ^;
          execute block as
@@ -372,6 +389,9 @@ show_db_and_test_params() {
          set width tab_name 13;
          set width idx_name 31;
          set width idx_key 45;
+         set heading off;
+         select 'Index(es) for heavy-loaded table(s):' as " " from rdb\$database;
+         set heading on;
          select * from z_qd_indices_ddl;
 
 	EOF
@@ -1652,6 +1672,17 @@ fi # grep "Error while trying to open" $tmperr ==> true or false
 
 rm -f $tmpclg $tmperr $tmpchk
 
+if [ $wait_after_create = 1 ]; then
+    echo
+    echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
+    echo "######################################"
+    echo
+    echo Change config setting 'wait_after_create' to 0 in order to remove this pause.
+    echo
+    echo Press ENTER to go on. . .
+    pause
+fi
+
 # ....................... check that file 'stoptest.txt' is EMPTY .....................
 check_stoptest
 
@@ -1661,7 +1692,6 @@ check_stoptest
 log4all=$tmpdir/oltp$1.report.txt
 rm -f $log4all
 ##########################################
-
 
 echo Created by: $0>$log4all
 

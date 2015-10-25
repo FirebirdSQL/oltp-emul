@@ -42,7 +42,7 @@ dbnm = C:\firebird\oltp-emul\oltp25.fdb
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3255
+port = 3050
 usr =  SYSDBA
 pwd =  masterke
 
@@ -203,41 +203,50 @@ create_with_debug_objects = 1
 
 # Test has two tables which are subject of very intensive modifications: QDistr and QStorned.
 # Performance highly depends on time which engine spends on handling DP, PP and index pages
-# of this tables - they are "bottlenecks" of schema. Database can be created either with two
+# of these tables - they are "bottlenecks" of schema. Database can be created either with two
 # these tables or with several "clones" of them (with the same stucture). The latter allows
 # to "split" workload on different areas and reduce low-level lock contention.
+#
 # Should heavy-loaded tables (QDistr and QStorned) be splitted on several different tables,
 # each one for separate pair of operations that are 'source' and 'target' of storning ?
+#
 # Avaliable values: 
-# 0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
-# 1 = USE several tables with the same structure in order to split heavy workload on them.
-# Recommended value: nope (choose yourself and compare).
+# 0 = do NOT split workload on several tables (i.e. use instead only two ones: QDistr and QStorned);
+# 1 = USE several (currently six) tables with the same structure in order to split workload on them.
+#
+# Recommended value: 1 - performance will increase by ~30-50%, depending on FB architecture and FW.
 
-create_with_split_heavy_tabs = 0
+create_with_split_heavy_tabs = 1
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
 # compound index or two separate indices.
 # Number of columns in compound index depends on value of two parameters:
 # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
-# Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
+# Order of columns is defined by parameter 'create_with_compound_idx_selectivity' - see below.
+#
 # Avaliable values: 
 # 0 = do NOT separate indices, user only one ("wide" compound).
-# 1 = USE two indices instead of one ("wide" compound).
-# Recommended value: nope (choose yourself and compare).
+# 1 = USE two indices instead of "wide" compound (but one of them will be anyway compound with shorter key).
+#
+# Recommended value: 0 -  performance will be better when use only one index instead of two.
 
 create_with_separate_qdistr_idx = 0
 
 # Parameter 'create_with_compound_columns_order' defines order of fields in the starting part
-# of compound index key for the table which is subject to most heavy workload - QDistr. 
+# of compound index key for the table which is subject to most heavy workload.
+# This is either *single* table QDistr or *several* its clones with names XQD* - it depends on value
+# of parameter create_with_split_heavy_tabs - see above. 
+#
 # Avaliable options: 'most_selective_first' or 'least_selective_first'.
+#
 # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / <W>,
 # where <W> = number of rows in the table 'WARES', depends on selected workload mode.
+# For default working_mode ('small_03' - see above) number of wares W = 400.
 # Second and third columns will have poor selectivity = 1/6.
-# When choice = 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
+# When choice is 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
 # and third column will have selectivity = 1 / <W>.
 #
-# Actual only when create_with_split_heavy_tabs = 0.
-# Recommended value: nope (choose yourself and compare).
+# Recommended value: most_selective_first - performance is increased by ~35%.
 
 create_with_compound_columns_order = most_selective_first
 

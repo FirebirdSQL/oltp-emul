@@ -3758,7 +3758,7 @@ as
         where
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
-            and q.rcv_optype_id is not distinct from :v_old_rcv_optype
+            and q.rcv_optype_id = :v_old_rcv_optype
             and q.snd_id = :v_dd_id
     );
 
@@ -4198,7 +4198,7 @@ create or alter procedure sp_qd_handle_on_reserve_upd_sts ( -- old name: s~p_kil
         where
             qd.ware_id = :v_dd_ware_id
             and qd.snd_optype_id = :a_old_optype
-            and qd.rcv_optype_id is not distinct from :v_old_rcv_optype
+            and qd.rcv_optype_id = :v_old_rcv_optype
             and qd.snd_id = :v_dd_id
     );
 
@@ -4391,7 +4391,7 @@ as
         where
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
-            and q.rcv_optype_id is not distinct from :v_rcv_optype_id
+            and q.rcv_optype_id = :v_rcv_optype_id
             and q.snd_id = :v_dd_id
     );
     declare c_qd_rows_sub_2 cursor for (
@@ -4400,7 +4400,7 @@ as
         where
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
-            and q.rcv_optype_id is not distinct from :v_rcv_optype_id
+            and q.rcv_optype_id = :v_rcv_optype_id
             and q.snd_id = :v_dd_id
     );
 
@@ -4617,7 +4617,7 @@ as
         where
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
-            and q.rcv_optype_id is not distinct from :v_rcv_optype_id
+            and q.rcv_optype_id = :v_rcv_optype_id
             and q.snd_id = :v_dd_id
     );
 
@@ -5006,7 +5006,7 @@ create or alter procedure srv_find_qd_qs_mism(
                     -- Thus we use here parameter ":v_snd_optype_id" which will be evaluated BEFORE
                     -- in separate IIF statement:
                     and qd.snd_optype_id = :v_snd_optype_id
-                    and qd.rcv_optype_id is not distinct from :v_rcv_optype_id -- do NOT use '=' WRONG for customer_reserver, 3300! (for this op qdistr.rcv_optype_id is NULL!)
+                    and qd.rcv_optype_id = :v_rcv_optype_id
                     and qd.snd_id = d.id
                 where
                     d.doc_id  = :a_doc_list_id
@@ -5073,7 +5073,7 @@ begin
                     -- http://sourceforge.net/p/firebird/code/62177 (2.5.5)
                     qd.ware_id = :v_ware_id
                     and qd.snd_optype_id = :v_snd_optype_id
-                    and qd.rcv_optype_id is not distinct from :v_rcv_optype_id  -- do NOT use '=' WRONG for customer_reserver, 3300! (for this op qdistr.rcv_optype_id is NULL!)
+                    and qd.rcv_optype_id = :v_rcv_optype_id
                     -- This is mandatory otherwise get lot of different docs for the same {ware,snd_optype_id,rcv_optype_id}:
                     and qd.snd_id = :v_dd_id
                 into v_qd_qs_orphan_src, v_qd_qs_orphan_doc, v_qd_qs_orphan_sid, v_qd_qs_orphan_id;
@@ -6278,14 +6278,6 @@ select setting_name, setting_value, 'main' as stype
 from (
     select '    ' || s.mcode as setting_name, s.svalue as setting_value
     from settings s
-    join (
-        select t.svalue
-        from settings t
-        where t.working_mode='COMMON' and t.mcode='BUILD_WITH_SPLIT_HEAVY_TABS'
-    ) t on
-          s.mcode = 'BUILD_WITH_QD_COMPOUND_ORDR' and t.svalue = 0
-          or
-          s.mcode <> 'BUILD_WITH_QD_COMPOUND_ORDR'
     where
         s.working_mode='COMMON'
         and s.mcode
@@ -6345,16 +6337,19 @@ order by
 
 --------------------------------------------------------------------------------
 
--- This view is used in 1run_oltp_emulbat (.sh) to display current DDL of QDistr or XQD* indices.
--- Do NOT delete it!
 create or alter view z_qd_indices_ddl as
-select x.tab_name, x.idx_name, cast(list(trim(x.fld_name)) as varchar(255)) idx_key
-from (
+
+-- This view is used in 1run_oltp_emulbat (.sh) to display current DDL of QDistr xor XQD* indices.
+-- Do NOT delete it!
+
+with recursive
+r as (
     select
         ri.rdb$relation_name tab_name
         ,ri.rdb$index_name idx_name
         ,rs.rdb$field_name fld_name
         ,rs.rdb$field_position fld_pos
+        ,cast( trim(rs.rdb$field_name) as varchar(512)) as idx_key
     from rdb$indices ri
     join rdb$index_segments rs using ( rdb$index_name )
     left join (
@@ -6363,12 +6358,33 @@ from (
         where t.working_mode='COMMON' and t.mcode='BUILD_WITH_SPLIT_HEAVY_TABS'
     ) t on 1=1
     where
-    t.svalue = 0 and trim( ri.rdb$relation_name ) is not distinct from 'QDISTR'
-    or
-    t.svalue = 1 and trim( ri.rdb$relation_name ) starts with 'XQD_'
-    order by ri.rdb$index_name, rs.rdb$field_position
-) x
-group by x.tab_name, x.idx_name;
+        rs.rdb$field_position = 0
+        and (
+            t.svalue = 0 and trim( ri.rdb$relation_name ) is not distinct from 'QDISTR'
+            or
+            t.svalue = 1 and trim( ri.rdb$relation_name ) starts with 'XQD_'
+        )
+
+    UNION ALL
+
+    select
+        r.tab_name
+        ,r.idx_name
+        ,rs.rdb$field_name
+        ,rs.rdb$field_position
+        ,r.idx_key || ',' || trim(rs.rdb$field_name) 
+    from r
+    join rdb$indices ri
+        on r.idx_name = ri.rdb$index_name
+    join rdb$index_segments rs
+        on
+            ri.rdb$index_name = rs.rdb$index_name
+            and r.fld_pos +1 = rs.rdb$field_position
+)
+select r.tab_name, r.idx_name, max(r.idx_key) as idx_key
+from r
+group by r.tab_name, r.idx_name
+;
 
 --------------------------------------------------------------------------------
 
@@ -8718,10 +8734,18 @@ begin
 
     if ( att_protocol is null ) then
         fb_arch = 'Embedded';
+    else if ( upper(current_user) = upper('SYSDBA')
+              and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
+              and exists(select * from mon$attachments a 
+                         where a.mon$remote_protocol is null
+                               and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
+                        ) 
+            ) then
+        fb_arch = 'SuperServer';
     else
         begin
             v_test_sttm =
-                'select a.mon$server_pid + 0*(select count(*) from rdb$types,rdb$types)'
+                'select a.mon$server_pid + 0*(select 1 from rdb$database)'
                 ||' from mon$attachments a '
                 ||' where a.mon$attachment_id = current_connection';
 
@@ -8753,6 +8777,8 @@ begin
                               ) 
                          );
         end
+
+    fb_arch = fb_arch || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
 
     suspend;
 

@@ -1876,7 +1876,7 @@ goto:eof
         echo                     ,'db_prepare'                   -- init_on
         echo                   ^);
 
-        if .%create_with_split_heavy_tabs%.==.0. (
+        @rem -- 24.10.2015! -- do NOT ignore this param when create_with_split_heavy_tabs = 1 !!; was: if .%create_with_split_heavy_tabs%.==.0. (
             echo.
 	    echo -- Inject setting for making columns order in compound index
 	    echo -- according to the config setting 'create_with_compound_columns_order'
@@ -1888,7 +1888,7 @@ goto:eof
             echo                     ,upper('%create_with_compound_columns_order%'^) -- value from config
             echo                     ,'db_prepare'                   -- init_on
             echo                   ^);
-        )
+        @rem -- )
 
         echo commit;
 
@@ -1918,15 +1918,27 @@ goto:eof
         echo -- Applying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=%create_with_split_heavy_tabs%':
         echo in !post_handling_out!;
         echo.
-        echo -- Inject value of config parameter `mon_unit_perf` into table SETTINGS:
-        echo update settings set svalue=%mon_unit_perf%
-        echo where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
+        @rem -- 24.10.2015: enclose update statements in EB with when-any section and suppressing lock-conflict exceptions.
+        echo set term ^^;
+        echo execute block as
+        echo begin
         echo.
-        echo -- Inject value of config parameter `working_mode` into table SETTINGS.
-        echo -- This will be taken in account in the final script 'oltp_data_filling.sql'
-        echo -- which created necessary amount of initial data in lookup tables:
-        echo update settings set svalue=upper('%working_mode%'^)
-        echo where working_mode=upper('init'^) and mcode=upper('working_mode'^);
+        echo     -- Inject value of config parameter `mon_unit_perf` into table SETTINGS:
+        echo     update settings set svalue=%mon_unit_perf%
+        echo     where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
+        echo.
+        echo     -- Inject value of config parameter `working_mode` into table SETTINGS.
+        echo     -- This will be taken in account in the final script 'oltp_data_filling.sql'
+        echo     -- which created necessary amount of initial data in lookup tables:
+        echo     update settings set svalue=upper('%working_mode%'^)
+        echo     where working_mode=upper('init'^) and mcode=upper('working_mode'^);
+        echo.
+        echo when any do 
+        echo     begin
+        echo        if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+        echo     end
+        echo end ^^
+        echo set term ;^^
         echo commit;
         echo.
         echo -- Finish building process: insert custom data to lookup tables:
@@ -2065,26 +2077,12 @@ goto:eof
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     (
-        echo set list on;
-        echo select x.tab_name, x.idx_name, cast(list(trim(x.fld_name^)^) as varchar(255^)^) idx_key
-        echo from (
-        echo     select
-        echo         ri.rdb$relation_name tab_name
-        echo         ,ri.rdb$index_name idx_name
-        echo         ,rs.rdb$field_name fld_name
-        echo         ,rs.rdb$field_position fld_pos
-        echo     from rdb$indices ri
-        echo     join rdb$index_segments rs using ( rdb$index_name ^)
-        echo     where trim( ri.rdb$relation_name ^)
-        if .%create_with_split_heavy_tabs%.==.1. (
-            echo starts with 'XQD_'
-        ) else (
-            echo is not distinct from 'QDISTR'
-        )
-        echo     order by ri.rdb$index_name, rs.rdb$field_position
-        echo ^) x
-        echo group by x.tab_name, x.idx_name;
-        echo set list off;
+        echo -- set list on;
+        echo set width tab_name 13;
+        echo set width idx_name 31;
+        echo set width idx_key 45;
+        echo select * from z_qd_indices_ddl;
+        echo --set list off;
     ) > %tmpsql% 
 
     echo Index(es) for heavy-loaded table(s): >>%log4tmp%
