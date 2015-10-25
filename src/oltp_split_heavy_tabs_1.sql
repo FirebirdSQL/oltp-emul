@@ -25,12 +25,10 @@ as
     declare v_qd_suffix varchar(31);
     declare v_ddl_qdistr varchar(1024);
     declare v_id bigint;
+    declare v_build_with_qd_compound_ordr varchar(31); -- 'most_selective_first' or 'least_selective_first'
     declare v_make_separate_qd_idx smallint;
 begin
 
-    -- 21.09.2015 0930: temply add '1=1' for investigate about 3.0
-    v_make_separate_qd_idx = iif( 1 = 1 or rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', 1, 0 );
-    
     -- Called from 1build_oltp_emul.bat  when config setting create_with_split_heavy_tabs = 1, see:
     -- echo execute procedure tmp_init_autogen_qdistr_tables; >> %...%
 
@@ -61,21 +59,50 @@ begin
     where s.working_mode='COMMON' and s.mcode='BUILD_WITH_SEPAR_QDISTR_IDX'
     into v_make_separate_qd_idx;
     
+    -- This row is created in 1run_oltp_emul.bat, in sub-routine "make_db_objects":
+    -- Value is defined by config parameter create_with_compound_columns_order = 'most_selective_first' or 'least_selective_first'
+    select s.svalue 
+    from settings s 
+    where s.working_mode='COMMON' and s.mcode='BUILD_WITH_QD_COMPOUND_ORDR'
+    into v_build_with_qd_compound_ordr;
     
     v_idx_expr1 = '';
     v_idx_expr2 = '';
+    -- 24.10.2015: do NOT remove 'snd_optype_id' and 'rcv_optype_id' from index key
+    -- otherwise excessive index scans will occur in each XQD* table even if it has no
+    -- such key. See SP srv_find_qd_qs_mism which is called after each document creation
+    -- (this SP, in turn, is called from doc_list_aiud trigger when QMISM_VERIFY_BITSET = 1,
+    -- see oltp_main_filling.sql).
+    -- See also sp_get_clo_for_invoice - there is query that search only for ware_id, w/o snd_id!
     if ( v_make_separate_qd_idx = 1 ) then
         begin
-            v_idx_expr1 = '(ware_id)'; -- !!! >>> no need anymore >>> , snd_optype_id, rcv_optype_id)';
-            v_idx_expr2 = '(snd_id)';
-            v_idx_suff1 = 'ware_id';
-            v_idx_suff2 = 'snd_id';
+            if ( upper(v_build_with_qd_compound_ordr) = upper('least_selective_first') ) then
+                begin
+                    v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    v_idx_expr2 = '(snd_id)';
+                    v_idx_suff1 = 'sop_rop_ware';
+                    v_idx_suff2 = 'snd';
+                end
+            else -- 'most_selective_first'
+                begin
+                    v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    v_idx_expr2 = '(snd_id)';
+                    v_idx_suff1 = 'ware_sop_rop';
+                    v_idx_suff2 = 'snd';
+                end
         end
     else
         begin
-            -- !!! no need anymode to include 'snd_optype, rcv_optype >>> v_idx_expr1='(ware_id, snd_optype_id, rcv_optype_id, snd_id)';
-            v_idx_expr1 = '(ware_id, snd_id)';
-            v_idx_suff1 = 'ware_id_snd_id';
+            if ( upper(v_build_with_qd_compound_ordr) = upper('least_selective_first') ) then
+                begin
+                    v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    v_idx_suff1 = 'sop_rop_ware_snd';
+                end
+            else -- 'most_selective_first'
+                begin
+                    v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    v_idx_suff1 = 'ware_sop_rop_snd';
+                end
         end
 
     for
