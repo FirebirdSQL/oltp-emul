@@ -3474,53 +3474,62 @@ begin
         begin
             fetch cp into v_dbkey, v_id, agent_id, snd_optype_id, snd_id, cost_to_be_storned, rcv_optype_id, rcv_id;
             if ( row_count = 0 ) then leave;
+
             v_rows = v_rows + 1;
-            -- Explicitly lock record; skip to next if it is already locked
-            -- (see below `when` section: supress all lock_conflict kind exc)
-            -- benchmark: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1108762&msg=16393721
-            update pdistr set id = id where current of cp;  -- faster than 'where rdb$db_key = ...'
 
-            v_lock = v_lock + 1;
-            v_storned_cost = minvalue( :not_storned_cost, :cost_to_be_storned );
-    
-            -- move into `storage` table *PART* of prepayment that is now storned
-            -- by just created customer reserve:
-            -- :: nb :: pstorned PK = (id, rcv_id) - compound!
-            if ( v_pass = 1 ) then
+            -- 26.10.2015. Additional begin..end block needs for providing DML
+            -- 'atomicity' of BOTH tables pdistr & pstorned! Otherwise changes
+            -- can become inconsistent if online validation will catch table-2
+            -- after this code finish changes on table-1 but BEFORE it will
+            -- start to change table-2.
+            -- See CORE-4973 (example of WRONG code which did not used this addi block!)
             begin
-                insert into pstorned(
-                    agent_id,
-                    snd_optype_id,
-                    snd_id,
-                    snd_cost,
-                    rcv_optype_id,
-                    rcv_id,
-                    rcv_cost
-                )
-                values(
-                    :agent_id,
-                    :snd_optype_id,
-                    :snd_id,
-                    :v_storned_cost, -- s.cost_to_be_storned,
-                    :rcv_optype_id,
-                    :rcv_id,
-                    :v_storned_cost
-                );
-            end
-
-            if ( cost_to_be_storned = v_storned_cost ) then
-                delete from pdistr p where current of cp;
-            else
-                -- leave this record for futher storning (it has rest of cost > 0!):
-                update pdistr p set p.snd_cost = p.snd_cost - :v_storned_cost where current of cp;
+                -- Explicitly lock record; skip to next if it is already locked
+                -- (see below `when` section: supress all lock_conflict kind exc)
+                -- benchmark: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1108762&msg=16393721
+                update pdistr set id = id where current of cp;  -- faster than 'where rdb$db_key = ...'
     
-            not_storned_cost = not_storned_cost - v_storned_cost;
+                v_storned_cost = minvalue( :not_storned_cost, :cost_to_be_storned );
+        
+                -- move into `storage` table *PART* of prepayment that is now storned
+                -- by just created customer reserve:
+                -- :: nb :: pstorned PK = (id, rcv_id) - compound!
+                if ( v_pass = 1 ) then
+                begin
+                    insert into pstorned(
+                        agent_id,
+                        snd_optype_id,
+                        snd_id,
+                        snd_cost,
+                        rcv_optype_id,
+                        rcv_id,
+                        rcv_cost
+                    )
+                    values(
+                        :agent_id,
+                        :snd_optype_id,
+                        :snd_id,
+                        :v_storned_cost, -- s.cost_to_be_storned,
+                        :rcv_optype_id,
+                        :rcv_id,
+                        :v_storned_cost
+                    );
+                end
+    
+                if ( cost_to_be_storned = v_storned_cost ) then
+                    delete from pdistr p where current of cp;
+                else
+                    -- leave this record for futher storning (it has rest of cost > 0!):
+                    update pdistr p set p.snd_cost = p.snd_cost - :v_storned_cost where current of cp;
+        
+                not_storned_cost = not_storned_cost - v_storned_cost;
+                v_lock = v_lock + 1;
 
-            if ( v_pass = 1 ) then
-                v_storned_acc = v_storned_acc + v_storned_cost; -- used in v_pass = 2
-
-            if ( not_storned_cost <= 0 ) then leave;
-
+                if ( v_pass = 1 ) then
+                    v_storned_acc = v_storned_acc + v_storned_cost; -- used in v_pass = 2
+    
+                if ( not_storned_cost <= 0 ) then leave;
+            end -- atomicity of changes several tables (CORE-4973!)
         when any do
             -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
             -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
@@ -7464,140 +7473,147 @@ begin
                 end
             end
 
-            -- we can move delete sttmt BEFORE insert because of using explicit cursor and
-            -- fetch old fields data (which is to be moved into QStorned) into declared vars:
-            if ( v_storno_sub = 1 ) then
-                begin
-                    v_call = v_this || ':try_del_qdsub1';
-                    -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015
-                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_DEL_QD_ID', v_cq_id);
-
-                    delete from v_qdistr_source_1 q where current of c_make_amount_distr_1; --- lock_conflict can occur here
-
-                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_DEL_QD_ID', v_cq_id);
-                    -- execute procedure sp_add_perf_log(0, v_call);
-                end --  v_storno_sub = 1
-            else
-                begin
-
-                    v_call = v_this || ':try_del_qdsub2';
-                    -- execute procedure sp_add_perf_log(1, v_call, null, v_info);
-                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_TRY_DEL_QD_ID', v_cq_id);
-
-                    -- When config parameter 'create_with_split_heavy_tabs' is 1 then 'v_qdistr_source_2' should be changed to 'XQD_*'
-                    delete from v_qdistr_source_2 q where current of c_make_amount_distr_2; --- lock_conflict can occur here
-
-                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_OK_DEL_QD_ID', v_cq_id);
-                    -- execute procedure sp_add_perf_log(0, v_call);
-                end --  v_storno_sub = 2
-
-            if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
+            -- 26.10.2015. Additional begin..end block needs for providing DML
+            -- 'atomicity' of BOTH tables pdistr & pstorned! Otherwise changes
+            -- can become inconsistent if online validation will catch table-2
+            -- after this code finish changes on table-1 but BEFORE it will
+            -- start to change table-2.
+            -- See CORE-4973 (example of WRONG code which did not used this addi block!)
             begin
-                v_inserting_table = 'qdistr';
-                -- iter=1: v_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
-                v_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
-
+                -- We can move delete sttmt BEFORE insert because of using explicit cursor and
+                -- fetch old fields data (which is to be moved into QStorned) into declared vars:
+                if ( v_storno_sub = 1 ) then
+                    begin
+                        v_call = v_this || ':try_del_qdsub1';
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_DEL_QD_ID', v_cq_id);
+    
+                        delete from v_qdistr_source_1 q where current of c_make_amount_distr_1; --- lock_conflict can occur here
+    
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_DEL_QD_ID', v_cq_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+                    end --  v_storno_sub = 1
+                else
+                    begin
+    
+                        v_call = v_this || ':try_del_qdsub2';
+                        -- execute procedure sp_add_perf_log(1, v_call, null, v_info);
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_TRY_DEL_QD_ID', v_cq_id);
+    
+                        -- When config parameter 'create_with_split_heavy_tabs' is 1 then 'v_qdistr_source_2' should be changed to 'XQD_*'
+                        delete from v_qdistr_source_2 q where current of c_make_amount_distr_2; --- lock_conflict can occur here
+    
+                        -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_OK_DEL_QD_ID', v_cq_id);
+                        -- execute procedure sp_add_perf_log(0, v_call);
+                    end --  v_storno_sub = 2
+    
+                if ( v_storno_sub = 1 ) then -- ==>  distr_mode containing 'new_doc'
+                begin
+                    v_inserting_table = 'qdistr';
+                    -- iter=1: v_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
+                    v_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
+    
+                    -- debug info for logging in srv_log_dups_qd_qs if PK
+                    -- violation will occur on INSERT INTO QSTORNED statement
+                    -- (remained for possible analysis):
+                    v_call = v_this || ':try_ins_qdsub1';
+                    v_info = v_info || ', try INSERT into QDistr id='||v_id;
+    
+                    -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug
+                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_INS_QD_ID', v_id);
+    
+                    insert into v_qdistr_target_1 (
+                        id,
+                        doc_id,
+                        ware_id,
+                        snd_optype_id,
+                        rcv_optype_id,
+                        snd_id,
+                        snd_qty,
+                        snd_purchase,
+                        snd_retail)
+                    values(
+                        :v_id,
+                        :v_dh_new_id,
+                        :v_ware_id,
+                        :a_optype_id,
+                        :v_next_rcv_op,
+                        :v_dd_new_id,
+                        :v_cq_snd_qty,
+                        :v_cq_snd_purchase,
+                        :v_cq_snd_retail
+                    );
+    
+                    -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_INS_QD_ID', v_id);
+                    -- execute procedure sp_add_perf_log(0, v_call);
+    
+                    v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
+                    v_info = v_info || ' - ok';
+                end --  v_storno_sub = 1
+    
+                v_inserting_table = 'qstorned';
+                v_id =  v_cq_id;
+    
                 -- debug info for logging in srv_log_dups_qd_qs if PK
                 -- violation will occur on INSERT INTO QSTORNED statement
                 -- (remained for possible analysis):
-                v_call = v_this || ':try_ins_qdsub1';
-                v_info = v_info || ', try INSERT into QDistr id='||v_id;
-
+                v_info = v_info||', try INSERT into QStorned: id='||:v_id;
+                v_call = v_this || ':try_ins_qStorn';
+    
                 -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug
-                -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_TRY_INS_QD_ID', v_id);
-
-                insert into v_qdistr_target_1 (
-                    id,
-                    doc_id,
-                    ware_id,
-                    snd_optype_id,
-                    rcv_optype_id,
-                    snd_id,
-                    snd_qty,
-                    snd_purchase,
-                    snd_retail)
-                values(
-                    :v_id,
-                    :v_dh_new_id,
-                    :v_ware_id,
-                    :a_optype_id,
-                    :v_next_rcv_op,
-                    :v_dd_new_id,
-                    :v_cq_snd_qty,
-                    :v_cq_snd_purchase,
-                    :v_cq_snd_retail
-                );
-
-                -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_INS_QD_ID', v_id);
-                -- execute procedure sp_add_perf_log(0, v_call);
-
-                v_gen_inc_iter_qd = v_gen_inc_iter_qd + 1;
+                -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_QSTORN_TRY_INS_QS_ID', v_id);
+    
+                if ( v_storno_sub = 1 )  then
+                    insert into v_qstorned_target_1 (
+                         id,
+                         doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
+                         snd_optype_id, snd_id, snd_qty,
+                         rcv_optype_id,
+                         rcv_doc_id, -- 30.12.2014
+                         rcv_id,
+                         snd_purchase, snd_retail
+                    ) values (
+                        :v_id
+                        ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
+                        ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
+                        ,:v_cq_rcv_optype_id
+                        ,:v_dh_new_id -- 30.12.2014
+                        ,:v_dd_new_id
+                        ,:v_cq_snd_purchase,:v_cq_snd_retail
+                    );
+                else
+                    insert into v_qstorned_target_2 (
+                        id,
+                        doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
+                        snd_optype_id, snd_id, snd_qty,
+                        rcv_optype_id,
+                        rcv_doc_id, -- 30.12.2014
+                        rcv_id,
+                        snd_purchase, snd_retail
+                    ) values (
+                        :v_id
+                        ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
+                        ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
+                        ,:v_cq_rcv_optype_id
+                        ,:v_dh_new_id -- 30.12.2014
+                        ,:v_dd_new_id
+                        ,:v_cq_snd_purchase,:v_cq_snd_retail
+                    );
+    
+    
                 v_info = v_info || ' - ok';
-            end --  v_storno_sub = 1
-
-            v_inserting_table = 'qstorned';
-            v_id =  v_cq_id;
-
-            -- debug info for logging in srv_log_dups_qd_qs if PK
-            -- violation will occur on INSERT INTO QSTORNED statement
-            -- (remained for possible analysis):
-            v_info = v_info||', try INSERT into QStorned: id='||:v_id;
-            v_call = v_this || ':try_ins_qStorn';
-
-            -- execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015, debug
-            -- rdb$set_context('USER_TRANSACTION','DBG_MAKE_QSTORN_TRY_INS_QS_ID', v_id);
-
-            if ( v_storno_sub = 1 )  then
-                insert into v_qstorned_target_1 (
-                     id,
-                     doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
-                     snd_optype_id, snd_id, snd_qty,
-                     rcv_optype_id,
-                     rcv_doc_id, -- 30.12.2014
-                     rcv_id,
-                     snd_purchase, snd_retail
-                ) values (
-                    :v_id
-                    ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
-                    ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
-                    ,:v_cq_rcv_optype_id
-                    ,:v_dh_new_id -- 30.12.2014
-                    ,:v_dd_new_id
-                    ,:v_cq_snd_purchase,:v_cq_snd_retail
-                );
-            else
-                insert into v_qstorned_target_2 (
-                    id,
-                    doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
-                    snd_optype_id, snd_id, snd_qty,
-                    rcv_optype_id,
-                    rcv_doc_id, -- 30.12.2014
-                    rcv_id,
-                    snd_purchase, snd_retail
-                ) values (
-                    :v_id
-                    ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
-                    ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
-                    ,:v_cq_rcv_optype_id
-                    ,:v_dh_new_id -- 30.12.2014
-                    ,:v_dd_new_id
-                    ,:v_cq_snd_purchase,:v_cq_snd_retail
-                );
-
-
-            v_info = v_info || ' - ok';
-
-            v_qty_storned_acc = v_qty_storned_acc + v_cq_snd_qty; -- ==> will be written in doc_data.qty (actual amount that could be gathered)
-            v_lock = v_lock + 1; -- total number of SUCCESSFULY locked records
-
-            if ( v_storno_sub = 1 ) then
-            begin
-                -- increment sums that will be written into doc_data line:
-                v_qty_could_storn = v_qty_could_storn + v_cq_snd_qty;
-                v_doc_data_purchase_sum = v_doc_data_purchase_sum + v_cq_snd_purchase;
-                v_doc_data_retail_sum = v_doc_data_retail_sum + v_cq_snd_retail;
-            end
-
+    
+                v_qty_storned_acc = v_qty_storned_acc + v_cq_snd_qty; -- ==> will be written in doc_data.qty (actual amount that could be gathered)
+                v_lock = v_lock + 1; -- total number of SUCCESSFULY locked records
+    
+                if ( v_storno_sub = 1 ) then
+                begin
+                    -- increment sums that will be written into doc_data line:
+                    v_qty_could_storn = v_qty_could_storn + v_cq_snd_qty;
+                    v_doc_data_purchase_sum = v_doc_data_purchase_sum + v_cq_snd_purchase;
+                    v_doc_data_retail_sum = v_doc_data_retail_sum + v_cq_snd_retail;
+                end
+            end -- begin..end for atomicity of changes several tables (CORE-4973!)
         when any do
             -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
             -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
