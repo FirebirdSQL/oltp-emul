@@ -15,18 +15,17 @@
 # Folder with Firebird console utilities (isql, fbsvcmgr).
 # Can be specified with spaces inside path.
 # Trailing backslash and double quotes are optional.
-# Allows referencing to existing OS environment variable by using exclamation sign ('!').
-# When value for this parameter is * (asterisk), batch will attempt to find directory
-# where most appropriate FB binaries present. It does this by analyzing output of Windows 
-# utilities sc.exe and reg.exe. This was implemented only for Windows and requires
-# that you have installed at least one FB service (which can be turned off, though).
+# Allows referencing to existing OS environment variable by using "!" sign.
+# When value for this parameter is * (asterisk), batch will try to found home folder
+# of most recent FB service that was installed on current machine (recommended when
+# only single FB instance present on client machine; implemented only for Windows).
 # Samples:
-# fbc = *
 # fbc = C:\Program Files\Firebird Database Server 3.0\
 # fbc = !ProgramFiles!\Firebird Database Server 3.0
 # fbc = C:\"Program Files"\"Firebird Database Server 3.0"\bin\
+# fbc = *
 
-fbc  = C:\firebird\fb25\bin	
+fbc  = C:\MIX\firebird\fb25\bin
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
@@ -36,7 +35,7 @@ fbc  = C:\firebird\fb25\bin
 # dbnm = !appdata!\oltp emul 2.5\ test 2.5.fdb
 # dbnm = !temp!\oltp25.fdb
 
-dbnm = C:\firebird\oltp-emul\oltp25.fdb
+dbnm = C:\MIX\firebird\OLTPTEST\oltp25.fdb
 
 # Parameters for remote connection and authentication.
 # Will be ignored by command scenario if FB runs in embedded mode.
@@ -70,12 +69,11 @@ tmpdir = !temp!\logs.oltp25
 
 working_mode = small_03
 
-
 # Time (in minutes) to warm-up database after initial data population
 # will finish and before all following operations will be measured:
-# Recommended value: at least 20 for Firebird 2.5
+# Recommended value: at least 30 for Firebird 2.5
 
-warm_time = 20
+warm_time = 30
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
@@ -91,10 +89,13 @@ test_time = 60
 idle_time = 0
 
 # Do we use mtee.exe utility to provide timestamps for error messages 
-# before they are logged in .err files ?
+# before they are logged in .err files (1=yes, 0=no) ?
+# Windows only. Not implemented for Linux, will be ignored at runtime.
+
 use_mtee = 0
 
-# Does Firebird runs in embedded mode ? (1=yes, 0=no)
+# Does Firebird running in embedded mode ? (1=yes, 0=no)
+
 is_embed = 0
 
 # Condition where all ISQL logs should be removed after test will finish.
@@ -133,13 +134,13 @@ no_auto_undo = 1
 detailed_info = 0
 
 # Do we add call to mon$ tables before and after each application unit 
-# in generated file tmp_random_run.sql ? 
-# NOTE-1. Value of this parameter will be written by `1run_oltp_emul.bat` into
+# in generated file tmp_random_run.sql (1=yes, 0=no) ? 
+# NOTE-1. Value of this parameter will be written by 1run_oltp_emul.bat into
 # table SETTINGS on each new test run by issuing SQL command: 
 # update settings set svalue=%mon_unit_perf% where mcode='ENABLE_MON_QUERY' and ...;
 # Each ISQL session that will create workload will read this value before starting job.
 # NOTE-2. More detailed analysis with detalization down to separate stored procedures
-# can be achieved by updating setting TRACED_UNITS in the script `oltp_main_filling.sql`.
+# can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
 
 mon_unit_perf = 0
 
@@ -167,7 +168,7 @@ create_with_fw = sync
 create_with_sweep = 20000
 
 # Should script be PAUSED after creation database objects before starting
-# initial filling with <init_docs> documents (mostly need only for debug) ?
+# initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
 # NOTE: test database will be (re-)created only when it does not contain all necessary objects.
 # Command scenario verifies this by searching special record in table 'SEMAPHORES' which should
 # be added there at the end-point of building process. If this record is found, test will use 
@@ -183,7 +184,7 @@ wait_after_create = 0
 init_docs = 30000
 
 # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
-# required initial number of documents (see parameter 'init_docs') ?
+# required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
 # Value = 1 can be set if you want to make copy of .fdb and restore later
 # this database to 'origin' state. This can save time because of avoiding need
 # to create <init_docs> again:
@@ -203,50 +204,41 @@ create_with_debug_objects = 1
 
 # Test has two tables which are subject of very intensive modifications: QDistr and QStorned.
 # Performance highly depends on time which engine spends on handling DP, PP and index pages
-# of these tables - they are "bottlenecks" of schema. Database can be created either with two
+# of this tables - they are "bottlenecks" of schema. Database can be created either with two
 # these tables or with several "clones" of them (with the same stucture). The latter allows
 # to "split" workload on different areas and reduce low-level lock contention.
-#
 # Should heavy-loaded tables (QDistr and QStorned) be splitted on several different tables,
 # each one for separate pair of operations that are 'source' and 'target' of storning ?
-#
 # Avaliable values: 
-# 0 = do NOT split workload on several tables (i.e. use instead only two ones: QDistr and QStorned);
-# 1 = USE several (currently six) tables with the same structure in order to split workload on them.
-#
-# Recommended value: 1 - performance will increase by ~30-50%, depending on FB architecture and FW.
+# 0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
+# 1 = USE several tables with the same structure in order to split heavy workload on them.
+# Recommended value: nope (choose yourself and compare).
 
-create_with_split_heavy_tabs = 1
+create_with_split_heavy_tabs = 0
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
 # compound index or two separate indices.
 # Number of columns in compound index depends on value of two parameters:
 # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
-# Order of columns is defined by parameter 'create_with_compound_idx_selectivity' - see below.
-#
+# Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
 # Avaliable values: 
 # 0 = do NOT separate indices, user only one ("wide" compound).
-# 1 = USE two indices instead of "wide" compound (but one of them will be anyway compound with shorter key).
-#
-# Recommended value: 0 -  performance will be better when use only one index instead of two.
+# 1 = USE two indices instead of one ("wide" compound).
+# Recommended value: nope (choose yourself and compare).
 
 create_with_separate_qdistr_idx = 0
 
 # Parameter 'create_with_compound_columns_order' defines order of fields in the starting part
-# of compound index key for the table which is subject to most heavy workload.
-# This is either *single* table QDistr or *several* its clones with names XQD* - it depends on value
-# of parameter create_with_split_heavy_tabs - see above. 
-#
+# of compound index key for the table which is subject to most heavy workload - QDistr. 
 # Avaliable options: 'most_selective_first' or 'least_selective_first'.
-#
 # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / <W>,
 # where <W> = number of rows in the table 'WARES', depends on selected workload mode.
-# For default working_mode ('small_03' - see above) number of wares W = 400.
 # Second and third columns will have poor selectivity = 1/6.
-# When choice is 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
+# When choice = 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
 # and third column will have selectivity = 1 / <W>.
 #
-# Recommended value: most_selective_first - performance is increased by ~35%.
+# Actual only when create_with_split_heavy_tabs = 0.
+# Recommended value: nope (choose yourself and compare).
 
 create_with_compound_columns_order = most_selective_first
 
@@ -254,7 +246,26 @@ create_with_compound_columns_order = most_selective_first
 #  SETTINGS FOR FINAL TEST REPORT
 #::::::::::::::::::::::::::::::::::::::
 
-# Create report in HTML format (beside plain text one) ?
+# Create report in HTML format (beside plain text one; 1=yes, 0=no) ?
 # Value = 1 leads to increased time of final report building.
+# Windows only. Not implemented for Linux, will be ignored at runtime.
 
-make_html = 0
+make_html = 1
+
+
+# Create final report with name which will contain info about FB, database, test settings
+# and two timestamps of workload measuring phase (1=yes, 0=no) ?
+# When parameter is set to 1 final report will has name like this:
+# sc25_fw_off_split_most_selective_1st_separate_idx_load_180m_by_100_att_20151029_1628_20151029_1928.txt 
+
+file_name_with_test_params = 1
+
+# When this setting is defined batch will send final report to required e-mail using console
+# client POSTIE.EXE with arguments that are defined here plus add auto generated subject and 
+# attach report. This setting is OPTIONAL. Note: executable 'postie.exe' must be either in one
+#  of PATH-list or in ..\util related to current ('src') folder.
+# Windows only. Not implemented for Linux, will be ignored at runtime.
+# NOTE: this parameter is OPTIONAL. Leave it commented if no e-mail sending is planned.
+
+#postie_send_args = -esmtp -host:mail.local -from:malert@company.com -to:foo@bar.com -user:malert@company.com -pass:QwerTyuI0p
+

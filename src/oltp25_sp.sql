@@ -54,6 +54,14 @@ commit;
 
 set term ^;
 
+create or alter procedure srv_increment_tx_bops_counter
+as
+begin
+    rdb$set_context( 'USER_TRANSACTION', 'BUSINESS_OPS_CNT', coalesce( cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int), 0) + 1);
+end
+
+^ -- srv_increment_tx_bops_counter
+
 create or alter procedure sp_fill_shopping_cart(
     a_optype_id dm_idb,
     a_rows2add int default null, 
@@ -437,6 +445,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     select result from fn_oper_order_by_customer into v_oper_order_by_customer;
     select result from fn_doc_fix_state into fn_doc_fix_state;
 
@@ -643,6 +658,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     select result from fn_oper_cancel_customer_order into fn_oper_cancel_customer_order;
     select result from fn_doc_canc_state into fn_doc_canc_state;
 
@@ -763,6 +785,13 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     -- choose randomly contragent that will be supplier for this order:
     select result from fn_get_random_supplier into agent_id;
@@ -895,6 +924,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     -- select supplier, random:
     select result from fn_get_random_supplier into agent_id;
     select result from fn_oper_invoice_get into fn_oper_invoice_get;
@@ -1015,6 +1051,13 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
@@ -1273,6 +1316,13 @@ begin
         iif( a_client_order_id is null, 'from avaliable remainders', 'for clo_id='||a_client_order_id )
     );
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     if ( a_client_order_id = -1 ) then -- create reserve from avaliable remainders
         a_client_order_id = null;
     else if ( a_client_order_id is null ) then
@@ -1454,6 +1504,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
     select result from fn_doc_canc_state into fn_doc_canc_state;
     -- Choose random doc of corresponding kind.
@@ -1622,6 +1679,13 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
 
@@ -1937,6 +2001,13 @@ begin
     if ( a_cancel_mode = 1 ) then v_this = 'sp_cancel_adding_invoice';
 
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     -- check that special context var EXISTS otherwise raise exc:
     execute procedure sp_check_ctx('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE');
@@ -2273,6 +2344,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
 
     select result from fn_oper_order_for_supplier into v_oper_order_for_supplier;
@@ -2468,6 +2546,13 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
 
@@ -2757,6 +2842,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     select result from fn_oper_pay_from_customer into fn_oper_pay_from_customer;
 
     execute procedure sp_payment_common(
@@ -2828,6 +2920,13 @@ begin
     
      -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     -- choose random doc of corresponding kind and try to lock it
     -- (see the call of sp_get_random_id() and ES with 'update' in fn_lock_first_free):
@@ -2908,6 +3007,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     select result from fn_oper_pay_to_supplier into fn_oper_pay_to_supplier;
     execute procedure sp_payment_common(
         fn_oper_pay_to_supplier,
@@ -2978,6 +3084,13 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     -- choose random doc of corresponding kind and try to lock it
     -- (see the call of sp_get_random_id() and ES with 'update' in fn_lock_first_free):
@@ -3141,6 +3254,13 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     select result from fn_infinity into fn_infinity;
 
@@ -3363,6 +3483,13 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
+
     ins_rows = 0;
     upd_rows = 0;
     del_rows = 0;
@@ -3498,6 +3625,13 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- increment number of total business routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+    execute procedure srv_increment_tx_bops_counter;
 
     if ( v_deferred_to_next_time = 1 ) then
         begin
@@ -4957,6 +5091,116 @@ begin
 end
 
 ^ -- srv_mon_stat_per_tables
+
+create or alter procedure srv_get_report_name(
+     a_num_of_sessions int default -1
+    ,a_test_time_minutes int default -1
+    ,a_prefix varchar(255) default ''
+    ,a_suffix varchar(255) default ''
+    ,a_file_ext varchar(255) default '.txt'
+) returns (
+    report_file varchar(255)
+)
+as
+    declare v_arch varchar(255);
+    declare v_tab_name dm_dbobj;
+    declare v_idx_name dm_dbobj;
+    declare v_min_idx_key varchar(255);
+    declare v_max_idx_key varchar(255);
+    declare v_test_time int;
+    declare v_num_of_sessions int;
+    declare v_dts_beg timestamp;
+    declare v_dts_end timestamp;
+begin
+
+    -- Aux. SP for returning FILE NAME of final report which does contain all valuable FB, database and test params,
+    -- and also two timestamps (start and end of of test measure phase).
+    -- Sample:
+    -- ss30_fw_off_split_most_selective_1st_separate_idx_load_180m_by_100_att_20151029_1628_20151029_1928.txt 
+
+    select p.fb_arch from sys_get_fb_arch p into v_arch;
+    report_file =
+        iif( v_arch containing 'superserver' or upper(v_arch) starting with upper('ss'), 'ss'
+            ,iif( v_arch containing 'superclassic' or upper(v_arch) starting with upper('sc'), 'sc'
+                ,iif( v_arch containing 'classic' or upper(v_arch) starting with upper('cs'), 'cs'
+                    ,'fb'
+                    )
+                )
+           )
+        || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
+        || '_fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off')
+           ;
+
+    for
+        select
+            tab_name,
+            min(idx_key) as min_idx_key,
+            max(idx_key) as max_idx_key
+        from z_qd_indices_ddl z
+        group by tab_name
+        rows 1
+    into
+        v_tab_name, v_min_idx_key, v_max_idx_key
+    do begin
+
+        report_file = report_file || iif( upper(v_tab_name)=upper('qdistr'), '_solid', '_split' );
+
+        if ( upper(v_min_idx_key) starting with upper('ware_id') or upper(v_max_idx_key) starting with upper('ware_id')  ) then
+            report_file = report_file || '_most__sel_1st';
+        else if ( upper(v_min_idx_key) starting with upper('snd_optype_id') or upper(v_max_idx_key) starting with upper('snd_optype_id')  ) then
+            report_file = report_file || '_least_sel_1st';
+
+        if ( v_min_idx_key = v_max_idx_key ) then
+            report_file = report_file || '_one_index';
+        else
+            report_file = report_file || '_two_indxs';
+    end
+
+    if ( a_test_time_minutes = -1 ) then
+        select datediff(minute from p.dts_beg to p.dts_end), p.dts_beg, p.dts_end
+        from perf_log p
+        where p.unit = 'perf_watch_interval'
+        order by p.dts_beg desc
+        rows 1
+        into v_test_time, v_dts_beg, v_dts_end;
+    else
+        v_test_time = a_test_time_minutes;
+
+    report_file = report_file || '_loadtime_'||coalesce(v_test_time, '0')||'m';
+
+    if ( a_num_of_sessions = -1 ) then
+        -- Use *actual* number of ISQL sessions that were participate in this test run.
+        -- This case is used when final report is created AFTER test finish, from oltp_isql_run_worker.bat (.sh):
+        select count(distinct e.att_id)
+        from perf_estimated e
+        into v_num_of_sessions;
+    else
+        -- Use *declared* number of ISQL sessions that *will* be participate in this test run:
+        -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
+        v_num_of_sessions= a_num_of_sessions;
+
+    report_file = report_file || '_by_'||coalesce(v_num_of_sessions, '0')||'_att';
+
+    if ( trim(a_prefix) > '' ) then report_file = trim(a_prefix) || '-' || report_file;
+    if ( trim(a_suffix) > '' ) then report_file = report_file || '-' || trim(a_suffix);
+
+    if ( :v_dts_beg is not null ) then
+        report_file =
+            report_file
+            || '_' || (select left(ansi_dts, 13) from sys_timestamp_to_ansi(:v_dts_beg) );
+
+    if ( :v_dts_end is not null ) then
+        report_file =
+            report_file
+            || '_' || (select left(ansi_dts, 13) from sys_timestamp_to_ansi(:v_dts_end) );
+
+    report_file = report_file || a_file_ext;
+
+    suspend;
+
+end
+
+^ -- srv_get_report_name
 
 
 create or alter procedure srv_test_work returns(ret_code int)

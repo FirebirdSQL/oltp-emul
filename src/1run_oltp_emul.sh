@@ -816,7 +816,7 @@ gen_working_sql() {
 			           ,rdb$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit
 						        )
 			    into v_dummy;
-			  
+			
 			    -- result: tables tmp\$mon_log and tmp\$mon_log_table_stats
 			    -- are filled with counters BEFORE application unit call.
 			    -- Field "mult" in these tables is now negative: -1
@@ -867,9 +867,9 @@ gen_working_sql() {
 		      substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts
 		      ,'tra_'||current_transaction                                     as trn
 		      ,'att_'||current_connection                                      as att
-		      , rdb\$get_context('USER_SESSION','SELECTED_UNIT')                as unit
+		      , rdb\$get_context('USER_SESSION','SELECTED_UNIT')               as unit
 		      ,'start'                                                         as msg
-		      ,'iter # $i  of $lim'                                          as add_info
+		      ,'iter # $i  of $lim'                                            as add_info
 		from rdb\$database;
 
 		SET STAT ON;
@@ -879,6 +879,7 @@ gen_working_sql() {
 		      declare v_stt varchar(128);
 		      declare result int;
 		      declare v_old_docs_num int;
+		      declare v_success_ops_increment int;
 		begin
 	EOF
     if echo $mode | grep -i "^init_pop$" > /dev/null ; then
@@ -907,19 +908,27 @@ gen_working_sql() {
 		       'TEST_WAS_CANCELLED'
 		    ) then
 		      begin
+			        rdb\$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null);
 			        v_stt='select count(*) from ' || rdb\$get_context('USER_SESSION','SELECTED_UNIT');
 			        ------   ######################################### ------
 			        ------   r u n    a p p l i c a t i o n    u n i t ------
 			        ------   ######################################### ------
 			        execute statement (v_stt) into result;
 			        rdb\$set_context('USER_SESSION', 'RUN_RESULT',  'OK, '|| result ||' rows');
+			        -- Get count of 'atomic' business operations that occured 'under-cover' of SELECTED_UNIT:
+			        v_success_ops_increment = cast(rdb\$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int);
+			        ---------------------------------------------------------------
+			        -- Increment counter of SUCCESSFULLY finished business asctions
+			        -- for using later in ESTIMATED performance value:
+			        ---------------------------------------------------------------
+			        result = gen_id( g_success_counter, v_success_ops_increment );
 		      end
 		    else
 		      begin
 			        rdb\$set_context('USER_SESSION','RUN_RESULT',
-			            ( select e.fb_mnemona
+			            ( select coalesce(e.fb_mnemona, 'gds_'||g.fb_gdscode)
 			              from perf_log g
-			              join fb_errors e on g.fb_gdscode=e.fb_gdscode
+			              left join fb_errors e on g.fb_gdscode=e.fb_gdscode
 			              where g.unit='sp_halt_on_error'
 			              order by g.dts_end DESC rows 1
 			            )
@@ -1019,40 +1028,64 @@ gen_working_sql() {
 		cat <<- EOF >>$sql
 			set list on;
 			select
-			  $end_time_dts as test_ends_at
+			    $end_time_dts as test_ends_at
+			    ,rdb\$get_context('USER_SESSION','GDS_RESULT') as last_operation_gds_code
+			    ,lpad( iif( minutes_since_start > 0, 1.00 * success_ops_count / minutes_since_start, 0 ), 12, ' ' )
+			     ||
+			     lpad( minutes_since_start, 7, ' ')
+			     as est_overall_at_minute_since_beg
 		EOF
 		if [ $mon_unit_perf = 1 ]; then
         	cat <<- EOF >>$sql
-				  -- this variable will be defined in SP srv_fill_mon:
-				  ,rdb\$get_context('USER_SESSION','MON_INFO') as mon_logging_info
-				  ,cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_END') as bigint)
+				    -- this variable will be defined in SP srv_fill_mon:
+				    ,rdb\$get_context('USER_SESSION','MON_INFO') as mon_logging_info
+				    ,cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_END') as bigint)
 				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_BEG') as bigint)
 				     + cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_END') as bigint)
 				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_BEG') as bigint)
-				   as mon_gathering_time_ms
-				  ,rdb\$get_context('USER_SESSION','TRACED_UNITS') as traced_units
+				     as mon_gathering_time_ms
+				    ,rdb\$get_context('USER_SESSION','TRACED_UNITS') as traced_units
 			EOF
 		else
         	cat <<- EOF >>$sql
-				  ,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
+				    ,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
 			EOF
 		fi
 		cat <<- EOF >>$sql
-		  ,rdb\$get_context('USER_SESSION','WORKING_MODE') as workload_type
-		  ,rdb\$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
-		  ,rdb\$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as qmism_verify_bitset
+		    ,rdb\$get_context('USER_SESSION','WORKING_MODE') as workload_type
+		    ,rdb\$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
+		    ,rdb\$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as qmism_verify_bitset
+		EOF
+		
+		cat <<- EOF >>$sql
+			from (
+			  select
+			    gen_id( g_success_counter, 0 ) as success_ops_count
+			    ,datediff( minute
+			               -- Variable 'PERF_WATCH_BEG' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
+			               -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'.
+			               -- We need to substract %warm_time% from the moment PERF_WATCH_BEG because sequence
+			               -- of successfully finished business ops is increased from ACTUAL start rather than 
+			               -- timestamp PERF_WATCH_BEG which is used for reports:
+			               from dateadd( -$warm_time minute to cast( rdb\$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) )
+			               to current_timestamp
+			             ) -- datediff minus config "warm_time" value
+			             as minutes_since_start
 		EOF
 		if [ $i = 1 ]; then
 			cat <<- EOF >>$sql
-				from perf_log p
-				where p.unit = 'perf_watch_interval'
-				order by dts_beg desc
-				rows 1;
+				    ,p.dts_end
+				  from perf_log p
+				  where p.unit = 'perf_watch_interval'
+				  order by dts_beg desc
+				  rows 1
+				) p;
 				set list off;
 			EOF
 		else
 			cat <<- EOF >>$sql
-				from rdb\$database;
+					from rdb\$database
+				) p;
 				set list off;
 			EOF
 		fi
@@ -1367,6 +1400,9 @@ launch_preparing() {
 		                      dts_beg, dts_end, elapsed_ms)
 		              values( 'dump_dirty_data_semaphore', '',    'by $0',
 		                      null, null, -1);
+
+		delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+		alter sequence g_success_counter restart with 0;
 		commit;
 		set width unit 20;
 		set width add_info 30;
@@ -1779,11 +1815,21 @@ export sql=$tmpdir/sql/tmp_random_run.sql
 launch_preparing $sql
 #####################
 
-
-echo Final report see in file: $log4all
+# 30.10.2015
+if [ $file_name_with_test_params = 1 ]; then
+	cat <<- EOF > $tmpchk
+		set heading off;
+		select * from srv_get_report_name($winq);
+	EOF
+  run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
+  $run_isql 1>$tmpclg 2>$tmperr
+  log_with_params_in_name=`grep -v "^$" $tmpclg`
+  echo Final report will be saved with name $log_with_params_in_name
+else
+  echo Final report see in file: $log4all
+fi
 echo ------------------------------------------------------------------
 export prf="$tmpdir/$mode"_"$HOSTNAME"
-#echo prf=$prf
 echo Main SQL script: $sql
 echo Number of launched ISQL sessions: $winq
 
@@ -1795,6 +1841,7 @@ for i in `seq $winq`
 do
     # 10.02.2015: it's wrong to start separate session via `sh`:
     # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all}&
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params}&
+    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params}
 done
 echo Done script $0

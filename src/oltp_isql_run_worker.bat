@@ -4,8 +4,8 @@ path=..\util;%path%
 
 rem limits for log of work and errors
 rem (zap if size exceed and fill again from zero):
-set maxlog=15000000
-set maxerr=15000000
+set maxlog=25000000
+set maxerr=25000000
 
 rem -----------------------------------------------
 rem ###############  mandatory args: ##############
@@ -271,7 +271,25 @@ if .%sid%.==.1. (
     @echo.
     @echo %date% %time% %msg% >>%sts%
 
-    @rem ---------------------------------------
+    @rem ----------------
+
+    set msg=Writing statistics data about estimated performance from %log%
+    echo %date% %time%. %msg%...
+    (
+      @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
+      for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
+        echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
+      )
+      echo commit;
+    ) > %tmp%
+    set run_repo=%fbc%\isql %dbconn% -n -i %tmp% %dbauth% 
+
+    %run_repo% 1>>%log% 2>&1
+    del %tmp% 2>nul
+
+    @rem ---------------------------------------------------------------------------------------------------------------
+    @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
+    @rem ---------------------------------------------------------------------------------------------------------------
 
     if not .%sid%.==.1. goto end
     
@@ -429,7 +447,6 @@ if .%sid%.==.1. (
 
     del %rpt% 2>nul
 
-
     (
         echo set width tab_name 13;
         echo set width idx_name 31;
@@ -446,8 +463,9 @@ if .%sid%.==.1. (
     %run_repo% 1>>%log4all% 2>&1
 
     if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
     del %rpt% 2>nul
-    
+
     @rem ------------------------------------------------------------------------------
 
     (
@@ -459,6 +477,44 @@ if .%sid%.==.1. (
 
     if .%make_html%.==.1. echo !htm_sect! Performance reports !htm_secc! >>%htm_file%
    
+
+    @rem --------------------------------------------------------------------------
+
+    set msg=Performance in TOTAL
+    echo %date% %time%. Generating report "%msg%"...
+    (
+      echo set heading off;
+      echo set list on; 
+      echo select '' as "%msg%:" from rdb$database; 
+      echo set list off;
+      echo set heading on;
+    ) >> %log4all%
+
+    if .%make_html%.==.1. echo !htm_repn! %msg%: !htm_repc! >>%htm_file%
+
+    (  
+      echo --  Get overall performance report for last 3 hours of activity:
+      echo --  Value in column "avg_times_per_minute" in 1st row is overall performance index.
+      echo.
+      echo set width action 35;
+      echo select 
+      echo    business_action as action, 
+      echo    avg_times_per_minute, 
+      echo    avg_elapsed_ms, 
+      echo    successful_times_done, 
+      echo    job_beg, 
+      echo    job_end
+      echo from rdb$database
+      echo left join srv_mon_perf_total on 1=1;
+      echo commit;
+    ) > %rpt%
+
+    type %rpt% >>%log4all%
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    %run_repo% 1>>%log4all% 2>&1
+    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    del %rpt% 2>nul
 
     @rem --------------------------------------------------------------------------
 
@@ -505,42 +561,47 @@ if .%sid%.==.1. (
     if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
     del %rpt% 2>nul
 
+
+
     @rem --------------------------------------------------------------------------
 
-    set msg=Performance in TOTAL
+    set msg=Performance for every MINUTE
     echo %date% %time%. Generating report "%msg%"...
     (
       echo set heading off;
       echo set list on; 
-      echo select '' as "%msg%:" from rdb$database; 
+      echo select '' as "%msg%:" from rdb$database;
       echo set list off;
       echo set heading on;
     ) >> %log4all%
 
-    if .%make_html%.==.1. echo !htm_repn! %msg%: !htm_repc! >>%htm_file%
+    if .%make_html%.==.1. echo !htm_repn! %msg%: !htm_repc!>> %htm_file%
 
-    (  
-      echo --  Get overall performance report for last 3 hours of activity:
-      echo --  Value in column "avg_times_per_minute" in 1st row is overall performance index.
-      echo.
-      echo set width action 35;
-      echo select 
-      echo    business_action as action, 
-      echo    avg_times_per_minute, 
-      echo    avg_elapsed_ms, 
-      echo    successful_times_done, 
-      echo    job_beg, 
-      echo    job_end
-      echo from rdb$database
-      echo left join srv_mon_perf_total on 1=1;
+    (
+      echo -- Extract values of ESTIMATED performance that was evaluated after EACH business
+      echo -- operation finished. View is base on table PERF_ESTIMATED which was filled up
+      echo -- by every ISQL session after it finished and before it was terminated.
+      echo -- These data can help to find proper value of config parameter 'warm_time'.
+      echo -- Current value of config parameter 'warm_time' = %warm_time%.
+      echo set width test_phase 10; 
+      echo select iif( minute_since_test_start ^<= %warm_time%, 'WARM_TIME', 'TEST_TIME'^) test_phase
+      echo       ,minute_since_test_start
+      echo       ,avg_estimated
+      echo       ,min_to_avg_ratio
+      echo       ,max_to_avg_ratio
+      echo       ,rows_aggregated
+      echo from z_estimated_perf_per_minute;
       echo commit;
     ) > %rpt%
-
+    
     type %rpt% >>%log4all%
+
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
     %run_repo% 1>>%log4all% 2>&1
     if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
     del %rpt% 2>nul
+
 
     @rem --------------------------------------------------------------------------
 
@@ -952,7 +1013,8 @@ if .%sid%.==.1. (
         set msg=Remove %log_cnt% logs of every ISQL session if there were no serious errors.
     )
     
-    echo. & echo !msg! > %tmp_file%
+    echo. > %tmp_file%
+    echo !msg! >> %tmp_file%
     type %tmp_file% >> %log4all%
 
     if .%make_html%.==.1. (
@@ -1027,6 +1089,48 @@ if .%sid%.==.1. (
 
       call :add_html_text tmp_file htm_file 0
     
+    )
+
+    (
+        echo set heading off; 
+        echo select * from srv_get_report_name;
+    ) > %rpt%
+
+    set run_repo=%fbc%\isql %dbconn% -i %rpt% %dbauth%
+    %run_repo% 1>%tmp_file% 2>&1
+
+    if .%file_name_with_test_params%.==.1. (
+        for /f %%a in (!tmp_file!) do (
+            set name_for_saving=!tmpdir!\%%a
+            call :repl_with_bound_quotes !name_for_saving! name_for_saving
+            copy %log4all% !name_for_saving!
+            if exist !name_for_saving! del %log4all% 2>nul
+        )
+    ) else (
+        set name_for_saving=%log4all%
+    )
+
+    if not .!postie_send_args!.==.. (
+          set mail_sending_log=!tmpdir!\oltp_emul_mail_send.log
+          call :repl_with_bound_quotes !mail_sending_log! mail_sending_log
+          del !mail_sending_log! 2>nul
+          set msg=!date! !time!. Sending report to e-mail
+
+          for /f %%i in ("!name_for_saving!") do (
+              echo !msg!...
+              set name4subj=%%~ni
+              set run_cmd=postie.exe !postie_send_args! ^
+                 -s:"OLTP-EMUL REPORT: !name4subj!" ^
+                 -msg:"See attached file" ^
+                 -a:!name_for_saving! 
+
+              (
+                  echo !msg!
+                  echo Command: !run_cmd!
+              ) >> !mail_sending_log!
+
+              !run_cmd! 1>>!mail_sending_log! 2>&1
+          )
     )
 
     @rem -- echo %date% %time% Done. >>%sts%
@@ -1105,7 +1209,7 @@ if .%sid%.==.1. (
         for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
             set /a %%a
         )
-        @rem result: env var `active_att` if DEFINED now and equal to number of ISQL sessions
+        @rem result: env var 'active_att' if DEFINED now and equal to number of ISQL sessions
         
         if .%active_att%.==.0. (
             set msg=All ISQL attachments were FINISHED, now we can build final report.

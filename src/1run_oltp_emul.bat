@@ -357,7 +357,6 @@ echo.
 set run_isql=%fbc%\isql
 call :repl_with_bound_quotes %run_isql% run_isql
 
-
 set run_isql=!run_isql! %dbconn% %dbauth% -i %tmpsql% -q -n -nod
 echo %time%. Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  >>%log4tmp%
 
@@ -588,6 +587,7 @@ if .%skipGenSQL%.==.0. (
     @rem ##################################################
 )
 
+
 if not exist %sql% goto no_script
 
 del %tmpdir%\%logbase%*.log 2>nul
@@ -595,7 +595,6 @@ del %tmpdir%\%logbase%*.err 2>nul
 
 @rem Add 'signal' record into perf_log with current time (this row will be serve as 'anchor' in reports).
 @rem Display start and planning finish of working time:
-
 
 call :show_time_limits !tmpdir! !fbc! !dbconn! "!dbauth!" log4all
 
@@ -606,6 +605,32 @@ call :repl_with_bound_quotes %log4all% log4all
 
 set run_vers=!fbsvcrun! info_server_version info_implementation
 set run_stat=!fbsvcrun! action_db_stats sts_hdr_pages dbname %dbnm%
+
+(
+    echo set heading off; 
+    echo select * from srv_get_report_name(%winq%^); --, %test_time% ^);
+) > %tmpsql%
+
+(
+  echo !time!. Obtaining name of final report when config parameter 'file_name_with_test_params' = %file_name_with_test_params%.
+  echo Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  
+) >>%log4tmp%
+
+%run_isql% 1>%tmpclg% 2>%tmperr%
+    
+if .%file_name_with_test_params%.==.1. (
+    for /f %%a in (!tmpclg!) do (
+        set log_with_params_in_name=!tmpdir!\%%a
+        call :repl_with_bound_quotes !log_with_params_in_name! log_with_params_in_name
+    )
+    echo Final report will be saved with name = !log_with_params_in_name! >> %log4tmp%
+) else (
+    set log_with_params_in_name=%log4all%
+    echo Final report will be saved with name = %log4all% >> %log4tmp%
+)
+del %tmpsql% 2>nul
+del %tmpclg% 2>nul
+del %tmperr% 2>nul
 
 for /l %%i in (1, 1, %winq%) do (
 
@@ -683,13 +708,21 @@ for /l %%i in (1, 1, %winq%) do (
 echo. && echo %date% %time% Done.
 
 echo Config params, running commands and results see in file(s): 
+echo 1. TEXT: !log_with_params_in_name!
 if .%make_html%.==.1. (
-  echo 1. TEXT: %log4all%
   echo 2. HTML: %tmpdir%\oltp%fb%.report.html
 ) else (
-  echo 1. TEXT: %log4all%
   echo 2. HTML report will NOT be created. Change config parameter 'make_html' to 1 if you want to see it.
 )
+
+@rem -- dis, too many messages on the screen --echo.
+@rem -- dis, too many messages on the screen --if .%file_name_with_test_params%.==.1. (
+@rem -- dis, too many messages on the screen --  echo PS. You may to change config parameter 'file_name_with_test_params' to 0 in order
+@rem -- dis, too many messages on the screen --  echo to have final report file with SHORT name = "%log4all%"
+@rem -- dis, too many messages on the screen --) else (
+@rem -- dis, too many messages on the screen --  echo PS. You may to change config parameter 'file_name_with_test_params' to 1 in order 
+@rem -- dis, too many messages on the screen --  echo to have final report file with LONG name which includes all valuable FB, DB and test settings.
+@rem -- dis, too many messages on the screen --)
 
 goto :end_of_test
 
@@ -1128,6 +1161,7 @@ goto :end_of_test
             echo     declare v_stt varchar(128^);
             echo     declare result int;
             echo     declare v_old_docs_num int;
+            echo     declare v_success_ops_increment int;
             echo begin
         )>>%sql%
 
@@ -1158,27 +1192,47 @@ goto :end_of_test
           echo              'TEST_WAS_CANCELLED'
           echo           ^) then
           echo           begin
-          echo             v_stt='select count(*^) from '
-          echo             ^|^|rdb$get_context('USER_SESSION','SELECTED_UNIT'^);
-          echo             ------   ######################################### ------
-          echo             ------   r u n    a p p l i c a t i o n    u n i t ------
-          echo             ------   ######################################### ------
-          echo             execute statement (v_stt^) into result;
+          echo               rdb$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null ^);
+          echo               v_stt='select count(*^) from '
+          echo               ^|^|rdb$get_context('USER_SESSION','SELECTED_UNIT'^);
+          echo               ------   ######################################### ------
+          echo               ------   r u n    a p p l i c a t i o n    u n i t ------
+          echo               ------   ######################################### ------
+          echo               execute statement (v_stt^) into result;
+          echo.            
+          echo               rdb$set_context('USER_SESSION', 'RUN_RESULT',
+          echo                               'OK, '^|^| result ^|^|' rows'^);
           echo.
-          echo             rdb$set_context('USER_SESSION', 'RUN_RESULT',
-          echo                             'OK, '^|^| result ^|^|' rows'^);
+          echo               -- Get count of 'atomic' business operations that occured 'under-cover' of SELECTED_UNIT:
+          @rem echo               --select count(*^)
+          @rem echo               --from business_ops o
+          @rem echo               --join perf_log p on o.unit = p.unit
+          @rem echo               --where p.trn_id = current_transaction
+          @rem echo               --into v_success_ops_increment;
+          @rem echo               -- For watching statistics in TRACE, DEBUG only:
+          @rem echo               --v_stt='select count(*^) from business_ops o join perf_log p on o.unit = p.unit where p.trn_id = current_transaction';
+          @rem echo               --execute statement (v_stt^) into v_success_ops_increment;
+          echo.
+          echo               v_success_ops_increment = cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT'^) as int^);
+          echo.
+          echo               ---------------------------------------------------------------
+          echo               -- Increment counter of SUCCESSFULLY finished business asctions
+          echo               -- for using later in ESTIMATED performance value:
+          echo               ---------------------------------------------------------------
+          echo               result = gen_id( g_success_counter, v_success_ops_increment ^);
           echo           end
           echo         else
-          echo           begin
-          echo              rdb$set_context('USER_SESSION','RUN_RESULT',
-          echo                         (select e.fb_mnemona
-          echo                          from perf_log g
-          echo                          join fb_errors e on g.fb_gdscode=e.fb_gdscode
-          echo                          where g.unit='sp_halt_on_error'
-          echo                          order by g.dts_end DESC rows 1
-          echo                         ^)
-          echo                             ^);
-          echo           end
+          echo             begin
+          echo                rdb$set_context('USER_SESSION','RUN_RESULT',
+          echo                                 (select coalesce(e.fb_mnemona, 'gds_'^|^|g.fb_gdscode^)
+          echo                                  from perf_log g
+          echo                                  left join fb_errors e on g.fb_gdscode=e.fb_gdscode
+          echo                                  where g.unit='sp_halt_on_error'
+          echo                                  order by g.dts_end DESC rows 1
+          echo                                 ^)
+          echo                               ^);
+          echo             end
+          echo.
           echo         -- add timestamp for FINISH app unit:
           echo         rdb$set_context( 'USER_SESSION','BAT_PHOTO_UNIT_DTS',
           echo                          rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^)
@@ -1277,8 +1331,11 @@ goto :end_of_test
                )>>%sql%
             ) else (
               (
+                  
                   echo select
-                  echo     left( cast( rdb$get_context('USER_SESSION','PERF_WATCH_END'^)
+                  echo     -- Variable 'PERF_WATCH_END' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
+                  echo     -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'
+                  echo     left( cast( rdb$get_context('USER_SESSION','PERF_WATCH_END'^) 
                   echo                 as varchar(24^)
                   echo             ^),
                   echo           19
@@ -1288,6 +1345,11 @@ goto :end_of_test
             )
 
             (
+                  echo     ,rdb$get_context('USER_SESSION','GDS_RESULT'^) as last_operation_gds_code
+                  echo     ,lpad( iif( minutes_since_start ^>0, 1.00 * success_ops_count / minutes_since_start, 0 ^), 12, ' ' ^)
+                  echo      ^|^|
+                  echo      lpad( minutes_since_start, 7, ' ' ^)
+                  echo      as est_overall_at_minute_since_beg
                   if /i .%mon_unit_perf%.==.1. (
                       echo      -- this variable will be defined in SP srv_fill_mon:
                       echo     ,rdb$get_context('USER_SESSION','MON_INFO'^) as mon_logging_info
@@ -1304,14 +1366,30 @@ goto :end_of_test
             )>>%sql%
 
             (
+                echo from
+                echo (
+                echo     select 
+                echo         gen_id( g_success_counter, 0 ^) as success_ops_count
+                echo        ,datediff( minute
+                echo                   -- Variable 'PERF_WATCH_BEG' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
+                echo                   -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'.
+                echo                   -- We need to substract %warm_time% from the moment PERF_WATCH_BEG because sequence
+                echo                   -- of successfully finished business ops is increased from ACTUAL start rather than 
+                echo                   -- timestamp PERF_WATCH_BEG which is used for reports:
+                echo                   from dateadd( -%warm_time% minute to cast( rdb$get_context('USER_SESSION','PERF_WATCH_BEG'^) as timestamp^) ^) 
+                echo                     to current_timestamp
+                echo                ^)   -- datediff minus config "warm_time" value
+                echo         as minutes_since_start
                 if %%i equ 1 (
-                    echo from %log_tab% p
-                    echo where p.unit = 'perf_watch_interval'
-                    echo order by dts_beg desc
-                    echo rows 1;
+                    echo        ,p.dts_end
+                    echo     from %log_tab% p
+                    echo     where p.unit = 'perf_watch_interval'
+                    echo     order by dts_beg desc
+                    echo     rows 1
                 ) else (
-                    echo from rdb$database;
+                    echo     from rdb$database
                 )
+                echo ^) p;
                 echo set list off;
             )>>%sql%
         )
@@ -1440,7 +1518,6 @@ goto :end_of_test
         )
 
       )
-
 
   endlocal
 
@@ -2283,7 +2360,7 @@ goto:eof
           echo set list off;
           echo set width setting_name 40;
           echo set width setting_value 20;
-          echo select z.setting_name, z.setting_value
+          echo select trim(z.setting_name ^) as setting_name , z.setting_value
           echo from z_current_test_settings z
           echo where z.stype in('init', 'main'^); -- , 'inf2'
 
@@ -2775,6 +2852,7 @@ goto:eof
             @echo It's a good time to make COPY of test database in order
             @echo to start all following runs from the same state.
             @echo.
+            @echo 
             @echo Press any key to begin WARM-UP and TEST mode. . .
             @pause>nul
             echo !date! !time!. Here we go...
@@ -2783,6 +2861,7 @@ goto:eof
     )
 
     endlocal
+
 goto:eof    
 
 :change_db_attr
@@ -3072,6 +3151,8 @@ goto:eof
         echo                       dts_beg, dts_end, elapsed_ms^)
         echo               values( 'dump_dirty_data_semaphore', '',    'by %~f0',
         echo                       null, null, -1^);
+        echo delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+        echo alter sequence g_success_counter restart with 0;
         echo commit;
     
         echo set width unit 20;
@@ -3125,7 +3206,8 @@ goto:eof
     echo !msg!
     echo !msg!>>%log4tmp%
     echo #########################
-    
+
+   
     del %tmpsql% 2>nul
     del %tmplog% 2>nul
     del %tmperr% 2>nul
