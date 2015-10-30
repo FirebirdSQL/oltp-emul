@@ -2,14 +2,15 @@
 
 # limits for log of work and errors
 # (zap if size exceed and fill again from zero):
-maxlog=15000000
-maxerr=15000000
+maxlog=25000000
+maxerr=25000000
 
 cfg=$1
 sql=$2
 prf=$3
 sid=$4 # ISQL window (session) sequential number
 rpt=$5 # final report where sid N1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
+file_name_with_test_params=$6
 
 #echo -e Config file \>$cfg\< parsing result:
 shopt -s extglob
@@ -57,6 +58,10 @@ $run_isql 1>>$log 2>>$err
 EOF
 
 [[ $sid = 1 ]] &&  echo This session *WILL* do performance report after test make selfstop.>>$sts
+
+tmpsidsql=$tmpdir/tmp_$sid.sql
+tmpsidlog=$tmpdir/tmp_$sid.log
+tmpsiderr=$tmpdir/tmp_$sid.err
 
 fblog_beg=$tmpdir/fb_log_when_test_started.$fb.log
 fblog_end=$tmpdir/fb_log_when_test_finished.$fb.log
@@ -120,6 +125,21 @@ do
     msg="$(date +'%H:%M:%S'). SID=$sid. STOPFILE has non-zero size, test has been cancelled."
     echo $msg>>$sts
     echo $msg
+
+    grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
+    while read s
+    do
+      a=( $s )
+      echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
+    done < $tmpsidlog >$tmpsidsql
+    echo commit\;>>$tmpsidsql
+
+    $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
+    rm -f $tmpsidsql $tmpsidlog $tmpsiderr
+
+    # ---------------------------------------------------------------------------------------------------------------
+    # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
+    # ---------------------------------------------------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
       echo Bye-bye from SID=$sid
       exit
@@ -132,11 +152,33 @@ do
     # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
     plog=$rpt
 
-    #$prf.performance_report.txt
     rm -f $psql
     # ---- do NOT ---- rm $plog
+    
+    ###############################################################################################
+    ##########################   P e r f o r m a n c e    R e p o r t s    ########################
+    ###############################################################################################
 
 	cat <<- "EOF" >>$psql
+	
+		set heading off;
+		select 'Performance TOTAL:' as " " from rdb$database;
+		set heading on;
+		--  Get overall performance report for last 3 hours of activity:
+		--  Value in column "avg_times_per_minute" in 1st row is overall performance index.
+
+		set width action 35;
+		select
+		   business_action as action,
+		   avg_times_per_minute,
+		   avg_elapsed_ms,
+		   successful_times_done,
+		   job_beg,
+		   job_end
+		from rdb$database
+		left join srv_mon_perf_total on 1=1;
+		commit;
+	
 		set heading off;
 		select 'Performance in DYNAMIC:' as " " from rdb$database;
 		set heading on;
@@ -163,21 +205,27 @@ do
 		commit;
 
 		set heading off;
-		select 'Performance TOTAL:' as " " from rdb$database;
+		select 'Performance for every MINUTE:' as " " from rdb$database;
 		set heading on;
-		--  Get overall performance report for last 3 hours of activity:
-		--  Value in column "avg_times_per_minute" in 1st row is overall performance index.
+		-- Extract values of ESTIMATED performance that was evaluated after EACH business
+		-- operation finished. View is base on table PERF_ESTIMATED which was filled up
+		-- by every ISQL session after it finished and before it was terminated.
+		-- These data can help to find proper value of config parameter 'warm_time'.
+		-- Current value of config parameter 'warm_time' = %warm_time%.
+		set width test_phase 10;
+	EOF
 
-		set width action 35;
-		select
-		   business_action as action,
-		   avg_times_per_minute,
-		   avg_elapsed_ms,
-		   successful_times_done,
-		   job_beg,
-		   job_end
-		from rdb$database
-		left join srv_mon_perf_total on 1=1;
+	cat <<- EOF >>$psql
+		select iif( minute_since_test_start <= $warm_time, 'WARM_TIME', 'TEST_TIME') test_phase
+	EOF
+
+	cat <<- "EOF" >>$psql
+		     ,minute_since_test_start
+		     ,avg_estimated
+		     ,min_to_avg_ratio
+		     ,max_to_avg_ratio
+		     ,rows_aggregated
+		from z_estimated_perf_per_minute;
 		commit;
 
 		--  Get performance report with detaliation per units, for last 3 hours of activity.
@@ -403,6 +451,27 @@ do
     fi
 
     rm -f $psql
+
+
+    if [ $file_name_with_test_params = 1 ]; then
+		cat <<- EOF > $psql
+		  set heading off;
+		  select * from srv_get_report_name($winq);
+		EOF
+		echo Evaluate new name of final report. Change config parameter file_name_with_test_params to 0 if this is not needed.
+		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
+		$run_isql 1>$tmpsidlog 2>&1
+		log_with_params_in_name=`grep -v "^$" $tmpsidlog`
+		log_with_params_in_name=$tmpdir/$log_with_params_in_name
+		rm -f $log_with_params_in_name $psql $tmpsidlog
+		mv $plog $log_with_params_in_name
+		plog=$log_with_params_in_name
+	else
+		echo New report has been saved with the same name as old one thus overwriting it.
+		echo Change config parameter file_name_with_test_params to 1 if every new report should be saved to new name
+		echo which will contain info about current FB, DB and test settings plus timestamps of test measuring phase.
+	fi
+	echo
 
     cat <<- EOF
 		------------------------------------------------------------

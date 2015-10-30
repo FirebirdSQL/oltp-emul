@@ -328,6 +328,7 @@ create sequence g_doc_data;
 create sequence g_perf_log;
 create sequence g_init_pop;
 create sequence g_qdistr;
+create sequence g_success_counter; -- used in .bat / .sh for displaying estimated performance value
 commit;
 
 -- create collations:
@@ -979,6 +980,24 @@ recreate table fb_errors(
    fb_errtext varchar(100),
    constraint fb_errors_gds_code_unq unique(fb_gdscode) using index fb_errors_gds_code
 );
+commit;
+
+-- 28.10.2015: source for view z_estimated_perf_per_minute, see oltp_isql_run_worker.bat (.sh):
+-- data of estimated overall performance value with detalization to one minute, useful for
+-- finding proper value of config parameter 'warm_time'. Values in the field SUCCESS_COUNT are
+-- result of total count of business ops that SUCCESSFUL finished, see auto-generated script
+-- $tmpdir/tmp_random_run.sql:
+-- v_success_ops_increment = cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int);
+-- result = gen_id( g_success_counter, v_success_ops_increment );
+-- Context variable 'BUSINESS_OPS_CNT' is incremented by 1 on every invokation of each unit
+-- that implements BUSINESS action: client order, order to supplier, etc, -- see table business_ops
+recreate table perf_estimated(
+    minute_since_test_start int,
+    success_count numeric(12,2),
+    att_id int default current_connection,
+    dts timestamp default 'now'
+);
+create index perf_est_minute_since_start on perf_estimated (minute_since_test_start);
 commit;
 
 -- Log of parsing ISQL statistics
@@ -2521,6 +2540,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_check_to_stop_work as
+    declare v_dts_beg timestamp;
     declare v_dts_end timestamp;
 begin
     -- Must be called from all SPs which are at 'top' level of data handling.
@@ -2540,12 +2560,13 @@ begin
             -- this record is added in 1run_oltp_emul.bat before FIRST attach
             -- will begin it's work:
             -- PLAN (P ORDER PERF_LOG_DTS_BEG_DESC INDEX (PERF_LOG_UNIT))
-            select p.dts_end
+            select p.dts_beg, p.dts_end
             from perf_log p
             where p.unit = 'perf_watch_interval' and p.info containing 'active'
             order by dts_beg + 0 desc -- !! 24.09.2014, speed !! (otherwise dozen fetches!)
             rows 1
-            into v_dts_end;
+            into v_dts_beg, v_dts_end;
+            rdb$set_context('USER_SESSION','PERF_WATCH_BEG', v_dts_beg);
             rdb$set_context('USER_SESSION','PERF_WATCH_END', coalesce(v_dts_end, dateadd(3 hour to current_timestamp) ) );
         end
     else
@@ -6252,16 +6273,42 @@ where
     > 0
 group by t.table_name,t.unit
 ;
+
+-------------------------------------------------------------------------------
+
+create or alter view z_estimated_perf_per_minute as
+-- Do NOT delete! 28.10.2015.
+-- This view is used in oltp_isql_run_worker.bat (.sh) when it creates final report.
+-- Table PERF_ESTIMATED is filled up by temply created .sql which scans log
+-- of 1st ISQL session (which, in turn, makes final report). This log contains
+-- rows like this:
+-- EST_OVERALL_AT_MINUTE_SINCE_BEG         0.00      0
+-- - where 1st number is estimated performance value and 2nd is datediff(minute)
+-- from test start to the moment when each business transaction SUCCESSFULLY finished.
+-- Data in this view is performance value in *dynamic* but with detalization per
+-- ONE minute, from time when all ISQL sessions start (rather then all other reports
+-- which make starting point after database was warmed up).
+-- This report can help to find proper value of warm-time in oltpNN_config.
+select
+    e.minute_since_test_start
+    ,avg(e.success_count) avg_estimated
+    ,min(e.success_count) / nullif(avg(e.success_count), 0) min_to_avg_ratio
+    ,max(e.success_count) / nullif(avg(e.success_count), 0) max_to_avg_ratio
+    ,count(e.success_count) rows_aggregated
+from perf_estimated e
+where e.minute_since_test_start>0
+group by e.minute_since_test_start
+;
+
 commit;
 
 -------------------------------------------------------------------------------
 --######################   d e b u g    v i e w s   ############################
 -------------------------------------------------------------------------------
 
+create or alter view z_current_test_settings as
 -- This view is used in 1run_oltp_emulbat (.sh) to display current settings before test run.
 -- Do NOT delete it!
-
-create or alter view z_current_test_settings as
 select s.mcode as setting_name, s.svalue as setting_value, 'init' as stype
 from settings s
 where s.working_mode='INIT' and s.mcode='WORKING_MODE'
@@ -9130,6 +9177,18 @@ begin
 end
 
 ^ -- sys_get_run_info
+
+create or alter procedure sys_timestamp_to_ansi (a_dts timestamp default 'now')
+returns ( ansi_dts varchar(15) ) as
+begin
+    ansi_dts =
+        cast(extract( year from a_dts)*10000 + extract(month from a_dts) * 100 + extract(day from a_dts) as char(8))
+         || '_'
+         || substring(cast(cast(1000000 + extract(hour from a_dts) * 10000 + extract(minute from a_dts) * 100 + extract(second from a_dts) as int) as char(7)) from 2);
+    suspend;
+end
+
+^ -- sys_timestamp_to_ansi
 
 set term ;^
 set list on;
