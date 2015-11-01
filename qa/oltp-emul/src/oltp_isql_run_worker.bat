@@ -281,11 +281,11 @@ if .%sid%.==.1. (
         echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
       )
       echo commit;
-    ) > %tmp%
-    set run_repo=%fbc%\isql %dbconn% -n -i %tmp% %dbauth% 
+    ) > %rpt%
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
     %run_repo% 1>>%log% 2>&1
-    del %tmp% 2>nul
+    del %rpt% 2>nul
 
     @rem ---------------------------------------------------------------------------------------------------------------
     @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
@@ -340,6 +340,8 @@ if .%sid%.==.1. (
       ) > %htm_file%
 
       @rem  -- do NOT -- call :add_html_text tmp_file htm_file 0  // wrong output of "<!DOCTYPE", 1st line in html will start from wrong text: <//www.w3.org/TR/html4/strict.dtd">
+
+      @rem -----------------------------------------------------------------------
 
       echo !htm_sect! Server and database settings !htm_secc! >> %htm_file%
 
@@ -402,6 +404,41 @@ if .%sid%.==.1. (
 
     )
 
+    @rem -----------------------------------------------------------------------
+
+    @echo %date% %time%. Output test finish state...
+    (
+        echo.
+        echo ##########################################
+        echo ###  t e s t    f i n i s h   i n f o  ###
+        echo ##########################################
+    ) >> %log4all%
+
+    (
+        echo set list on;
+        echo select 
+        echo    p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona, 
+        echo    coalesce(p.stack,''^) as stack,
+        echo    p.ip,p.trn_id, p.att_id,p.exc_unit
+        echo from perf_log p
+        echo left join fb_errors e on p.fb_gdscode = e.fb_gdscode
+        echo where p.unit = 'sp_halt_on_error'
+        echo order by p.dts_beg desc
+        echo rows 1;
+    ) > %rpt%
+    type %rpt% >>%log4all%
+
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+    if .%make_html%.==.1. echo !htm_sect! Test finish info !htm_secc! >>%htm_file%
+
+    %run_repo% 1>>%log4all% 2>&1
+   
+    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    del %rpt% 2>nul
+
+
     (
       echo.
       echo #####################################################
@@ -457,6 +494,7 @@ if .%sid%.==.1. (
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
     set msg=Index(es) for heavy-loaded table(s)
+
     echo %msg%: >>%log4all%
     if .%make_html%.==.1. echo !htm_sect! %msg% !htm_secc! >> %htm_file%
 
@@ -465,6 +503,7 @@ if .%sid%.==.1. (
     if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
 
     del %rpt% 2>nul
+
 
     @rem ------------------------------------------------------------------------------
 
@@ -875,31 +914,32 @@ if .%sid%.==.1. (
           echo ###  d a t a b a s e    v a l i d a t i o n   ###
           echo #################################################
           echo.
-          echo ++++++++++++++++++++++++++
+        ) >> %log4all%
+
+        (
           echo Command: !run_db_validat!
           echo Pattern for tables which are NOT validated:
           echo !skip_val_list:^^=!
-          echo ++++++++++++++++++++++++++
+          echo.
           echo Result:
-        ) >> %log4all%
+        ) > %tmp_file%
 
+        type %tmp_file% >>%log4all%
+        if .%make_html%.==.1. (
+            echo !htm_sect! !msg! !htm_secc!>>%htm_file%
+            call :add_html_text tmp_file htm_file
+        )
         
         echo !run_db_validat! val_tab_excl !skip_val_list! > %tmpdir%\tmp_validation.bat
         call %tmpdir%\tmp_validation.bat 1>%tmp_file% 2>&1
 
-        @rem !run_db_validat! 1>%tmp_file% 2>&1
-
-        echo End of database validation report.>>%log4all%
         type %tmp_file% >>%log4all%
 
         if .%make_html%.==.1. (
-            (
-                echo !htm_sect! !msg! !htm_secc!
-                echo Pattern for tables which are NOT validated:
-                echo !skip_val_list:^^=!
-            ) >>%htm_file%
             call :add_html_text tmp_file htm_file
         )
+        echo End of database validation report.>>%log4all%
+
         del %tmp_file%
         del %tmpdir%\tmp_validation.bat
 
@@ -1026,9 +1066,17 @@ if .%sid%.==.1. (
           echo.
           echo -- Checking query:
           echo set list on;
-          echo select iif( exists( select * 
-          echo                    from perf_log
-          echo                    where fb_gdscode in ( 335544558, 335544347, 335544665, 335544349 ^)
+          echo select iif( exists( select *
+          echo                     from perf_log p
+          echo                     where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
+          echo                         p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349 ^)
+          echo                         and p.dts_beg ^> (
+          echo                             select x.dts_beg
+          echo                             from perf_log x
+          echo                             where x.unit='perf_watch_interval'
+          echo                             order by x.dts_beg desc
+          echo                             rows 1
+          echo                         ^)
           echo                  ^),
           echo             'SEVERE_ERRORS_EXIST!',
           echo             'NO_SEVERE_ERRORS_FOUND' ^) as errors_checking_result
@@ -1098,6 +1146,8 @@ if .%sid%.==.1. (
 
     set run_repo=%fbc%\isql %dbconn% -i %rpt% %dbauth%
     %run_repo% 1>%tmp_file% 2>&1
+    
+    del %rpt% 2>nul
 
     if .%file_name_with_test_params%.==.1. (
         for /f %%a in (!tmp_file!) do (
@@ -1300,7 +1350,8 @@ goto:eof
     if not defined add_br set add_br=1
     (
         for /f "tokens=*" %%a in ('type %tmp_file%') do (
-            if .%add_br%.==.1. ( echo %%a ^<br /^> ) else ( echo %%a )
+            @rem do NOT add leading BR tag: excessive empty line will appear.
+            if .%add_br%.==.1. ( echo %%a^<br /^> ) else ( echo %%a )
         )
     ) >> %htm_file%
 
@@ -1471,13 +1522,21 @@ goto:eof
               set fld_num=1
           )
 
-          set cell=!line:~32!
-          call :trim cell !cell!
+          @rem echo ci1: fld_name=!fld_name! pause
 
-          set cell=!cell:^&=^&amp;!
-          set cell=!cell:^<=^&lt;!
-          set cell=!cell:^>=^&gt;!
-         
+          set cell=!line:~32!
+
+          @rem NOTE: we need to replace html-specific characters (GT, LT, AMP) immediatelly,
+          @rem BEFORE call trim subroutine:
+
+          if not .!cell!.==.. (
+              set cell=!cell:^&=^&amp;!
+              set cell=!cell:^<=^&lt;!
+              set cell=!cell:^>=^&gt;!
+
+              call :trim cell !cell!
+          )
+          
           set is_num=1
           call :chk4num fld_num num_list is_num
 

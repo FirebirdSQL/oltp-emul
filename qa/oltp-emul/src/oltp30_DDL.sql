@@ -1769,8 +1769,21 @@ create or alter procedure sp_halt_on_error(
     a_gdscode bigint default null,
     a_trn_id bigint default null
 ) as
-  declare v_curr_trn bigint;
+    declare v_curr_trn bigint;
 begin
+   -- Adding single character + LF into external table (text file) 'stoptest.txt'
+   -- when test is needed to stop (either due to test_time expiration or because of
+   -- encountering some critical errors like PK/FK violations or negative amount remainders).
+   -- Input argument a_char:
+   -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to PK/FK violation,
+   --         and also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
+   --         sum of doc_data amounts and count of rows in QDistr + QStorned.
+   -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
+   --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
+   -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
+   --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
+   --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
+
   if ( fn_remote_process() NOT containing 'IBExpert' and NOT exists( select * from ext_stoptest ) )
   then
   begin
@@ -1783,8 +1796,27 @@ begin
       in autonomous transaction do
       begin
         -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
-        insert into perf_log(unit, fb_gdscode, ip, trn_id, dts_end, elapsed_ms, stack, exc_unit )
-        values('sp_halt_on_error', :a_gdscode, fn_remote_address(), :v_curr_trn, 'now', -1, fn_get_stack(), :a_char );
+        insert into perf_log(
+            unit
+            ,fb_gdscode
+            ,ip
+            ,trn_id
+            ,dts_end
+            ,elapsed_ms
+            ,stack
+            ,exc_unit
+            ,exc_info
+        ) values(
+            'sp_halt_on_error'
+            ,:a_gdscode
+            ,fn_remote_address()
+            ,:v_curr_trn
+            ,'now'
+            ,-1
+            ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack into perf_log if this is NOT expected test finish
+            ,:a_char
+            ,iif( :a_gdscode>=0, 'ABNORMAL, GDSCODE='||coalesce(:a_gdscode,'<?>'), 'NORMAL, TEST_TIME EXPIRED.' ) -- for reporting state of how test finished
+        );
       end
   end
 end

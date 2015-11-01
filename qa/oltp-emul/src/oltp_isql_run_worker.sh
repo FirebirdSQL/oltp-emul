@@ -154,7 +154,32 @@ do
 
     rm -f $psql
     # ---- do NOT ---- rm $plog
-    
+
+    ##########################################
+    ###  t e s t    f i n i s h   i n f o  ###
+    ##########################################
+	cat <<- "EOF" >>$psql
+		set heading off;
+		select 'Test finish info:' as " " from rdb$database;
+		set heading on;
+		set list on;
+		select
+		   p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona,
+		      coalesce(p.stack,'') as stack,
+		         p.ip,p.trn_id, p.att_id,p.exc_unit
+		from perf_log p
+		left join fb_errors e on p.fb_gdscode = e.fb_gdscode
+		where p.unit = 'sp_halt_on_error'
+		order by p.dts_beg desc
+		rows 1;
+	EOF
+    echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - START
+
+    $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    echo>>$plog
+    rm -f $psql
+    echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - FINISH
+
     ###############################################################################################
     ##########################   P e r f o r m a n c e    R e p o r t s    ########################
     ###############################################################################################
@@ -434,12 +459,20 @@ do
 	cat <<- "EOF" >>$psql
           -- Checking query:
           set list on;
-          select iif( exists( select * 
-                            from perf_log
-                            where fb_gdscode in ( 335544558, 335544347, 335544665, 335544349 )
-                          ),
-                     'SEVERE_ERRORS_EXIST!',
-                     'NO_SEVERE_ERRORS_FOUND' ) as errors_checking_result
+          select iif( exists( select *
+                    from perf_log p
+                    where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
+                        p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349 )
+                        and p.dts_beg > (
+                            select x.dts_beg
+                            from perf_log x
+                            where x.unit='perf_watch_interval'
+                            order by x.dts_beg desc
+                            rows 1
+                        )
+                 ),
+            'SEVERE_ERRORS_EXIST!',
+            'NO_SEVERE_ERRORS_FOUND' ) as errors_checking_result
           from rdb$database;
 	EOF
 
