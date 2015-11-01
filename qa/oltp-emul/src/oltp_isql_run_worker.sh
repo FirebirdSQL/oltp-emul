@@ -67,7 +67,7 @@ fblog_beg=$tmpdir/fb_log_when_test_started.$fb.log
 fblog_end=$tmpdir/fb_log_when_test_finished.$fb.log
 if [ $sid -eq 1 ]; then
   if [ $fb != 25 ]; then
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr action_get_fb_log"
+    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_get_fb_log"
     msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
     echo
     echo $msg
@@ -409,7 +409,7 @@ do
 
 
     if [ $fb != 25 ]; then
-        run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr action_get_fb_log"
+        run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_get_fb_log"
         msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
         echo $msg
         echo $msg >>$plog
