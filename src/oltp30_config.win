@@ -142,7 +142,7 @@ detailed_info = 0
 # NOTE-2. More detailed analysis with detalization down to separate stored procedures
 # can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
 
-mon_unit_perf = 1
+mon_unit_perf = 0
 
 # Number of pages for usage during init data population ("-c" switch for ISQL).
 # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
