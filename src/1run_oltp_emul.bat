@@ -133,7 +133,7 @@ set varlist=%varlist%,use_mtee,detailed_info,init_docs,init_buff,wait_after_crea
 set varlist=%varlist%,wait_for_copy,warm_time,test_time,idle_time,remove_isql_logs
 set varlist=%varlist%,create_with_split_heavy_tabs,create_with_separate_qdistr_idx
 set varlist=%varlist%,create_with_compound_columns_order,create_with_debug_objects
-set varlist=%varlist%,working_mode
+set varlist=%varlist%,working_mode,wait_if_not_exists
 
 if .%is_embed%.==.0. (
     set varlist=%varlist%,usr,pwd,host,port
@@ -251,8 +251,10 @@ if not defined fbb (
     echo Probably FBSVCMGR output was changed or error in this batch algorithm.
     echo.
     echo See details in %log4tmp%
-    echo Press any key to FINISH this batch. . .
-    pause>nul
+    if .%wait_if_not_exists%.==.1. (
+        echo Press any key to FINISH this batch. . .
+        pause>nul
+    )
     goto final
 )
 set msg= Build: ^|%fbb%^|, prefix of server OS: ^|%fbo%^|
@@ -444,11 +446,13 @@ if errorlevel 1 (
         echo Database: ^>%dbnm%^< -- DOES exist but
         echo its creation process was not completed.
         echo.
-        echo ################################################################################
-        echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
-        echo ################################################################################
-        echo.
-        pause>nul
+        if .%wait_if_not_exists%.==.1. (
+            echo ################################################################################
+            echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+            echo ################################################################################
+            echo.
+            pause>nul
+        )
 
         set need_rebuild_db=1
 
@@ -466,9 +470,11 @@ if errorlevel 1 (
     echo.
     echo Database file DOES NOT exist or has a problem with ACCESS to it.
     echo.
-    echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
-    echo.
-    pause>nul
+    if .%wait_if_not_exists%.==.1. (
+        echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
+        echo.
+        pause>nul
+    )
 
     set need_rebuild_db=1
 
@@ -608,7 +614,8 @@ set run_stat=!fbsvcrun! action_db_stats sts_hdr_pages dbname %dbnm%
 
 (
     echo set heading off; 
-    echo select * from srv_get_report_name(%winq%^); --, %test_time% ^);
+    echo select report_file from srv_get_report_name('%file_name_with_test_params%', '%fbb%', %winq%^);
+    echo set heading on;
 ) > %tmpsql%
 
 (
@@ -618,16 +625,17 @@ set run_stat=!fbsvcrun! action_db_stats sts_hdr_pages dbname %dbnm%
 
 %run_isql% 1>%tmpclg% 2>%tmperr%
     
-if .%file_name_with_test_params%.==.1. (
+if not .%file_name_with_test_params%.==.. (
     for /f %%a in (!tmpclg!) do (
         set log_with_params_in_name=!tmpdir!\%%a
         call :repl_with_bound_quotes !log_with_params_in_name! log_with_params_in_name
     )
-    echo Final report will be saved with name = !log_with_params_in_name! >> %log4tmp%
+    echo Final report will be saved with name = !log_with_params_in_name!.txt >> %log4tmp%
 ) else (
     set log_with_params_in_name=%log4all%
     echo Final report will be saved with name = %log4all% >> %log4tmp%
 )
+
 del %tmpsql% 2>nul
 del %tmpclg% 2>nul
 del %tmperr% 2>nul
@@ -639,34 +647,6 @@ for /l %%i in (1, 1, %winq%) do (
     set /a k=1000+%%i
     if .%%i.==.1. (
         (
-            echo Parameters for launching ISQL sessions:
-            echo ---------------------------------------
-            echo is_embed = ^|%is_embed%^|
-            echo fbc      = ^|%fbc%^|
-            echo dbnm     = ^|%dbnm%^|
-            echo sql      = ^|%sql%^|
-            echo logbase  = ^|%logbase%^|
-            echo log4all  = ^|%log4all%^|
-            echo host     = ^|%host%^|
-            echo port     = ^|%port%^|
-            echo usr      = ^|%usr%^|
-            echo pwd      = ^|%pwd%^|
-            echo.
-            echo.
-            echo Command that launch ISQL window #%%i:
-            echo.
-            echo   start /min oltp_isql_run_worker.bat fb sql logbase sid log4all
-            echo                                       ^^   ^^     ^^     ^^     ^^
-            echo                                       1   2     3     4     5
-            echo.
-            echo Actual values of parameters used now:
-            echo 1: %fb% ^<-- version of FB as number, 25 or 30
-            echo 2: %sql% ^<-- input SQL script for working
-            echo 3: %tmpdir%\%logbase%-!k:~1,3! ^<-- base name of logs for *that* ISQL window
-            echo 4: %%i  ^<-- SID, sequential number of that ISQL (limits: 1...%winq%^)
-            echo 5: %log4all% ^<-- log for overall report
-            echo.
-            echo All subsequent windows are launched similarly.
             echo.
             echo Obtain server version and implementation info:
             echo.
@@ -697,20 +677,25 @@ for /l %%i in (1, 1, %winq%) do (
     @rem Sample of %tmpdir%\%logbase%-!k:~1,3!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
     @rem =========
 
-    @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @rem #######################################################
     @rem +++    l a u n c h   w o r k i n g     I S Q L s    +++
-    @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    @rem #######################################################
 
-    @rem call oltp_isql_run_worker.bat %%i %winq% %fb% tmpdir sql log4all %logbase%-!k:~1,3!
-    @start /min oltp_isql_run_worker.bat %%i %winq% %fb% tmpdir sql log4all %logbase%-!k:~1,3! 
+    @rem oltp_isql_run_worker.bat 1 10 30 tmpdir sql log4all oltp30_CSPROG-001 WI-V3.0.0.32136
+    @rem call oltp_isql_run_worker.bat %%i %winq% %fbb% tmpdir sql log4all %logbase%-!k:~1,3! %fbb% %file_name_with_test_params%
+
+    @start /min oltp_isql_run_worker.bat %%i %winq% %fb% tmpdir sql log4all %logbase%-!k:~1,3! %fbb% %file_name_with_test_params%
+    @rem                                  ^     ^     ^     ^    ^     ^           ^             ^                 ^
+    @rem                                  1     2     3     4    5     6           7             8                 9
 
 )
 echo. && echo %date% %time% Done.
 
 echo Config params, running commands and results see in file(s): 
-echo 1. TEXT: !log_with_params_in_name!
+echo 1. TEXT: !log_with_params_in_name!.txt
 if .%make_html%.==.1. (
-  echo 2. HTML: %tmpdir%\oltp%fb%.report.html
+  echo 2. HTML: !log_with_params_in_name!.html
+  @rem %tmpdir%\oltp%fb%.report.html
 ) else (
   echo 2. HTML report will NOT be created. Change config parameter 'make_html' to 1 if you want to see it.
 )
@@ -887,10 +872,11 @@ goto :end_of_test
     echo FILE 'stoptest.txt' ON SERVER SIDE HAS NON-ZERO SIZE, MAKE IT EMPTY TO START TEST!
     echo ##################################################################################
     echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
-    @rem @goto final
+    if .%wait_if_not_exists%.==.1. (
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     EXIT
 
 :err_del
@@ -2845,7 +2831,7 @@ goto:eof
         set msg=Job has been done from %t0% to %time%. Count rows in doc_list: ^>^>^>!act_docs!^<^<^<.
         echo !msg! & echo !msg! >>%log4tmp%
     
-        if .%wait_for_copy%.==.1. (
+        if .%wait_if_not_exists%.==.1. if .%wait_for_copy%.==.1. (
             @echo.
             @echo ### NOTE ###
             @echo.

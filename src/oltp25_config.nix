@@ -161,6 +161,14 @@ create_with_fw = sync
 
 create_with_sweep = 20000
 
+
+# Should script be paused if database does not exist or its creation
+# did not finished properly (e.g. was interrupted; 1=yes; 0=no) ?
+# You have to set this parameter to 0 if this batch is launched by 
+# scheduler on regular basis. Otherwise it is recommended to set 1.
+
+wait_if_not_exists = 0
+
 # Should script be PAUSED after creation database objects before starting
 # initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
 # NOTE: test database will be (re-)created only when it does not contain all necessary objects.
@@ -173,7 +181,9 @@ wait_after_create = 0
 # Number of documents, total of all types, for initial data population.
 # Command scenario will compare number of existing document with this
 # and create new ones only if <init_docs> still greater than obtained.
-# Recommended value: at least 30000 
+# Recommended value: 
+# 1. For benchmark purposes - at least 30000.
+# 2. For regular running on scheduled basis - at least 1000.
 
 init_docs = 30000
 
@@ -183,7 +193,7 @@ init_docs = 30000
 # this database to 'origin' state. This can save time because of avoiding need
 # to create <init_docs> again:
 
-wait_for_copy = 1
+wait_for_copy = 0
 
 # Do we want to create some DEBUG objects (tables, views and procedures)
 # in order to:
@@ -243,13 +253,20 @@ create_with_compound_columns_order = most_selective_first
 
 make_html=0
 
+# Should final report be saved in file with name which contain info about FB, database, test settings ?
+# If no, leave this parameter commented. In that case final report will be always saved with the same name.
+# If yes, choose format of this name:
+# regular   - appropriate for quick found performance degradation, without details of test settings
+# benchmark - appropriate for analysis when different settings are applied
+# Sample of report name when this parameter = 'regular':
+# 20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on.txt
+# Sample of report name when this parameter = 'benchmark':
+# ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
 
-# Create final report with name which will contain info about FB, database, test settings
-# and two timestamps of workload measuring phase (1=yes, 0=no) ?
-# When parameter is set to 1 final report will has name like this:
-# ss30_fw_off_split_most_selective_1st_separate_idx_load_180m_by_100_att_20151029_1628_20151029_1928.txt 
+# Available options: regular | benchmark, or leave commented (undefined).
 
-file_name_with_test_params = 1
+file_name_with_test_params = regular
+
 
 # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
 # client POSTIE.EXE with arguments that are defined here plus add auto generated subject and

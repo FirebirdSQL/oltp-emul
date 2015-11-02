@@ -705,18 +705,18 @@ gen_working_sql() {
     else
       if [ $idle -gt 0 ]; then
 	    cat <<-EOF >>$sql
-             -- Take pause between transactions. Argument for 'sleep' command
+             -- Take delay between transactions. Argument for 'sleep' command
              -- is in SECONDS and is equal to 'idle_time' parameter in config.
              set list on;
              commit;
-             select current_timestamp as "Pause $idle seconds starting at: "
+             select current_timestamp as "Delay $idle seconds starting at: "
              from rdb\$database;
              commit;
              ----------------------------- p a u s e--------------------------------
              shell sleep $idle;
              -----------------------------------------------------------------------
              set transaction read only read committed;
-             select current_timestamp as "Pause $idle seconds finished at: "
+             select current_timestamp as "Delay $idle seconds finished at: "
              from rdb\$database;
              commit;
              set list off;
@@ -724,7 +724,7 @@ gen_working_sql() {
       else
 	    cat <<-EOF >>$sql
 
-             -- Pause between transactions is DISABLED.
+             -- Delay between transactions is DISABLED.
              -- For enabling them set value of 'idle_time' parameter
              -- in test config file to some value > 0.
 
@@ -1326,6 +1326,8 @@ add_init_docs() {
     k=$(( k+1 ))
 
   done
+  rm -f $tmpsql $tmplog $tmpchk $tmpclg
+  
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 } # end of add_init_docs()
@@ -1491,7 +1493,7 @@ tmpdir=${tmpdir%/}
 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
 echo -ne "Check that all necessary environment variables have values. . . "
-vars=(tmpdir fbc is_embed dbnm create_with_fw create_with_sweep wait_after_create no_auto_undo detailed_info create_with_debug_objects mon_unit_perf init_docs init_buff wait_for_copy warm_time test_time idle_time create_with_split_heavy_tabs create_with_separate_qdistr_idx)
+vars=(tmpdir fbc is_embed dbnm create_with_fw create_with_sweep wait_if_not_exists wait_after_create no_auto_undo detailed_info create_with_debug_objects mon_unit_perf init_docs init_buff wait_for_copy warm_time test_time idle_time create_with_split_heavy_tabs create_with_separate_qdistr_idx)
 for i in ${vars[@]}; do
   #echo -e $i=\|${!i}\|
   [[ -z ${!i} ]] && msg_novar $i $cfg && exit 1
@@ -1522,14 +1524,14 @@ else
   $fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd info_server_version 1>$tmplog 2>$tmperr
 fi
 [[ -s $tmperr ]] && msg_noserv
-#cat $tmplog
-while read a b c
+while read a b c d
 do
   fbb=$c
   fbo=$(echo -n $fbb | cut -c1-2)
 done<$tmplog
 # output server version:
 echo -e Build No. $fbb
+
 rm -f $tmplog $tmperr
 
 tmpsql=$tmpdir/tmp_init_data_pop.sql
@@ -1657,7 +1659,9 @@ if [ $(grep -i "Error while trying to open" $tmperr | wc -l) -gt 0 ]; then
 		Press ENTER for attempt to CREATE it, Ctrl-C to QUIT.
 		#####################################################
 	EOF
-  pause
+  if [ $wait_if_not_exists = 1 ]; then
+    pause
+  fi
 
   #........................  c r e a t e    d a t a b a s e  ..............
   db_create
@@ -1694,10 +1698,12 @@ else
     echo -e Database: \>$dbnm\< -- DOES exist but
     echo process of creation its objects was not completed.
     echo
-    echo -e '################################################################################'
-    echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
-    echo -e '################################################################################'
-    pause
+    if [ $wait_if_not_exists = 1 ]; then
+        echo -e '################################################################################'
+        echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+        echo -e '################################################################################'
+        pause
+    fi
 
     # ....................... b u i l d    d b    o b j e c t s .............
     db_build
@@ -1713,10 +1719,12 @@ if [ $wait_after_create = 1 ]; then
     echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
     echo "######################################"
     echo
-    echo Change config setting 'wait_after_create' to 0 in order to remove this pause.
-    echo
-    echo Press ENTER to go on. . .
-    pause
+    if [ $wait_if_not_exists = 1 ]; then
+        echo Change config setting 'wait_after_create' to 0 in order to remove this pause.
+        echo
+        echo Press ENTER to go on. . .
+        pause
+    fi
 fi
 
 # ....................... check that file 'stoptest.txt' is EMPTY .....................
@@ -1783,11 +1791,11 @@ if [ $init_docs -gt 0 ]; then
   run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
   echo Command:
   echo $run_fbs
-  $run_fbs 1>>$tmplog 2>>$tmperr
+  $run_fbs
 
   echo $(date +'%y%m%d_%H%M%S') FINISH initial data population.
   echo
-  if [ $wait_for_copy = 1 ]; then
+  if [ $wait_if_not_exists = 1 && $wait_for_copy = 1 ]; then
     echo "### NOTE ###"
     echo
     echo It\'s a good time to make COPY of test database in order 
@@ -1816,32 +1824,43 @@ launch_preparing $sql
 #####################
 
 # 30.10.2015
-if [ $file_name_with_test_params = 1 ]; then
+if [ -n "$file_name_with_test_params" ]; then
 	cat <<- EOF > $tmpchk
 		set heading off;
-		select * from srv_get_report_name($winq);
+		select report_file from srv_get_report_name('$file_name_with_test_params', '$fbb', $winq);
+		set heading on;
 	EOF
   run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
   $run_isql 1>$tmpclg 2>$tmperr
-  log_with_params_in_name=`grep -v "^$" $tmpclg`
-  echo Final report will be saved with name $log_with_params_in_name
+
+  log_with_params_in_name=`grep -v "^$" $tmpclg | sed 's/[ \t]*$//'`
+
+  echo Final report will be saved in:
+  echo +++++++++++++++++++++++++++++++++++++++++++++++++
+  echo DIR.: $tmpdir
+  echo FILE: $log_with_params_in_name.txt
+  echo +++++++++++++++++++++++++++++++++++++++++++++++++
+  rm -f $tmpchk $tmpclg $tmperr
 else
-  echo Final report see in file: $log4all
+  echo +++++++++++++++++++++++++++++++++++++++++++++++++++++
+  echo Final report will be saved in: $log4all
+  echo +++++++++++++++++++++++++++++++++++++++++++++++++++++
 fi
-echo ------------------------------------------------------------------
+echo
 export prf="$tmpdir/$mode"_"$HOSTNAME"
 echo Main SQL script: $sql
-echo Number of launched ISQL sessions: $winq
-
 #rm -f $tmpsql $tmplog
 
-echo launch $winq isqls. . .
+echo -e '#######################'
+echo Launch $winq isqls. . .
+echo -e '#######################'
+echo
 
 for i in `seq $winq`
 do
     # 10.02.2015: it's wrong to start separate session via `sh`:
     # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params}&
-    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params}
+    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}&
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}
 done
 echo Done script $0

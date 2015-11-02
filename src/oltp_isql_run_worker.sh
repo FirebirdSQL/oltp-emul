@@ -10,7 +10,10 @@ sql=$2
 prf=$3
 sid=$4 # ISQL window (session) sequential number
 rpt=$5 # final report where sid N1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
-file_name_with_test_params=$6
+fname=$6 # file_name_with_test_params
+build=$7
+
+#echo build=$build
 
 #echo -e Config file \>$cfg\< parsing result:
 shopt -s extglob
@@ -361,7 +364,6 @@ do
     echo>>$plog
     echo $(date +'%H:%M:%S'). $msg - FINISH.
 
-
     rm -f $psql
 	cat <<- "EOF" >>$psql
 		set heading off;
@@ -486,23 +488,30 @@ do
     rm -f $psql
 
 
-    if [ $file_name_with_test_params = 1 ]; then
+    if [ -n "$fname" ] ; then
 		cat <<- EOF > $psql
 		  set heading off;
-		  select * from srv_get_report_name($winq);
+		  select report_file from srv_get_report_name('$fname', '$build', $winq);
 		EOF
-		echo Evaluate new name of final report. Change config parameter file_name_with_test_params to 0 if this is not needed.
+		echo Evaluate new name of final report.
+		echo Comment config parameter 'file_name_with_test_params' if this is not needed.
+
 		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
 		$run_isql 1>$tmpsidlog 2>&1
-		log_with_params_in_name=`grep -v "^$" $tmpsidlog`
-		log_with_params_in_name=$tmpdir/$log_with_params_in_name
+		# Wrong: one trailing space will be included into varable content:
+		# ----- do not --- og_with_params_in_name=`grep -v "^$" $tmpsidlog`
+
+		log_with_params_in_name=`grep -v "^$" $tmpsidlog | sed 's/[ \t]*$//'`
+		log_with_params_in_name=$tmpdir/$log_with_params_in_name.txt
+		
 		rm -f $log_with_params_in_name $psql $tmpsidlog
 		mv $plog $log_with_params_in_name
 		plog=$log_with_params_in_name
 	else
 		echo New report has been saved with the same name as old one thus overwriting it.
-		echo Change config parameter file_name_with_test_params to 1 if every new report should be saved to new name
-		echo which will contain info about current FB, DB and test settings plus timestamps of test measuring phase.
+		echo Change config parameter 'file_name_with_test_params' to 'regular' or 'benchmark'
+		echo if every new report should be saved to new name. In that case final report file
+		echo will contain info about current FB, DB and test settings.
 	fi
 	echo
 

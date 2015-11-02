@@ -3743,6 +3743,8 @@ returns (
     successful_times_done int
 )
 as
+    declare v_sort_prior int;
+    declare v_overall_performance double precision;
     declare v_all_minutes int;
     declare v_succ_all_times int;
     declare v_this dm_dbobj = 'srv_mon_perf_total';
@@ -3818,6 +3820,7 @@ begin
             ,avg_times_per_minute
             ,avg_elapsed_ms
             ,successful_times_done
+            ,sort_prior
         from (
             select
                 0 as sort_prior
@@ -3845,10 +3848,28 @@ begin
             ,avg_times_per_minute
             ,avg_elapsed_ms
             ,successful_times_done
-    do
+            ,v_sort_prior
+    do begin
+        if ( v_sort_prior = 0 ) then -- save value to be written into perf_log
+            v_overall_performance = avg_times_per_minute;
         suspend;
+    end
 
     delete from tmp$perf_log p  where p.stack = :v_this;
+
+    begin
+        -- 02.11.2015: save overall performance value so it can be used later:
+        update perf_log p set aux1 = :v_overall_performance
+        where p.unit = 'perf_watch_interval'
+        order by dts_beg desc rows 1;
+    when any do
+        begin
+            -- lock/update conflict can be here with another ISQL session with SID #1
+            -- (running on other machine) that makes this report at the same time.
+            -- We suppress this exception because this record will anyway contain
+            -- value that we want to save.
+        end
+    end
 
 end
 
@@ -5093,16 +5114,26 @@ end
 ^ -- srv_mon_stat_per_tables
 
 create or alter procedure srv_get_report_name(
-     a_num_of_sessions int default -1
+     a_format varchar(20) default 'regular' -- 'regular' | 'benchmark'
+    ,a_build varchar(15) default '' -- WI-V3.0.0.32136 ==> '32136'
+    ,a_num_of_sessions int default -1
     ,a_test_time_minutes int default -1
     ,a_prefix varchar(255) default ''
     ,a_suffix varchar(255) default ''
-    ,a_file_ext varchar(255) default '.txt'
 ) returns (
-    report_file varchar(255)
+    report_file varchar(255) -- full name of final report
+    ,start_at varchar(15) -- '20150223_1527': timestamp of test_time phase start
+    ,fb_arch varchar(50) -- 'ss30' | 'sc30' | 'cs30'
+    ,overall_perf varchar(50) -- 'score_07548'
+    ,fw_setting varchar(20) -- 'fw__on' | 'fw_off'
+    ,load_time varchar(50) -- '03h00m'
+    ,load_att varchar(50) -- '150_att'
+    ,heavy_load_ddl varchar(50) -- only when a_format='benchmark': solid' | 'split'
+    ,compound_1st_col varchar(50) -- only when a_format='benchmark': 'most__selective_1st' | 'least_selective_1st'
+    ,compound_idx_num varchar(50) -- only when a_format='benchmark': 'one_index' | 'two_indxs'
 )
 as
-    declare v_arch varchar(255);
+    declare v_test_finish_state varchar(50);
     declare v_tab_name dm_dbobj;
     declare v_idx_name dm_dbobj;
     declare v_min_idx_key varchar(255);
@@ -5111,62 +5142,61 @@ as
     declare v_num_of_sessions int;
     declare v_dts_beg timestamp;
     declare v_dts_end timestamp;
+    declare k smallint;
 begin
 
-    -- Aux. SP for returning FILE NAME of final report which does contain all valuable FB, database and test params,
-    -- and also two timestamps (start and end of of test measure phase).
+    -- Aux. SP for returning FILE NAME of final report which does contain all
+    -- valuable FB, database and test params
     -- Sample:
-    -- ss30_fw_off_split_most_selective_1st_separate_idx_load_180m_by_100_att_20151029_1628_20151029_1928.txt 
+    -- select * from srv_get_report_name('regular', 31236)
+    -- select * from srv_get_report_name('benchmark', 31236)
 
-    select p.fb_arch from sys_get_fb_arch p into v_arch;
-    report_file =
-        iif( v_arch containing 'superserver' or upper(v_arch) starting with upper('ss'), 'ss'
-            ,iif( v_arch containing 'superclassic' or upper(v_arch) starting with upper('sc'), 'sc'
-                ,iif( v_arch containing 'classic' or upper(v_arch) starting with upper('cs'), 'cs'
+    select p.fb_arch from sys_get_fb_arch p into fb_arch;
+    fb_arch =
+        iif( fb_arch containing 'superserver' or upper(fb_arch) starting with upper('ss'), 'ss'
+            ,iif( fb_arch containing 'superclassic' or upper(fb_arch) starting with upper('sc'), 'sc'
+                ,iif( fb_arch containing 'classic' or upper(fb_arch) starting with upper('cs'), 'cs'
                     ,'fb'
                     )
                 )
            )
         || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
-        || '_fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off')
-           ;
+    ;
+    fw_setting='fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off');
 
-    for
-        select
-            tab_name,
-            min(idx_key) as min_idx_key,
-            max(idx_key) as max_idx_key
-        from z_qd_indices_ddl z
-        group by tab_name
-        rows 1
-    into
-        v_tab_name, v_min_idx_key, v_max_idx_key
-    do begin
+    select
+        'score_'||lpad( cast( coalesce(aux1,0) as int ), iif( coalesce(aux1,0) < 99999, 5, 18 ) , '0' )
+        ,datediff(minute from p.dts_beg to p.dts_end)
+        ,p.dts_beg, p.dts_end
+    from perf_log p
+    where p.unit = 'perf_watch_interval'
+    order by p.dts_beg desc
+    rows 1
+    into overall_perf, v_test_time, v_dts_beg, v_dts_end;
 
-        report_file = report_file || iif( upper(v_tab_name)=upper('qdistr'), '_solid', '_split' );
+    v_test_finish_state = null;
+    if ( a_test_time_minutes = -1 ) then -- call AFTER test finish, when making final report
+        begin
+            select 'ABEND_GDS_'||p.fb_gdscode
+            from perf_log p
+            where p.unit = 'sp_halt_on_error' and p.fb_gdscode >= 0
+            order by p.dts_beg desc
+            rows 1
+            into v_test_finish_state; -- will remain NULL if not found ==> test finished NORMAL.
+        end
+    else -- a_test_time_minutes > = 0
+        begin
+           -- call from main batch (1run_oltp_emul) just BEFORE all ISQL
+           -- sessions will be launched: display *estimated* name of report
+            overall_perf = lpad('',5,'0');
+            v_test_time = a_test_time_minutes;
+        end
 
-        if ( upper(v_min_idx_key) starting with upper('ware_id') or upper(v_max_idx_key) starting with upper('ware_id')  ) then
-            report_file = report_file || '_most__sel_1st';
-        else if ( upper(v_min_idx_key) starting with upper('snd_optype_id') or upper(v_max_idx_key) starting with upper('snd_optype_id')  ) then
-            report_file = report_file || '_least_sel_1st';
+    select left(ansi_dts, 13) from sys_timestamp_to_ansi( coalesce(:v_dts_beg, current_timestamp))
+    into start_at;
 
-        if ( v_min_idx_key = v_max_idx_key ) then
-            report_file = report_file || '_one_index';
-        else
-            report_file = report_file || '_two_indxs';
-    end
-
-    if ( a_test_time_minutes = -1 ) then
-        select datediff(minute from p.dts_beg to p.dts_end), p.dts_beg, p.dts_end
-        from perf_log p
-        where p.unit = 'perf_watch_interval'
-        order by p.dts_beg desc
-        rows 1
-        into v_test_time, v_dts_beg, v_dts_end;
-    else
-        v_test_time = a_test_time_minutes;
-
-    report_file = report_file || '_loadtime_'||coalesce(v_test_time, '0')||'m';
+    v_test_time = coalesce(v_test_time,0);
+    load_time = lpad(cast(v_test_time/60 as int),2,'_')||'h' || lpad(mod(v_test_time,60),2,'0')||'m';
 
     if ( a_num_of_sessions = -1 ) then
         -- Use *actual* number of ISQL sessions that were participate in this test run.
@@ -5179,22 +5209,67 @@ begin
         -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
         v_num_of_sessions= a_num_of_sessions;
 
-    report_file = report_file || '_by_'||coalesce(v_num_of_sessions, '0')||'_att';
+    load_att = lpad( coalesce(v_num_of_sessions, '0'), 3, '_') || '_att';
+
+    k = position('.' in reverse(a_build));
+    a_build = iif( k > 0, reverse(left(reverse(a_build), k - 1)), a_build );
+
+
+    if ( a_format = 'regular' ) then
+        -- 20151102_2219_score_06578_build_32136_ss30__0h30m__10_att_fw_off.txt 
+        report_file =
+            start_at
+            || '_' || coalesce( v_test_finish_state, overall_perf )
+            || iif( a_build > '', '_build_' || a_build, '' )
+            || '_' || fb_arch
+            || '_' || load_time
+            || '_' || load_att
+            || '_' || fw_setting
+        ;
+    else if (a_format = 'benchmark') then
+        begin
+            for
+                select
+                    tab_name,
+                    min(idx_key) as min_idx_key,
+                    max(idx_key) as max_idx_key
+                from z_qd_indices_ddl z
+                group by tab_name
+                rows 1
+            into
+                v_tab_name, v_min_idx_key, v_max_idx_key
+            do begin
+        
+                heavy_load_ddl = iif( upper(v_tab_name)=upper('qdistr'), 'solid', 'split' );
+        
+                if ( upper(v_min_idx_key) starting with upper('ware_id') or upper(v_max_idx_key) starting with upper('ware_id')  ) then
+                    compound_1st_col = 'most__sel_1st';
+                else if ( upper(v_min_idx_key) starting with upper('snd_optype_id') or upper(v_max_idx_key) starting with upper('snd_optype_id')  ) then
+                    compound_1st_col = 'least_sel_1st';
+        
+                if ( v_min_idx_key = v_max_idx_key ) then
+                    compound_idx_num = 'one_index';
+                else
+                    compound_idx_num = 'two_indxs';
+            end
+            -- ss30_fw__on_solid_most__sel_1st_two_indxs_loadtime_180m_by_100_att_20151102_0958_20151102_1258.txt
+            report_file =
+                fb_arch
+                || '_' || fw_setting
+                || '_' || heavy_load_ddl -- 'solid' | 'split'
+                || '_' || compound_1st_col -- 'most__sel_1st' | 'least_sel_1st'
+                || '_' || compound_idx_num -- 'one_index' | 'two_indxs'
+                || '_' || coalesce( v_test_finish_state, overall_perf )
+                || iif( a_build > '', '_build_' || a_build, '' )
+                || '_' || load_time
+                || '_' || load_att
+                || '_' || start_at
+            ;
+        end
 
     if ( trim(a_prefix) > '' ) then report_file = trim(a_prefix) || '-' || report_file;
+
     if ( trim(a_suffix) > '' ) then report_file = report_file || '-' || trim(a_suffix);
-
-    if ( :v_dts_beg is not null ) then
-        report_file =
-            report_file
-            || '_' || (select left(ansi_dts, 13) from sys_timestamp_to_ansi(:v_dts_beg) );
-
-    if ( :v_dts_end is not null ) then
-        report_file =
-            report_file
-            || '_' || (select left(ansi_dts, 13) from sys_timestamp_to_ansi(:v_dts_end) );
-
-    report_file = report_file || a_file_ext;
 
     suspend;
 
