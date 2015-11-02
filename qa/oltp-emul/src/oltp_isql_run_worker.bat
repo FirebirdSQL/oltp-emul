@@ -19,6 +19,10 @@ set tmpdir=!%4!
 set sql=!%5!
 set log4all=!%6!
 set lognm=!tmpdir!\%7
+set build=%8
+
+@rem fname = file_name_with_test_params
+set fname=%9
 
 rem %tmpdir%\oltpNN.report.txt - name of file for overall performance report
 rem (do NOT overwrite it here, it has already some info that was added there in 1run*.bat):
@@ -150,10 +154,8 @@ if .%sid%.==.1. (
 @set k=0
 @echo off
 
-@rem debug!! remove after, 17.09.2015 1822
-@rem set initdelay=1
-
-if .%initdelay%.==.. (
+set initdelay=1
+if not .%winq%.==.1. if .%initdelay%.==.. (
    set /a initdelay = 2 + (%random% %% 8^)
 )
 
@@ -324,15 +326,27 @@ if .%sid%.==.1. (
         echo     }
         echo     th {
         echo         padding: 5px; 
-        echo         background: #99CCFF;
+        echo         background: #E6E6FA;
         echo         border: 1px solid black;
         echo     }
         echo     td {
         echo         padding: 4px;
-        echo         background: #CCCCFF;
+        echo         background: FDF5E6;
         echo         border: 1px solid black;
         echo         white-space:nowrap;
         echo     }
+        echo    .success {
+        echo       color: black;
+        echo       background-color: #00FF00;
+        echo    }
+        echo    .warning {
+        echo       color: black;
+        echo       background-color: #FFFF00;
+        echo    }
+        echo    .error {
+        echo       color: black;
+        echo       background-color: #FF0000;
+        echo    }
         echo ^</style^>
         echo ^</head^>
         echo ^<body^>
@@ -355,13 +369,14 @@ if .%sid%.==.1. (
         echo select
         echo     p.fb_arch as fb_architecture
         echo     ,mon$database_name as db_name
-        echo     ,iif(mon$forced_writes=0, 'OFF', 'ON'^) as forced_writes
+        echo     ,iif(mon$forced_writes=0, '$css$warning$OFF', 'ON'^) as forced_writes
         echo     ,mon$sweep_interval as sweep_int
         echo     ,mon$page_buffers as page_buffers
         echo     ,mon$page_size as page_size
         echo from mon$database
         echo left join sys_get_fb_arch p on 1=1;
       ) > %rpt%
+
       call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
       del %rpt% 2>nul
 
@@ -415,16 +430,33 @@ if .%sid%.==.1. (
     ) >> %log4all%
 
     (
+        echo commit;
+        echo create or alter view tmp$for$report$only as
+        echo     select 
+        echo        p.exc_info as finish_state,
+        echo        p.dts_end, p.fb_gdscode, e.fb_mnemona, 
+        echo        coalesce(p.stack,''^) as stack,
+        echo        p.ip,p.trn_id, p.att_id,p.exc_unit
+        echo     from perf_log p
+        echo     left join fb_errors e on p.fb_gdscode = e.fb_gdscode
+        echo     where p.unit = 'sp_halt_on_error'
+        echo     order by p.dts_beg desc
+        echo     rows 1;
+        echo commit;
         echo set list on;
-        echo select 
-        echo    p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona, 
-        echo    coalesce(p.stack,''^) as stack,
-        echo    p.ip,p.trn_id, p.att_id,p.exc_unit
-        echo from perf_log p
-        echo left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-        echo where p.unit = 'sp_halt_on_error'
-        echo order by p.dts_beg desc
-        echo rows 1;
+        echo select
+        echo     x.finish_state
+        echo    ,x.dts_end
+        echo    ,x.fb_gdscode
+        echo    ,x.fb_mnemona
+        echo    ,x.stack
+        echo    ,x.ip 
+        echo    ,x.trn_id 
+        echo    ,x.att_id 
+        echo    ,x.exc_unit
+        echo from tmp$for$report$only x
+        echo ;
+        echo commit;
     ) > %rpt%
     type %rpt% >>%log4all%
 
@@ -434,10 +466,25 @@ if .%sid%.==.1. (
 
     %run_repo% 1>>%log4all% 2>&1
    
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-
+    if .%make_html%.==.1. (
+        (
+          echo select
+          echo     iif(x.finish_state containing 'normal', '$css$success$','$css$error$'^) ^|^| x.finish_state as finish_state
+          echo    ,x.dts_end
+          echo    ,x.fb_gdscode
+          echo    ,x.fb_mnemona
+          echo    ,x.stack
+          echo    ,x.ip 
+          echo    ,x.trn_id 
+          echo    ,x.att_id 
+          echo    ,x.exc_unit
+          echo from tmp$for$report$only x
+          echo ;
+          echo commit;
+        ) > !rpt!
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+    )
     del %rpt% 2>nul
-
 
     (
       echo.
@@ -546,6 +593,10 @@ if .%sid%.==.1. (
       echo from rdb$database
       echo left join srv_mon_perf_total on 1=1;
       echo commit;
+      @rem -- Result: table 'perf_log' contains overall performance value
+      @rem -- which can be found by query:
+      @rem -- select p.aux1 from perf_log p where p.unit = 'perf_watch_interval'
+      @rem -- order by dts_beg desc rows 1;
     ) > %rpt%
 
     type %rpt% >>%log4all%
@@ -811,7 +862,7 @@ if .%sid%.==.1. (
 
     @rem ---------------------------------------------------------------------------
 
-    set msg=MON$DATABASE and VERSION info
+    set msg=MON$DATABASE and FB VERSION info
     (
         echo.
         echo set heading off;
@@ -887,7 +938,127 @@ if .%sid%.==.1. (
             echo !htm_sect! !msg! !htm_secc!>>%htm_file%
             call :add_html_text tmp_file htm_file
         )
-        del %tmp_file%
+
+        set msg=Analyzing DB stat log: obtaining values of total records and versions
+        echo !date! !time!. !msg!...
+
+        copy %tmp_file% %rpt% >nul
+
+        findstr /i /r /c:"[A-Z,0-1,_$]* (" /c:"total records:" /c:"total versions:" %rpt% | findstr /i /v " Index" >%tmp_file%
+
+        del %rpt% 2>nul
+        (
+            for /f "tokens=*" %%a in (%tmp_file%) do (
+                set vprc=0
+                set line=%%a
+                if not .!line!.==.. (
+                
+                    echo !line! | findstr /i /r /b /c:"[A-Z_$0-9]* (" >nul
+                    if not errorlevel 1 (
+                        @rem echo !line!
+                        for /f "tokens=1" %%a in ("!line!") do set tabn=%%a
+                    ) else (
+                
+                      echo !line! | findstr /c:"total records:" >nul
+                      if not errorlevel 1 (
+                        @rem echo !line!
+                        @rem Average record length: 33.52, total records: 50
+                        for /f "tokens=7" %%a in ("!line!") do (
+                          set /a recs=%%a
+                        )
+                      )
+                
+                      echo !line! | findstr /c:"total versions:" >nul
+                      if not errorlevel 1 (
+                        @rem echo !line!
+                        @rem Average version length: 0.00, total versions: 0, max versions: 0
+                        for /f "tokens=7 delims=, " %%a in ("!line!") do (
+                          set /a vers=%%a
+                        )
+                        @rem echo recs=!recs! vers=!vers!
+                        if not .!recs!.==.0. (
+                          set /a vprc=!vers!*100/!recs!
+                          @rem echo vprc=!vprc!
+                          if !vprc! gtr 9 (
+                            set line=!line!. Versions ratio: !vprc!%%
+                            @rem echo !line!
+                          )
+                        )
+                        @rem echo tabn=!tabn! recs=!recs! vers=!vers! vprc=!vprc!%%
+                        @rem echo insert into perf_log(unit, table_name, rec_inserts, rec_updates^) values('!tabn!', !recs!, !vers!^);
+    
+                        echo insert into mon_log_table_stats(id, rowset, table_name, rec_inserts, rec_updates^) 
+                        echo values( -gen_id(g_common,1^), -current_connection, '!tabn!', !recs!, !vers!^); -- NB: 'rowset' is INDEXED field.
+                      )
+                   )
+                )
+            
+            )
+            echo set heading off;
+            echo select -current_connection from rdb$database; -- this will be saved into script env. variable 'xrowset', see below
+            echo set heading on;
+            echo commit;
+        ) >%rpt%
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+        
+        %run_repo% 1>%tmp_file% 2>&1
+        
+        for /f %%x in (%tmp_file%) do set xrowset=%%x
+
+        (
+          echo commit;
+          echo create or alter view tmp$for$report$only as
+          echo select
+          echo     t.table_name
+          echo     ,t.rec_inserts as total_recs
+          echo     ,t.rec_updates as total_vers
+          echo     ,cast( 100.0000 * t.rec_updates / t.rec_inserts  as numeric(14,4^)^) as vers_percent
+          echo from mon_log_table_stats t
+          echo where 
+          echo    t.rowset=!xrowset!
+          echo    and t.rec_inserts ^> 0
+          echo order by t.table_name;
+          echo commit;
+          echo set width table_name 31;
+          echo select * from tmp$for$report$only; 
+          echo commit;
+        ) > %rpt%
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+        %run_repo% 1>%tmp_file% 2>&1
+        
+        (
+          echo.
+          echo !msg!
+        ) >>%log4all%
+
+        type %tmp_file% >>%log4all%
+
+        if .%make_html%.==.1. (
+           echo !htm_sect! !msg! !htm_secc! >>%htm_file%
+
+           (
+             echo select
+             echo     x.table_name
+             echo    ,x.total_recs
+             echo    ,x.total_vers
+             echo    ,iif(x.vers_percent ^> 500, '$css$error$', iif(x.vers_percent ^> 50, '$css$warning$', ''^)^) ^|^| x.vers_percent as vers_percent
+             echo from tmp$for$report$only x
+             echo ;
+             echo commit;
+             echo delete from mon_log_table_stats t
+             echo where t.rowset=!xrowset!
+             echo ;
+           ) > !rpt!
+
+           call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        )
+
+        del %tmp_file% 2>nul
+        del %rpt% 2>nul
 
     ) else (
 
@@ -925,9 +1096,32 @@ if .%sid%.==.1. (
         ) > %tmp_file%
 
         type %tmp_file% >>%log4all%
+
+        @rem 16:06:17.25 Relation 261 (XQD_1000_3300) : 1 ERRORS found 
+
         if .%make_html%.==.1. (
             echo !htm_sect! !msg! !htm_secc!>>%htm_file%
-            call :add_html_text tmp_file htm_file
+            del %rpt% 2>nul
+            for /f "tokens=*" %%a in (!tmp_file!) do (
+              set line=%%a
+              if not .!line!.==.. (
+                @rem change after to 3 and 4
+                set line=!line:depth: 1,=!
+                if not !line!==%%a (
+                  set line=$css$warning$%%a
+                ) else (
+                  set line=!line:depth: 2,=!
+                  if not !line!==%%a set line=$css$error$%%a
+                )
+                echo !line!>>%rpt%
+              ) else (
+                echo.>>%rpt%
+              )
+            )
+            call :add_html_text rpt htm_file
+            del %rpt% 2>nul
+
+            @rem call :add_html_text tmp_file htm_file
         )
         
         echo !run_db_validat! val_tab_excl !skip_val_list! > %tmpdir%\tmp_validation.bat
@@ -936,7 +1130,21 @@ if .%sid%.==.1. (
         type %tmp_file% >>%log4all%
 
         if .%make_html%.==.1. (
-            call :add_html_text tmp_file htm_file
+
+            del %rpt% 2>nul
+            for /f "tokens=*" %%a in (!tmp_file!) do (
+              set line=%%a
+              if not .!line!.==.. (
+                set line=!line:ERRORS found=!
+                if not !line!==%%a set line=$css$error$%%a
+                echo !line!>>%rpt%
+              ) else (
+                echo.>>%rpt%
+              )
+            )
+            call :add_html_text rpt htm_file
+            del %rpt% 2>nul
+            @rem call :add_html_text tmp_file htm_file
         )
         echo End of database validation report.>>%log4all%
 
@@ -1141,7 +1349,8 @@ if .%sid%.==.1. (
 
     (
         echo set heading off; 
-        echo select * from srv_get_report_name;
+        echo select report_file from srv_get_report_name('%fname%', '%fbb%', %winq%^);
+        echo set heading on; 
     ) > %rpt%
 
     set run_repo=%fbc%\isql %dbconn% -i %rpt% %dbauth%
@@ -1149,12 +1358,20 @@ if .%sid%.==.1. (
     
     del %rpt% 2>nul
 
-    if .%file_name_with_test_params%.==.1. (
+    if not .%fname%.==.. (
         for /f %%a in (!tmp_file!) do (
             set name_for_saving=!tmpdir!\%%a
-            call :repl_with_bound_quotes !name_for_saving! name_for_saving
-            copy %log4all% !name_for_saving!
-            if exist !name_for_saving! del %log4all% 2>nul
+            set final_txt=!name_for_saving!.txt
+            call :repl_with_bound_quotes !final_txt! final_txt
+            copy %log4all% !final_txt! >nul
+            if exist !final_txt! del %log4all% 2>nul
+    
+            if .%make_html%.==.1. (
+              set final_htm=!name_for_saving!.html
+              call :repl_with_bound_quotes !final_htm! final_htm
+              copy %htm_file% !final_htm! >nul
+              if exist !final_htm! del %htm_file% 2>nul
+            )
         )
     ) else (
         set name_for_saving=%log4all%
@@ -1350,8 +1567,23 @@ goto:eof
     if not defined add_br set add_br=1
     (
         for /f "tokens=*" %%a in ('type %tmp_file%') do (
+            set line=%%a
+            if not .!line!.==.. (
+              set ccss=!line:$css$error$=!
+              if not !ccss!==!line! (
+                set line=^<span class="error"^>!ccss!^</span^>
+              ) else (
+                set ccss=!line:$css$warning$=!
+                if not !ccss!==!line! (
+                  set line=^<span class="warning"^>!ccss!^</span^>
+                ) else (
+                  set ccss=!line:$css$success$=!
+                  if not !ccss!==!line! set line=^<span class="success"^>!ccss!^</span^>
+                )
+              )
+            )
             @rem do NOT add leading BR tag: excessive empty line will appear.
-            if .%add_br%.==.1. ( echo %%a^<br /^> ) else ( echo %%a )
+            if .%add_br%.==.1. ( echo !line!^<br /^> ) else ( echo !line! )
         )
     ) >> %htm_file%
 
@@ -1368,6 +1600,8 @@ goto:eof
     set dbauth=!%4!
     set sql_in=!%5!
     set html_file=!%6!
+
+    set dbg=%7
 
     rem %fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
@@ -1533,10 +1767,23 @@ goto:eof
               set cell=!cell:^&=^&amp;!
               set cell=!cell:^<=^&lt;!
               set cell=!cell:^>=^&gt;!
+              @rem $css$success$','$css$error$
 
               call :trim cell !cell!
-          )
-          
+
+              set ccss=!cell:$css$error$=!
+              if not !ccss!==!cell! (
+                set cell=^<span class="error"^>!ccss!^</span^>
+              ) else (
+                set ccss=!cell:$css$warning$=!
+                if not !ccss!==!cell! (
+                  set cell=^<span class="warning"^>!ccss!^</span^>
+                ) else (
+                  set ccss=!cell:$css$success$=!
+                  if not !ccss!==!cell! set cell=^<span class="success"^>!ccss!^</span^>
+                )
+              )
+          ) 
           set is_num=1
           call :chk4num fld_num num_list is_num
 
