@@ -119,14 +119,20 @@ if .%is_embed%.==.1. (
 :: fbsvcrun="C:\Program Files\Firebird Database Server 2.5.5\bin\fbsvcmgr" localhost/3255:service_mgr -user SYSDBA -password masterke
 
 set run_get_fb_ver=%fbsvcrun% info_server_version info_implementation
-set run_get_fb_log=%fbsvcrun% action_get_fb_log
+
+if .%fb%.==.30. (
+    set run_get_fb_log=%fbsvcrun% action_get_fb_log
+) else (
+    set run_get_fb_log=%fbsvcrun% action_get_ib_log
+)
+
 set run_get_db_sts=%fbsvcrun% action_db_stats sts_data_pages sts_idx_pages sts_record_versions dbname %dbnm%
 set run_db_validat=%fbsvcrun% action_validate dbname %dbnm% val_lock_timeout 1 
 set run_fc_compare=fc.exe /n %fblog_start% %fblog_final%
 
 if .%sid%.==.1. (
-  echo This ISQL session will make performance report after test make selfstop.>>%sts%
-  if not .%fb%.==.25. (
+    echo This ISQL session will make performance report after test make selfstop.>>%sts%
+
     set msg=Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test.
     echo !msg!
     echo !msg!>>%log4all%
@@ -147,8 +153,8 @@ if .%sid%.==.1. (
     dir /-c %fblog_start% | findstr /i /c:"%fblog_begnm%" 1>>%log4all% 2>&1
     dir /-c %fblog_start% | findstr /i /c:"%fblog_begnm%" 1>>%log4tmp% 2>&1
     echo.>>%log4all%
-  )
-  echo %date% %time%. Preparing for test finished. Now launch ISQL sessions. >>%log4tmp%
+  
+    echo %date% %time%. Preparing for test finished. Now launch ISQL sessions. >>%log4tmp%
 )
 
 @set k=0
@@ -331,7 +337,7 @@ if .%sid%.==.1. (
         echo     }
         echo     td {
         echo         padding: 4px;
-        echo         background: FDF5E6;
+        echo         background: #FDF5E6;
         echo         border: 1px solid black;
         echo         white-space:nowrap;
         echo     }
@@ -1161,77 +1167,73 @@ if .%sid%.==.1. (
        if .%make_html%.==.1. echo !htm_sect! !msg! !htm_secc!>>%htm_file%
     )
 
-    if not .%fb%.==.25. (
+    set msg=Differences between old and current firebird.log
+    echo !date! !time!. Generating report "!msg!"...
 
-        set msg=Differences between old and current firebird.log
-        echo !date! !time!. Generating report "!msg!"...
+    (
+        echo.
+        echo ###################################################################################
+        echo ###  C o m p a r i s o n    o f    o l d   a n d   n e w    f i r e b i r d . l o g
+        echo ###################################################################################
+        echo.
+        echo Gathering firebird.log AFTER test finish.
+        echo ++++++++++++++++++++++++++
+        echo Command: !run_get_fb_log!
+        echo ++++++++++++++++++++++++++
+        echo Result:
+    ) > %tmp_file%
 
-        set run_cmd=%fbsvcrun% action_get_fb_log
-        (
-          echo.
-          echo ###################################################################################
-          echo ###  C o m p a r i s o n    o f    o l d   a n d   n e w    f i r e b i r d . l o g
-          echo ###################################################################################
-          echo.
-          echo Gathering firebird.log AFTER test finish.
-          echo ++++++++++++++++++++++++++
-          echo Command: !run_cmd!
-          echo ++++++++++++++++++++++++++
-          echo Result:
-        ) > %tmp_file%
+    type %tmp_file% >>%log4all%
 
-        type %tmp_file% >>%log4all%
+    %run_get_fb_log% 1>%fblog_final% 2>&1
 
-        %run_get_fb_log% 1>%fblog_final% 2>&1
-
-        (
-            echo %time%. Got:
-            for /f "delims=" %%a in ('find /v /c "" %fblog_final%') do echo STDOUT: %%a (number of rows in extracted log^)
-        ) 1>%tmp_file% 2>&1
+    (
+        echo %time%. Got:
+        for /f "delims=" %%a in ('find /v /c "" %fblog_final%') do echo STDOUT: %%a (number of rows in extracted log^)
+    ) 1>%tmp_file% 2>&1
 
 
-        (
-            echo.
-            echo Obtained firebird.log info:
-            echo Result of DIR command for firebird.log AFTER test finish:
-            dir /-c %fblog_final% | findstr /i /c:"%fblog_endnm%"
-        )>>%tmp_file% 2>&1
+    (
+        echo.
+        echo Obtained firebird.log info:
+        echo Result of DIR command for firebird.log AFTER test finish:
+        dir /-c %fblog_final% | findstr /i /c:"%fblog_endnm%"
+    )>>%tmp_file% 2>&1
 
-        (
-            echo. 
-            echo End of gathering firebird.log AFTER test finish.
-        ) >>%tmp_file%
+    (
+        echo. 
+        echo End of gathering firebird.log AFTER test finish.
+    ) >>%tmp_file%
 
-        type %tmp_file% >>%log4all%
-        if .%make_html%.==.1. (
-          echo !htm_sect! !msg! !htm_secc!>>%htm_file%
-	  call :add_html_text tmp_file htm_file
-        )
+    type %tmp_file% >>%log4all%
+    if .%make_html%.==.1. (
+        echo !htm_sect! !msg! !htm_secc!>>%htm_file%
+        call :add_html_text tmp_file htm_file
+    )
 
-        set msg=Comparison of old and new firebird.log (get messages that appeared during test^):
-        set run_cmd=fc.exe /n %fblog_start% %fblog_final%
+    set msg=Comparison of old and new firebird.log (get messages that appeared during test^):
+    set run_cmd=fc.exe /n %fblog_start% %fblog_final%
 
-        (
-          echo.
-          echo !msg!
-          echo.
-          echo ++++++++++++++++++++++++++
-          echo Command: !run_cmd!
-          echo ++++++++++++++++++++++++++
-          echo.
-          echo +++ Result of comparison +++
-        ) >>%log4all%
+    (
+        echo.
+        echo !msg!
+        echo.
+        echo ++++++++++++++++++++++++++
+        echo Command: !run_cmd!
+        echo ++++++++++++++++++++++++++
+        echo.
+        echo +++ Result of comparison +++
+    ) >>%log4all%
 
-        %run_fc_compare% 1>%tmp_file% 2>&1
+    %run_fc_compare% 1>%tmp_file% 2>&1
 
-        echo +++ end of comparison +++>>%tmp_file%
+    echo +++ end of comparison +++>>%tmp_file%
 
-        type %tmp_file% >>%log4all%
+    type %tmp_file% >>%log4all%
 
-        if .%make_html%.==.1. (
-          echo !htm_sect! !msg! !htm_secc!>>%htm_file%
-	  call :add_html_text tmp_file htm_file
-        )
+    if .%make_html%.==.1. (
+        echo !htm_sect! !msg! !htm_secc!>>%htm_file%
+        call :add_html_text tmp_file htm_file
     )
 
     (
@@ -1272,8 +1274,11 @@ if .%sid%.==.1. (
 
     (
           echo.
-          echo -- Checking query:
-          echo set list on;
+          echo create or alter view tmp$for$report$only as
+          echo select 
+          echo     x.severe_errors_occured
+          echo    ,iif( x.severe_errors_occured = 1, 'SEVERE_ERRORS_EXIST!', 'NO_SEVERE_ERRORS_FOUND' ^) as errors_checking_result
+          echo from (
           echo select iif( exists( select *
           echo                     from perf_log p
           echo                     where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
@@ -1285,11 +1290,19 @@ if .%sid%.==.1. (
           echo                             order by x.dts_beg desc
           echo                             rows 1
           echo                         ^)
-          echo                  ^),
-          echo             'SEVERE_ERRORS_EXIST!',
-          echo             'NO_SEVERE_ERRORS_FOUND' ^) as errors_checking_result
-          echo from rdb$database;
+          echo                  ^)
+          echo              ,1
+          echo              ,0 
+          echo         ^) as severe_errors_occured
+          echo from rdb$database
+          echo ^) x;
+          echo commit;
+          echo -- Checking query:
+          echo set list on;
+          echo select x.errors_checking_result from tmp$for$report$only x;
+          echo commit;
     ) > %rpt%
+
 
     if /i .%remove_isql_logs%.==.never. (
         set msg=Logs of every ISQL session are preserved, pattern: %log_ptn% - see config setting 'remove_isql_logs'
@@ -1303,11 +1316,19 @@ if .%sid%.==.1. (
     )
 
     if .%remove_isql_logs%.==.if_no_severe_errors. (
+
       %run_repo% 1>%tmp_file% 2>&1
       
       type %tmp_file% >> %log4all%
 
       if .%make_html%.==.1. (
+            (
+              echo select iif(x.severe_errors_occured = 1, '$css$error$', '$css$success$'^) ^|^| x.errors_checking_result as errors_checking_result
+              echo from tmp$for$report$only x;
+              echo commit;
+              echo drop view tmp$for$report$only;
+              echo commit;
+            ) > !rpt!
             echo !htm_repn! %msg%: !htm_repc! >>%htm_file%
             call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
       )
