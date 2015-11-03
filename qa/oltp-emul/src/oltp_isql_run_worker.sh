@@ -69,8 +69,9 @@ tmpsiderr=$tmpdir/tmp_$sid.err
 fblog_beg=$tmpdir/fb_log_when_test_started.$fb.log
 fblog_end=$tmpdir/fb_log_when_test_finished.$fb.log
 if [ $sid -eq 1 ]; then
-  if [ $fb != 25 ]; then
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_get_fb_log"
+  [[ $fb -eq 25 ]] && get_log_switch=action_get_ib_log || get_log_switch=action_get_fb_log
+  #if [ $fb != 25 ]; then
+    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
     msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
     echo
     echo $msg
@@ -79,7 +80,7 @@ if [ $sid -eq 1 ]; then
     $run_fbs 1>$fblog_beg 2>>$rpt
     echo Got:>>$rpt
     ls -l $fblog_beg 1>>$rpt 2>&1
-  fi
+  #fi
 fi
 
 echo
@@ -410,8 +411,8 @@ do
     echo $(date +'%H:%M:%S'). $msg - FINISH.
 
 
-    if [ $fb != 25 ]; then
-        run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_get_fb_log"
+    #if [ $fb != 25 ]; then
+        run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
         msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
         echo $msg
         echo $msg >>$plog
@@ -423,9 +424,11 @@ do
         msg="$(date +'%H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
         echo $msg
         echo $msg >>$plog
+        echo --- start of diff output --- >> $plog
         diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$plog 2>&1
+        echo --- end of diff output --- >> $plog
         rm -f $fblog_beg $fblog_end
-    fi
+    #fi
 
     msg="$(date +'%H:%M:%S'). Done."
     echo $msg>>$sts
