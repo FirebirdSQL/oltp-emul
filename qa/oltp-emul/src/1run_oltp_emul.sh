@@ -242,57 +242,76 @@ db_build() {
 
 	EOF
 
-  local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$fb.tmp
-  rm -f $post_handling_out
+	local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$fb.tmp
+	rm -f $post_handling_out
 
-  cat <<- EOF >>$bld
-	set echo off;
-	-- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
-	out $post_handling_out;
+	cat <<- EOF >>$bld
 
-	-- result in .sql:
-	-- out "/var/tmp/.../oltp_split_heavy_tabs_n_25.tmp"; - where n=0|1.
-	-- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
-	in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql";
+		set echo off;
+		-- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
+		out $post_handling_out;
 
-	-- Result: previous OUT-command provides redirection of
-	-- |in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql"|
-	-- to the new temp file which will be applied on the next step.
-	-- Close current output:
-	out;
+		-- result in .sql:
+		-- out "/var/tmp/.../oltp_split_heavy_tabs_n_25.tmp"; - where n=0|1.
+		-- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
+		in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql";
 
-	-- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
-	in $post_handling_out;
+		-- Result: previous OUT-command provides redirection of
+		-- |in "$shdir/oltp_split_heavy_tabs_$create_with_split_heavy_tabs.sql"|
+		-- to the new temp file which will be applied on the next step.
+		-- Close current output:
+		out;
 
-	set term ^;
-	execute block as
-	begin
+		-- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
+		in $post_handling_out;
+
+		set term ^;
+		execute block as
 		begin
-			-- Inject value of config parameter 'mon_unit_perf' into table SETTINGS:
-			update settings set svalue = $mon_unit_perf
-			where working_mode=upper('common') and mcode=upper('enable_mon_query');
-		when any do
-			if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
-			then exception;
-		end
+			begin
+				-- Inject value of config parameter 'mon_unit_perf' into table SETTINGS:
+				update settings set svalue = $mon_unit_perf
+				where working_mode=upper('common') and mcode=upper('enable_mon_query');
+			when any do
+				if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
+				then exception;
+			end
 
-		begin
-			-- Inject value of config parameter `working_mode` into table SETTINGS.
-			-- This will be taken in account in the final script 'oltp_data_filling.sql'
-			-- which created necessary amount of initial data in lookup tables:
-			update settings set svalue=upper('$working_mode')
-			where working_mode=upper('init') and mcode=upper('working_mode');
-		when any do
-			if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
-			then exception;
-		end
-	end
-	^
-	set term ^;
-	commit;
+			begin
+				-- Inject value of config parameter 'working_mode' into table SETTINGS.
+				-- This will be taken in account in the final script 'oltp_data_filling.sql'
+				-- which created necessary amount of initial data in lookup tables:
+				update settings set svalue=upper('$working_mode')
+				where working_mode=upper('init') and mcode=upper('working_mode');
+			when any do
+				if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) 
+				then exception;
+			end
+	EOF
 
-	-- Finish building process: insert custom data to lookup tables:
-	in "$shdir/oltp_data_filling.sql";
+	if [ -n "$use_external_to_stop" ]; then
+		cat <<- EOF >>$bld
+			-- External table for quick force running attaches to stop themselves by OUTSIDE command.
+			-- When all ISQL attachments need to be stopped before warm_time+test_time expired, this
+			-- external table (TEXT file) shoudl be opened in editor and single ascii-character
+			-- has to be typed followed by LF. Saving this file will cause test to be stopped.
+			recreate table ext_stoptest external '$use_external_to_stop' ( s char(2) );
+			commit;
+			-- REDEFINITION of view that is used by every ISQL attachment as 'stop-flag' source:
+			create or alter view v_stoptest as
+			select 1 as need_to_stop
+			from ext_stoptest;
+			commit;
+		EOF
+	fi
+
+	cat <<- EOF >>$bld
+		end
+		^
+		set term ^;
+		commit;
+		-- Finish building process: insert custom data to lookup tables:
+		in "$shdir/oltp_data_filling.sql";
 	EOF
 
   echo Content of building SQL script:
@@ -434,8 +453,8 @@ check_stoptest() {
 
   rm -f $tmpchk $tmpclg $tmperr
   echo set heading off\; set list on\;>>$tmpchk
-  echo -- check that test now can be run: table \'ext_stoptest\' must be EMPTY>>$tmpchk
-  echo -n select iif\( exists\( select \* from ext_stoptest \), >>$tmpchk
+  echo -- check that test now can be run: procedure \'sp_stoptest\' should return EMPTY resultset>>$tmpchk
+  echo -n select iif\( exists\( select \* from sp_stoptest \), >>$tmpchk
   echo -n \'1\', >>$tmpchk
   echo -n \'0\'>>$tmpchk
   echo \) as \"cancel_flag=\" >>$tmpchk
@@ -765,7 +784,7 @@ gen_working_sql() {
  
       if echo $mode | grep -i "^run_test$" > /dev/null ; then #
         cat <<-EOF >>$sql
-			  if ( NOT exists( select * from ext_stoptest ) ) then
+			  if ( NOT exists( select * from sp_stoptest ) ) then
 			    begin
 			      select p.unit
 			      from srv_random_unit_choice(
@@ -1590,6 +1609,8 @@ cat <<- EOF >>$tmpchk
 		 select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
 		 commit;
 		 drop table tmp\$$rndname;
+		 -- This sequence serves as 'stop-flag' for every ISQL attachment:
+		 alter sequence g_stop_test restart with 0;
 		 set term ^;
 		 execute block as
 		 begin
@@ -1827,7 +1848,10 @@ launch_preparing $sql
 if [ -n "$file_name_with_test_params" ]; then
 	cat <<- EOF > $tmpchk
 		set heading off;
-		select report_file from srv_get_report_name('$file_name_with_test_params', '$fbb', $winq);
+		-- NB: here we pass $test_time value as argument A_TEST_TIME_MINUTES for SP SRV_GET_REPORT_NAME: this value
+		-- mean that we want to get ESTIMATED name of report with '0000' as performance score - rather that ACTUAL name
+		-- which will be obtained AFTER test will finish, see call from 'oltp_isql_run_worker.sh':
+		select report_file from srv_get_report_name('$file_name_with_test_params', '$fbb', $winq, $test_time);
 		set heading on;
 	EOF
   run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
@@ -1860,7 +1884,7 @@ for i in `seq $winq`
 do
     # 10.02.2015: it's wrong to start separate session via `sh`:
     # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
-    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}&
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}&
+    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}
 done
 echo Done script $0

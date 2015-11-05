@@ -5466,7 +5466,7 @@ begin
         begin
            -- call from main batch (1run_oltp_emul) just BEFORE all ISQL
            -- sessions will be launched: display *estimated* name of report
-            overall_perf = lpad('',5,'0');
+            overall_perf = 'score_' || lpad('',5,'X');
             v_test_time = a_test_time_minutes;
         end
 
