@@ -319,37 +319,46 @@ echo.
      echo select min(id^) as id_min, max(id^) as id_max, count(*^) as cnt from tmp!rndname!; 
      echo commit;
      echo drop table tmp!rndname!;
+     echo.
+     echo alter sequence g_stop_test restart with 0;
+     echo.
      echo set term ^^;
      echo execute block as
      echo begin
-
-     echo     -- Inject value of config parameter `mon_unit_perf` into table SETTINGS.
-     echo     -- ::: NB ::: When test is launched from several hosts this DML can fail
-     echo     -- with update conflict or "deadlock" exception, so we have to suppress it:
-     echo     update settings set svalue=%mon_unit_perf%
-     echo     where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
-     echo     if (row_count = 0^) then 
-     echo         exception ex_record_not_found
-     if .%fb%.==.30. (
-     echo         using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY'''^)
-     )
-     echo     ;
-
-     echo     -- Inject value of config parameter `working_mode` into table SETTINGS.
-     echo     -- ::: NB ::: When test is launched from several hosts this DML can fail
-     echo     -- with update conflict or "deadlock" exception, so we have to suppress it:
-     echo     update settings set svalue = upper('%working_mode%'^)
-     echo     where working_mode=upper('init'^) and mcode=upper('working_mode'^);
-     echo     if (row_count = 0^) then
-     echo         exception ex_record_not_found
-     if .%fb%.==.30. (
-     echo         using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE'''^)
-     )
-     echo     ;
-
-     echo when any do 
      echo     begin
-     echo        if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+     echo         -- Inject value of config parameter `mon_unit_perf` into table SETTINGS.
+     echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
+     echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
+     echo         update settings set svalue=%mon_unit_perf%
+     echo         where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
+     echo         if (row_count = 0^) then 
+     echo             exception ex_record_not_found
+     if .%fb%.==.30. (
+     echo             using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY'''^)
+     )
+     echo         ;
+     echo     when any do 
+     echo         begin
+     echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+     echo         end
+     echo     end
+
+     echo     begin
+     echo         -- Inject value of config parameter `working_mode` into table SETTINGS.
+     echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
+     echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
+     echo         update settings set svalue = upper('%working_mode%'^)
+     echo         where working_mode=upper('init'^) and mcode=upper('working_mode'^);
+     echo         if (row_count = 0^) then
+     echo             exception ex_record_not_found
+     if .%fb%.==.30. (
+     echo             using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE'''^)
+     )
+     echo         ;
+     echo     when any do 
+     echo         begin
+     echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+     echo         end
      echo     end
      echo end ^^
      echo set term ;^^
@@ -614,7 +623,16 @@ set run_stat=!fbsvcrun! action_db_stats sts_hdr_pages dbname %dbnm%
 
 (
     echo set heading off; 
-    echo select report_file from srv_get_report_name('%file_name_with_test_params%', '%fbb%', %winq%^);
+    echo -- NB: here we pass %test_time% value as argument A_TEST_TIME_MINUTES for SP SRV_GET_REPORT_NAME: this value
+    echo -- mean that we want to get ESTIMATED name of report with '0000' as performance score - rather that ACTUAL name
+    echo -- which will be obtained AFTER test will finish, see call from 'oltp_isql_run_worker.bat':
+    echo select report_file 
+    echo from srv_get_report_name( 
+    echo    '%file_name_with_test_params%', -- = value of config parameter 'file_name_with_test_params'
+    echo    '%fbb%', -- = FB build number, full or only last 5 digits
+    echo     %winq%, -- = number of launched ISQL sessions, command-line argument of this batch
+    echo     %test_time% --  = value of config parameter 'test_time', must be ZERO or POSITIVE
+    echo ^);
     echo set heading on;
 ) > %tmpsql%
 
@@ -1017,7 +1035,7 @@ goto :end_of_test
             echo execute block as
             echo     declare v_unit dm_name;
             echo begin
-            echo   if ( NOT exists( select * from ext_stoptest ^) ^) then
+            echo   if ( NOT exists( select * from sp_stoptest ^) ^) then
             echo       begin
         )>>%sql%
 
@@ -2004,6 +2022,22 @@ goto:eof
         echo set term ;^^
         echo commit;
         echo.
+        if not .%use_external_to_stop%.==.. (
+            echo.
+            echo -- External table for quick force running attaches to stop themselves by OUTSIDE command.
+            echo -- When all ISQL attachments need to be stopped before warm_time+test_time expired, this
+            echo -- external table (TEXT file^) shoudl be opened in editor and single ascii-character 
+            echo -- has to be typed followed by LF. Saving this file will cause test to be stopped.
+            echo recreate table ext_stoptest external '%use_external_to_stop%' ( s char(2^) ^);
+            echo commit;
+            echo.
+            echo -- REDEFINITION of view that is used by every ISQL attachment as 'stop-flag' source:
+            echo create or alter view v_stoptest as
+            echo select 1 as need_to_stop
+            echo from ext_stoptest;
+            echo commit;
+        )
+        echo.
         echo -- Finish building process: insert custom data to lookup tables:
         echo in "%~dp0oltp_data_filling.sql";
 
@@ -2212,8 +2246,8 @@ goto:eof
     (
         echo set heading off;
         echo set list on;
-        echo -- check that test now can be run: table 'ext_stoptest' must be EMPTY
-        echo select iif( exists( select * from ext_stoptest ^),
+        echo -- check that test now can be run: resultset of 'select * from sp_stoptest' must be EMPTY
+        echo select iif( exists( select * from sp_stoptest ^),
         echo                     '1',
         echo                     '0'
         echo           ^) as "cancel_flag="

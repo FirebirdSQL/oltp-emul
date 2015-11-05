@@ -475,7 +475,7 @@ if .%sid%.==.1. (
     if .%make_html%.==.1. (
         (
           echo select
-          echo     iif(x.finish_state containing 'normal', '$css$success$','$css$error$'^) ^|^| x.finish_state as finish_state
+          echo     iif(x.finish_state containing 'abnormal', '$css$error$', iif(x.finish_state containing 'premature', '$css$warning$', '$css$success$' ^) ^) ^|^| x.finish_state as finish_state
           echo    ,x.dts_end
           echo    ,x.fb_gdscode
           echo    ,x.fb_mnemona

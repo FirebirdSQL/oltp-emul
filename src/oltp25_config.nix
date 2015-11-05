@@ -93,6 +93,26 @@ use_mtee = 0
 
 is_embed = 0
 
+# If you want be able to force all ISQL sessions quickly self-stop their job BEFORE test
+# will finish by expiration of <warm_time> + <test_time>, one may to use simple TEXT file
+# on server-side, which shoudl be empty before each test launch. Then, if all sessions must
+# be immediatelly detached, just open that file in text editor, type any character followed
+# by LINE-FEED (or CR/LF on Windows). This is much faster than move database to offline or
+# execute 'delete from mon$attachments'. It is also more preferable than kill ISQL processes.
+# Format of text file that you have to specify in that case depends on value of parameter 
+# "ExternalFileAccess" in firebird.conf:
+# 1. When ExternalFileAccess = FULL - write here full path and name of text file that will be 
+# queried by every attachment as 'stop flag'.
+# 2. When ExternalFileAccess = RESTRICTED - specify only NAME of file, without path.
+#
+# Do NOT uncomment this parameter, i.e. leave it undefined, if you will launch test every time
+# without necessity of its premature cancellation. This is suitable for running scheduled basis.
+#
+# Default setting: parameter is UNDEFINED, i.e. test will not check content of external file to stop.
+
+# use_external_to_stop = c:/temp/stoptext.txt
+# use_external_to_stop = stoptext.txt
+
 # Condition where all ISQL logs should be removed after test will finish.
 # Possible values: always | never | if_no_severe_errors
 # Option 'always' means that ISQL logs in %tmpdir% will be removed after test finish without any condition.

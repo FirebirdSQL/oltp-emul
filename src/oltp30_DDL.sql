@@ -329,6 +329,7 @@ create sequence g_perf_log;
 create sequence g_init_pop;
 create sequence g_qdistr;
 create sequence g_success_counter; -- used in .bat / .sh for displaying estimated performance value
+create sequence g_stop_test; -- serves as signal to self-stop every ISQL attachment its job
 commit;
 
 -- create collations:
@@ -394,6 +395,13 @@ create domain dm_unit varchar(80);
 create domain dm_info varchar(255);
 create domain dm_stack varchar(512);
 commit;
+
+
+-------------------------------------------------------------------------------
+---- aux table for auto stop running attaches:
+--recreate table ext_stoptest external 'stoptest.txt' (
+--  s char(2)
+--);
 
 -------------------------------------------------------------------------------
 --  **************   G L O B A L    T E M P.    T A B L E S   *****************
@@ -601,12 +609,6 @@ commit;
 -------------------------------------------------------------------------------
 -- moved out, see oltp_misc_debug.sql 
 -- (this script will be involved only when config parameter create_with_debug_objects = 1)
-
--------------------------------------------------------------------------------
--- aux table for auto stop running attaches:
-recreate table ext_stoptest external 'stoptest.txt' (
-  s char(2)
-);
 
 -------------------------------------------------------------------------------
 --  ****************   A P P L I C A T I O N    T A B L E S   *****************
@@ -1764,61 +1766,104 @@ end
 
 ^ -- fn_get_stack
 
+-- STUB, will be redefined when config parameter 'use_external_to_stop'
+-- has some non-empty value of [path+]file of external table that will serve
+-- as mean to stop test from outside (i.e. this parameter is UNcommented)
+create or alter view v_stoptest as
+select 1 as need_to_stop
+from rdb$database
+where 1 = 0
+^
+
+create or alter procedure sp_stoptest
+returns(need_to_stop smallint) as
+begin
+    need_to_stop = sign( gen_id(g_stop_test, 0) );
+    if ( need_to_stop = 0 and exists( select * from v_stoptest  ) )
+    then
+        need_to_stop = -1;
+    if ( need_to_stop <> 0 ) then
+        -- "+1" => test_time expired, normal finish;
+        -- "-1" ==> outside command to premature stop test by adding line into
+        --          text file defined by 'ext_stoptest' table.
+        suspend;
+end
+^
+
 create or alter procedure sp_halt_on_error(
     a_char char(1) default '1',
     a_gdscode bigint default null,
     a_trn_id bigint default null
 ) as
     declare v_curr_trn bigint;
+    declare v_dummy bigint;
+    declare v_need_to_stop smallint;
 begin
-   -- Adding single character + LF into external table (text file) 'stoptest.txt'
-   -- when test is needed to stop (either due to test_time expiration or because of
-   -- encountering some critical errors like PK/FK violations or negative amount remainders).
-   -- Input argument a_char:
-   -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to PK/FK violation,
-   --         and also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
-   --         sum of doc_data amounts and count of rows in QDistr + QStorned.
-   -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
-   --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
-   -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
-   --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
-   --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
+    -- Adding single character + LF into external table (text file) 'stoptest.txt'
+    -- when test is needed to stop (either due to test_time expiration or because of
+    -- encountering some critical errors like PK/FK violations or negative amount remainders).
+    -- Input argument a_char:
+    -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to PK/FK violation,
+    --         and also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
+    --         sum of doc_data amounts and count of rows in QDistr + QStorned.
+    -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
+    --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
+    -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
+    --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
+    --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
+    
+    if ( gen_id(g_stop_test, 0) = 0 and fn_remote_process() NOT containing 'IBExpert' )
+    then
+    begin
+        v_curr_trn = coalesce(a_trn_id, current_transaction);
 
-  if ( fn_remote_process() NOT containing 'IBExpert' and NOT exists( select * from ext_stoptest ) )
-  then
-  begin
-      v_curr_trn = coalesce(a_trn_id, current_transaction);
-      in autonomous transaction do
-      begin
-        insert into ext_stoptest values( :a_char || ascii_char(10));
-      end
+        select p.need_to_stop from sp_stoptest p rows 1 into v_need_to_stop; -- "-1" ==> premature stop via EXTERNAl file
+        v_dummy = gen_id( g_stop_test, 1);
+        
+        in autonomous transaction do
+        begin
+            -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
+            insert into perf_log(
+                unit
+                ,fb_gdscode
+                ,ip
+                ,trn_id
+                ,dts_end
+                ,elapsed_ms
+                ,stack
+                ,exc_unit
+                ,exc_info
+            ) values(
+                'sp_halt_on_error'
+                ,:a_gdscode
+                ,fn_remote_address()
+                ,:v_curr_trn
+                ,'now'
+                ,-1
+                ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack into perf_log if this is NOT expected test finish
+                ,:a_char
+                ,iif( -- write info for reporting state of how test finished:
+                    :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
+                    ,iif( :v_need_to_stop < 0
+                         ,'PREMATURE: EXTERNAL TABLE HAS ROWS.'
+                         ,'NORMAL: TEST_TIME EXPIRED.'
+                        )
+                )
+            );
 
-      in autonomous transaction do
-      begin
-        -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
-        insert into perf_log(
-            unit
-            ,fb_gdscode
-            ,ip
-            ,trn_id
-            ,dts_end
-            ,elapsed_ms
-            ,stack
-            ,exc_unit
-            ,exc_info
-        ) values(
-            'sp_halt_on_error'
-            ,:a_gdscode
-            ,fn_remote_address()
-            ,:v_curr_trn
-            ,'now'
-            ,-1
-            ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack into perf_log if this is NOT expected test finish
-            ,:a_char
-            ,iif( :a_gdscode>=0, 'ABNORMAL, GDSCODE='||coalesce(:a_gdscode,'<?>'), 'NORMAL, TEST_TIME EXPIRED.' ) -- for reporting state of how test finished
-        );
-      end
-  end
+            begin
+                -- moved here from sp_check_to_stop_work: avoid excessive start auton. Tx!
+                update perf_log p set p.info = 'closed'
+                where p.unit = 'perf_watch_interval' and p.info containing 'active'
+                order by dts_beg desc -- "+0" ?
+                rows 1;
+            when any do
+                begin
+                    -- NOP --
+                end
+            end
+        end
+    end
 end
 
 ^ -- sp_halt_on_error
@@ -2606,24 +2651,15 @@ begin
             v_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
         end
 
-    if (  cast('now' as timestamp) > v_dts_end )
+    if ( cast('now' as timestamp) > v_dts_end -- NORMAL finish because of test_time expiration
+         or
+         exists( select * from sp_stoptest ) -- PREMATURE halt because presense of line in external-table
+       )
     then
-       begin
-           execute procedure sp_halt_on_error('2', -1);
-           in autonomous transaction do
-               begin
-                   update perf_log p set p.info = 'closed'
-                   where p.unit = 'perf_watch_interval';
-               when any do
-                   begin
-                     -- nop! --
-                   end
-               end
+        begin
+           execute procedure sp_halt_on_error('2', -1); -- ==> sequence g_stop_test will be incremeted there by 1
            exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
-       end
-    else if (exists( select * from ext_stoptest )) then -- or exists( select * from int_stoptest ) ) then
-        exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
-
+        end
 end
 
 ^ -- sp_check_to_stop_work 
@@ -3058,6 +3094,7 @@ end
 
 set term ;^
 commit;
+
 
 -- STUB, need for sp_multiply_rows_for_qdistr; will be redefined after (see below):
 create or alter view v_our_firm as select 1 id from rdb$database

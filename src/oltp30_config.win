@@ -41,7 +41,7 @@ dbnm = C:\MIX\firebird\OLTPTEST\oltp30.fdb
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3050
+port = 3333
 usr =  SYSDBA
 pwd =  masterkey
 
@@ -73,12 +73,12 @@ working_mode = small_03
 # will finish and before all following operations will be measured:
 # Recommended value: at least 30 for Firebird 3.0
 
-warm_time = 30
+warm_time = 0
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
 
-test_time = 60
+test_time = 3
 
 # Number of seconds between transactions for pause in each working session
 # Default: 0 - no pauses, subsequent Tx starts immediatelly after commit.
@@ -98,6 +98,25 @@ use_mtee = 0
 
 is_embed = 0
 
+# If you want be able to force all ISQL sessions quickly self-stop their job BEFORE test
+# will finish by expiration of <warm_time> + <test_time>, one may to use simple TEXT file
+# on server-side, which shoudl be empty before each test launch. Then, if all sessions must
+# be immediatelly detached, just open that file in text editor, type any character followed
+# by LINE-FEED (or CR/LF on Windows). This is much faster than move database to offline or
+# execute 'delete from mon$attachments'. It is also more preferable than kill ISQL processes.
+# Format of text file that you have to specify in that case depends on value of parameter 
+# "ExternalFileAccess" in firebird.conf:
+# 1. When ExternalFileAccess = FULL - write here full path and name of text file that will be 
+# queried by every attachment as 'stop flag'.
+# 2. When ExternalFileAccess = RESTRICTED - specify only NAME of file, without path.
+#
+# Do NOT uncomment this parameter, i.e. leave it undefined, if you will launch test every time
+# without necessity of its premature cancellation. This is suitable for running scheduled basis.
+#
+# Default setting: parameter is UNDEFINED, i.e. test will not check content of external file to stop.
+
+# use_external_to_stop = c:\temp\stoptext.txt
+# use_external_to_stop = stoptext.txt
 
 # Condition where all ISQL logs should be removed after test will finish.
 # Possible values: always | never | if_no_severe_errors
@@ -172,7 +191,7 @@ create_with_sweep = 20000
 # You have to set this parameter to 0 if this batch is launched by 
 # scheduler on regular basis. Otherwise it is recommended to set 1.
 
-wait_if_not_exists = 0
+wait_if_not_exists = 1
 
 # Should script be PAUSED after creation database objects before starting
 # initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
@@ -181,7 +200,7 @@ wait_if_not_exists = 0
 # value. Missing number of documents will be added when needed.
 # Recommended value: at least 30000 
 
-wait_after_create = 0
+wait_after_create = 1
 
 # NOTE: test database will be (re-)created only when it does not contain all necessary objects.
 # Command scenario verifies this by searching special record in table 'SEMAPHORES' which should
@@ -191,7 +210,7 @@ wait_after_create = 0
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 30000
+init_docs = 0
 
 # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
