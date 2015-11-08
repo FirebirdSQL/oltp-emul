@@ -1424,6 +1424,10 @@ if .%sid%.==.1. (
     @rem -- echo %date% %time% Done. >>%sts%
     del %tmp_file% 2>nul
 
+    set batch4stop=%tmpdir%\1stoptest.tmp.bat
+    call :repl_with_bound_quotes !batch4stop! batch4stop
+    del !batch4stop! 2>nul
+
   goto end
 
 :end

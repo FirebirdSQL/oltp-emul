@@ -181,8 +181,10 @@ do
 
     $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
     echo>>$plog
+
     rm -f $psql
     echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - FINISH
+
 
     ###############################################################################################
     ##########################   P e r f o r m a n c e    R e p o r t s    ########################
@@ -518,13 +520,14 @@ do
 	fi
 	echo
 
+	rm -f $tmpdir/1stoptest.tmp.sh
+	
     cat <<- EOF
 		------------------------------------------------------------
 		$(date +'%H:%M:%S'). Bye-bye from SID=1. Test has been FINISHED.
 		------------------------------------------------------------
 		
 		Final report see in: $plog
-		
 		Press any key to EXIT. . .
 	EOF
 

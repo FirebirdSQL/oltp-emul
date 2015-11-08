@@ -1472,6 +1472,35 @@ launch_preparing() {
 
 } # end of launch_preparing()
 
+gen_temp_sh_for_stop()
+{
+  #echo Routine $FUNCNAME: start.
+  local tmpsh4stop
+  if [ -z "$use_external_to_stop" ]; then
+	tmpsh4stop=$tmpdir/1stoptest.tmp.sh
+	cat <<- EOF >$tmpsh4stop
+	    # --------------------------------------------------------------------------------
+	    # Generated auto, do NOT edit.
+	    # This batch can be used in order to immediatelly STOP all working ISQL sessions.
+	    # It is highly rtecommended to use this batch for that goal rather than brute kill
+	    # ISQL sessions or use Firebird monitoring tables.
+	    # --------------------------------------------------------------------------------
+	    echo \$(date +'%H:%M:%S'). Running command to stop all working ISQL sessions:
+	    echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $fbc/isql $dbconn $dbauth -q -n -nod
+	    echo \$(date +'%H:%M:%S') Done.
+	EOF
+	chmod +x $tmpsh4stop
+	echo In order to premature stop all working ISQL sessions run following script:
+	echo $tmpsh4stop
+  else 
+	cat <<- EOF
+		In order to premature stop all working ISQL sessions open server-side file '$use_external_to_stop' 
+		in editor and type there any single ascii character plus LF. Then save this file.
+	EOF
+  fi
+  #echo Routine $FUNCNAME: finish.
+} # create_temp_sh_for_stop(
+
 
 #######################################################################
 # ----------------------------   M A I N   ----------------------------
@@ -1843,6 +1872,14 @@ export sql=$tmpdir/sql/tmp_random_run.sql
 #####################
 launch_preparing $sql
 #####################
+
+# 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
+#    all working ISQL sessions by adding single character + LF into this file.
+# 2. If $use_external_to_stop is UNDEFINED, create temp shell script in $tmpdir with name '1stoptest.tmp.sh'
+#    and display message about ability to stop test by running this temp script.
+####################
+gen_temp_sh_for_stop
+####################
 
 # 30.10.2015
 if [ -n "$file_name_with_test_params" ]; then
