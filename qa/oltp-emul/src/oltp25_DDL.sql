@@ -1760,7 +1760,8 @@ begin
     if ( need_to_stop <> 0 ) then
         -- "+1" => test_time expired, normal finish;
         -- "-1" ==> outside command to premature stop test by adding line into
-        --          text file defined by 'ext_stoptest' table.
+        --          text file defined by 'ext_stoptest' table or running temp
+        --          batch file %tmpdir%\1stoptest.tmp.bat (1stoptest.tmp.sh)
         suspend;
 end
 ^
@@ -1787,13 +1788,13 @@ begin
     --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
     --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
     
-    if ( gen_id(g_stop_test, 0) = 0 and (select result from fn_remote_process) NOT containing 'IBExpert' )
+    if ( gen_id(g_stop_test, 0) <= 0 and (select result from fn_remote_process) NOT containing 'IBExpert' )
     then
         begin
             v_curr_trn = coalesce(a_trn_id, current_transaction);
             
             select p.need_to_stop from sp_stoptest p rows 1 into v_need_to_stop; -- "-1" ==> premature stop via EXTERNAl file
-            v_dummy = gen_id( g_stop_test, 1);
+            v_dummy = gen_id( g_stop_test, 2147483647);
             
             in autonomous transaction do
             begin
@@ -1820,7 +1821,7 @@ begin
                     ,iif( -- write info for reporting state of how test finished:
                         :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
                         ,iif( :v_need_to_stop < 0
-                             ,'PREMATURE: EXTERNAL TABLE HAS ROWS.'
+                             ,'PREMATURE: EXTERNAL COMMAND.'
                              ,'NORMAL: TEST_TIME EXPIRED.'
                             )
                     )

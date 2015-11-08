@@ -709,6 +709,36 @@ for /l %%i in (1, 1, %winq%) do (
 )
 echo. && echo %date% %time% Done.
 
+if .%use_external_to_stop%.==.. (
+  set batch4stop=!tmpdir!\1stoptest.tmp.bat
+  call :repl_with_bound_quotes !batch4stop! batch4stop
+  (
+    echo @echo off
+    echo rem --------------------------------------------------------------------------------
+    echo rem Generated auto, do NOT edit.
+    echo rem This batch can be used in order to immediatelly STOP all working ISQL sessions.
+    echo rem It is highly rtecommended to use this batch for that goal rather than brute kill
+    echo rem ISQL sessions or use Firebird monitoring tables.
+    echo rem --------------------------------------------------------------------------------
+    echo echo !time!. Running command to stop all working ISQL sessions:
+    echo @echo on
+    echo echo show sequence g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequence g_stop_test; ^| !fbc!\isql !dbconn! !dbauth! -q -n -nod
+    echo @echo off
+    echo echo !time! Done.
+  ) >!batch4stop!
+  echo.
+  echo In order to premature stop all working ISQL sessions run following batch:
+  echo.
+  echo !batch4stop!
+  echo.
+) else (
+  echo.
+  echo In order to premature stop all working ISQL sessions open server-side file 'stoptest.txt' in editor and
+  echo type there any single ascii character plus LF. Save this file (on Windows use 'Save as...' + overwrite^).
+  echo This file should be in the directory which depends on value of FB config 'ExternalFileAccess' parameter.
+  echo.
+)
+
 echo Config params, running commands and results see in file(s): 
 echo 1. TEXT: !log_with_params_in_name!.txt
 if .%make_html%.==.1. (

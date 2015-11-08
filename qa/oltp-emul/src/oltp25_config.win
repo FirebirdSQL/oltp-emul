@@ -41,7 +41,7 @@ dbnm = C:\MIX\firebird\OLTPTEST\oltp25.fdb
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3255
+port = 3050
 usr =  SYSDBA
 pwd =  masterke
 
@@ -73,12 +73,12 @@ working_mode = small_03
 # will finish and before all following operations will be measured:
 # Recommended value: at least 30 for Firebird 2.5
 
-warm_time = 0
+warm_time = 30
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
 
-test_time = 4
+test_time = 60
 
 # Number of seconds between transactions for pause in each working session
 # Default: 0 - no pauses, subsequent Tx starts immediatelly after commit.
@@ -210,7 +210,7 @@ wait_after_create = 0
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 0
+init_docs = 30000
 
 # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
@@ -279,7 +279,7 @@ create_with_compound_columns_order = most_selective_first
 # Value = 1 leads to increased time of final report building.
 # Windows only. Not implemented for Linux, will be ignored at runtime.
 
-make_html = 1
+make_html = 0
 
 # Should final report be saved in file with name which contain info about FB, database, test settings ?
 # If no, leave this parameter commented. In that case final report will be always saved with the same name.
