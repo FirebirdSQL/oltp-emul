@@ -3186,6 +3186,7 @@ goto:eof
         echo set transaction no wait;
         echo delete from %log_tab% g
         echo where g.unit in ( 'perf_watch_interval',
+        echo                   'sp_halt_on_error',
         echo                   'dump_dirty_data_semaphore',
         echo                   'dump_dirty_data_progress'
         echo                 ^);

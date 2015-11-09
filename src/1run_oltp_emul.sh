@@ -1406,6 +1406,7 @@ launch_preparing() {
 		set transaction no wait;
 		delete from perf_log g
 		where g.unit in ( 'perf_watch_interval',
+		                  'sp_halt_on_error',
 		                  'dump_dirty_data_semaphore',
 		                  'dump_dirty_data_progress'
 		                );

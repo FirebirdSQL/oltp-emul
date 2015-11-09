@@ -1769,7 +1769,8 @@ end
 create or alter procedure sp_halt_on_error(
     a_char char(1) default '1',
     a_gdscode bigint default null,
-    a_trn_id bigint default null
+    a_trn_id bigint default null,
+    a_need_to_stop smallint default null
 ) as
     declare v_curr_trn bigint;
     declare v_dummy bigint;
@@ -1788,12 +1789,15 @@ begin
     --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
     --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
     
-    if ( gen_id(g_stop_test, 0) <= 0 and (select result from fn_remote_process) NOT containing 'IBExpert' )
+    if ( (a_need_to_stop < 0 or gen_id(g_stop_test, 0) <= 0) and (select result from fn_remote_process) NOT containing 'IBExpert' )
     then
         begin
             v_curr_trn = coalesce(a_trn_id, current_transaction);
             
-            select p.need_to_stop from sp_stoptest p rows 1 into v_need_to_stop; -- "-1" ==> premature stop via EXTERNAl file
+            -- "-1" ==> decision to premature stop all ISQL sessions by issuing EXTERNAl command
+            -- (either running $tmpdir/1stoptest.tmp.sh or adding line into external file 'stoptest.txt')
+            v_need_to_stop = coalesce( :a_need_to_stop, (select p.need_to_stop from sp_stoptest p rows 1) );
+
             v_dummy = gen_id( g_stop_test, 2147483647);
             
             in autonomous transaction do
@@ -2648,6 +2652,7 @@ end
 create or alter procedure sp_check_to_stop_work as
     declare v_dts_beg timestamp;
     declare v_dts_end timestamp;
+    declare v_need_to_stop smallint;
 begin
     -- Must be called from all SPs which are at 'top' level of data handling.
     -- Checks that special external *TEXT* file is EMPTY, otherwise raise exc.
@@ -2680,14 +2685,16 @@ begin
             v_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
         end
 
+    v_need_to_stop = null;
+    select p.need_to_stop from sp_stoptest p rows 1 into v_need_to_stop;
 
     if ( cast('now' as timestamp) > v_dts_end -- NORMAL finish because of test_time expiration
          or
-         exists( select * from sp_stoptest ) -- PREMATURE halt because presense of line in external-table
+         v_need_to_stop < 0 -- External force all ISQL sessions PREMATURE be stopped itself (either by running $tmpdir/1stoptest.tmp batch or by adding line to 'stoptest.txt')
        )
     then
         begin
-           execute procedure sp_halt_on_error('2', -1); -- ==> sequence g_stop_test will be incremeted there by 1
+           execute procedure sp_halt_on_error('2', -1, current_transaction, :v_need_to_stop);
            exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
         end
 end
