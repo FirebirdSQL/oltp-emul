@@ -59,8 +59,17 @@ In case of any questions feel free to contact: p519446@yandex.ru
    1) database warm-up during <warm_time> minutes;
    2) measurement of further business actions during <test_time> minutes.
 
-4. STOP ANY ANTIVIRUS on machine where you will run command scenario, otherwise it can block ISQL sessions
-   from writing their STDOUT and STDERR.
+4. Windows specific. 
+   Ensure that any protection software (antivirus or built-in Windows mechanism) does NOT check any type of files 
+   in the folder that you will define by 'tmpdir' config parameter. 
+   Firebird can create temporary files:
+   a) for storing data of GTT (fb_table_*) - in the folder that is defined by searching first non-empty env. variable 
+      from following list: { FIREBIRD_TMP; TMP; TEMP }
+   b) for sorting (fb_sort_*) and  storing monitoring snapshots (fb_recbuf_*, fb_blob_*) - in a directory that is defined 
+      by 'TempDirectories' parameter from firebird.conf.
+   It is recommended that you will set value of FIREBIRD_TMP variable equal to thev value of 'TempDirectories' parameter 
+   from firebird.conf and remove any OS/antivirus protection from this folder. Otherwise you can encounter extremely slow 
+   disk operations of all launched ISQL sessions.
 
 5. It is highly recommended to increase values of following parameters in firebird.conf:
 

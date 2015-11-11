@@ -23,6 +23,10 @@ echo %date% %time% - starting %~f0
 echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 
 set cfg=oltp%fb%_config.win
+
+set isc_user=
+set isc_password=
+
 echo Parsing config file ^>%cfg%^<. Please wait. . .
 set err_setenv=0
 
