@@ -1,6 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion enableextensions
 path=..\util;%path%
+set isc_user=
+set isc_password=
 
 rem limits for log of work and errors
 rem (zap if size exceed and fill again from zero):
@@ -208,7 +210,7 @@ if .%sid%.==.1. (
     (
         echo.
         echo %date% %time%. Starting packet # %k%.
-        echo RUNCMD: %run_isql%; 
+        echo RUNCMD: %run_isql%
         echo STDLOG: %log% 
         echo STDERR: %err%
         echo.
@@ -352,6 +354,11 @@ if .%sid%.==.1. (
         echo    .error {
         echo       color: black;
         echo       background-color: #FF0000;
+        echo    }
+        echo    .fault {
+        echo       color: #990000;
+        echo       background-color: #FFFFCC;
+        echo       font-weight: bold;
         echo    }
         echo ^</style^>
         echo ^</head^>
@@ -1265,10 +1272,11 @@ if .%sid%.==.1. (
         echo Command: !run_cmd!
         echo ++++++++++++++++++++++++++
         echo.
-        echo +++ Result of comparison +++
     ) >>%log4all%
 
-    %run_fc_compare% 1>%tmp_file% 2>&1
+    echo +++ start of comparison +++>%tmp_file%
+
+    %run_fc_compare% 1>>%tmp_file% 2>&1
 
     echo +++ end of comparison +++>>%tmp_file%
 
@@ -1632,10 +1640,13 @@ goto:eof
     set tmp_file=!%1!
     set htm_file=!%2!
     set add_br=%3
+    set line_prefix=%4
+
     if not defined add_br set add_br=1
+
     (
         for /f "tokens=*" %%a in ('type %tmp_file%') do (
-            set line=%%a
+            set line=%line_prefix%%%a
             if not .!line!.==.. (
               set ccss=!line:$css$error$=!
               if not !ccss!==!line! (
@@ -1646,7 +1657,12 @@ goto:eof
                   set line=^<span class="warning"^>!ccss!^</span^>
                 ) else (
                   set ccss=!line:$css$success$=!
-                  if not !ccss!==!line! set line=^<span class="success"^>!ccss!^</span^>
+                  if not !ccss!==!line! (
+                    set line=^<span class="success"^>!ccss!^</span^>
+                  ) else (
+                    set ccss=!line:$css$fault$=!
+                    if not !ccss!==!line! set line=^<span class="fault"^>!ccss!^</span^>
+                  )
                 )
               )
             )
@@ -1674,9 +1690,16 @@ goto:eof
     rem %fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
     set sql_temp=%tmpdir%\make_html_table.tmp.sql
-    set tmp_file=%tmpdir%\make_html_table.tmp.log
+    set sql_log=%tmpdir%\make_html_table.tmp.log
+    set sql_err=%tmpdir%\make_html_table.tmp.err
     set tmp_sqlda=%tmpdir%\make_html_table.tmp.sqd
     set tmp_nums=%tmpdir%\make_html_table.tmp.num
+
+    call :repl_with_bound_quotes %sql_temp% sql_temp
+    call :repl_with_bound_quotes %sql_log% sql_log
+    call :repl_with_bound_quotes %sql_err% sql_err
+    call :repl_with_bound_quotes %tmp_sqlda% tmp_sqlda
+    call :repl_with_bound_quotes %tmp_nums% tmp_nums
 
     @rem set htm_file=%tmpdir%\make_html_table.tmp.htm
 
@@ -1686,13 +1709,21 @@ goto:eof
         type %sql_in%
     ) > %sql_temp%
 
-    %fbc%\isql %dbconn% -i %sql_temp% 1>%tmp_sqlda%
+    %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%tmp_sqlda% 2>%sql_err%
+
+    for %%a in (%sql_err%) do if not %%~za lss 1 (
+        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%htm_file%
+        call :add_html_text sql_temp htm_file
+        call :add_html_text sql_err htm_file 1 $css$fault$
+    )
 
     @rem 2.5: OUTPUT SQLDA version: 1 sqln: 20 sqld: 1
     @rem 3.0: OUTPUT message field count
     for /f "tokens=1 delims=:" %%a in ('findstr /n /c:"OUTPUT message " /c:"OUTPUT SQLDA" %tmp_sqlda%') do set out_line=%%a
 
-    %fbc%\isql %dbconn% %dbauth% -i %sql_temp% | findstr /i /c:"alias:" 1>%tmp_file%
+    @rem -- %fbc%\isql %dbconn% %dbauth% -i %sql_temp% | findstr /i /c:"alias:" 1>%sql_log%
+
+    findstr /i /c:"alias" %tmp_sqlda% 1>%sql_log%
 
 @rem 2.5:
 @rem  :  name: (12)WORKING_MODE  alias: (8)CATEGORY
@@ -1717,9 +1748,9 @@ goto:eof
     set num_list=
     set fld_name=
 
-    @rem echo tmp_file=%tmp_file% &pause
+    @rem echo sql_log=%sql_log% &pause
 
-    for /f "tokens=1-5 delims=:" %%a in ('type !tmp_file!') do (
+    for /f "tokens=1-5 delims=:" %%a in ('type !sql_log!') do (
         
         @rem 2.5: " (7)SETTING"
         @rem 3.0: " SETTING"
@@ -1769,7 +1800,7 @@ goto:eof
     @rem Output HEADER of table
     set i=1
     (
-      for /f "tokens=1-5 delims=:" %%a in ('type %tmp_file%') do (
+      for /f "tokens=1-5 delims=:" %%a in ('type %sql_log%') do (
           if .!i!.==.1. (
               call :get_sqlda_fld_name %fb% %%d fld_first
           )
@@ -1810,12 +1841,18 @@ goto:eof
 
     @rem echo cc1: check input file %sql_temp% &pause
 
-    %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%tmp_file%
+    %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%sql_log% 2>%sql_err%
+
+    for %%a in (%sql_err%) do if not %%~za lss 1 (
+        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%htm_file%
+        call :add_html_text sql_temp htm_file
+        call :add_html_text sql_err htm_file 1 $css$fault$
+    )
 
     @rem Output DATA of report:
     (
       set fld_num=1
-      for /f "tokens=*" %%a in ('type %tmp_file%') do (
+      for /f "tokens=*" %%a in ('type %sql_log%') do (
           set line=%%a
           set fld_name=!line:~0,31!
           call :trim fld_name !fld_name!
@@ -1870,10 +1907,10 @@ goto:eof
     echo ^</table^> >>%htm_file%
 
     del %sql_temp% 2>nul
-    del %tmp_file% 2>nul
+    del %sql_log% 2>nul
+    del %sql_err% 2>nul
     del %tmp_sqlda% 2>nul
     del %tmp_nums% 2>nul
-
 
 goto:eof
 
