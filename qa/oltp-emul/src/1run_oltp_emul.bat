@@ -1242,15 +1242,6 @@ goto :end_of_test
           echo                               'OK, '^|^| result ^|^|' rows'^);
           echo.
           echo               -- Get count of 'atomic' business operations that occured 'under-cover' of SELECTED_UNIT:
-          @rem echo               --select count(*^)
-          @rem echo               --from business_ops o
-          @rem echo               --join perf_log p on o.unit = p.unit
-          @rem echo               --where p.trn_id = current_transaction
-          @rem echo               --into v_success_ops_increment;
-          @rem echo               -- For watching statistics in TRACE, DEBUG only:
-          @rem echo               --v_stt='select count(*^) from business_ops o join perf_log p on o.unit = p.unit where p.trn_id = current_transaction';
-          @rem echo               --execute statement (v_stt^) into v_success_ops_increment;
-          echo.
           echo               v_success_ops_increment = cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT'^) as int^);
           echo.
           echo               ---------------------------------------------------------------
@@ -1353,14 +1344,8 @@ goto :end_of_test
         )
 
         if /i .!mode!.==.run_test. (
-            (
-               @rem echo set width test_ends_at 19;
-               @rem echo set width engine 6;
-               @rem echo set width msg 20;
-               @rem echo set width mon_logging_info 50;
-               @rem echo set width mon_traced_units 100;
-               echo set list on;
-            )>>%sql%
+
+            echo set list on; >>%sql%
 
             if %%i equ 1 (
                (
