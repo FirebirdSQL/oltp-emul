@@ -122,6 +122,9 @@ begin
             execute statement v_ddl_qdistr;
             if ( not v_ddl_qdidx1 = '' ) then execute statement v_ddl_qdidx1;
             if ( not v_ddl_qdidx2 = '' ) then execute statement v_ddl_qdidx2;
+            if ( v_qd_suffix = '1000_3300' ) then -- 13.11.2015: make v_min_id_clo_res much faster
+                execute statement 'create index xqd_1000_3300_doc on xqd_1000_3300(doc_id)';
+
         end
     end
     if ( v_ddl_qdistr is null ) then
@@ -132,8 +135,11 @@ begin
 
 end -- tmp_init_autogen_qdistr_tables
 
-
 ^ 
+set term ;^
+commit;
+
+set term ^;
 
 create or alter procedure tmp_init_autogen_qstorn_tables
 as
@@ -1384,8 +1390,36 @@ begin
     suspend;
 
 
+    ----------------------------------------------------------------------------------
+    -- 13.11.2015: query to this view can be significantly faster if it is replaced 
+    -- with just single select to xqd_1000_3300 which has index on doc_id:
+    " " =  'alter view v_min_id_clo_res as' || v_lf
+        || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
+        || 'select doc_id as id' || v_lf
+        || 'from xqd_1000_3300' || v_lf
+        || 'order by doc_id' || v_lf
+        || 'rows 1;' || v_lf
+    ;
+
+    suspend;
+
+    " " =  'alter view v_random_find_clo_res as' || v_lf
+        || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
+        || 'select h.id' || v_lf
+        || 'from doc_list h' || v_lf
+        || 'where h.optype_id = 1000' || v_lf
+        || 'and exists(' || v_lf
+        || '    select * from xqd_1000_3300 q' || v_lf
+        || '    where q.doc_id = h.id' || v_lf
+        || ');' || v_lf
+    ;
+    suspend;
+
     " " = 'commit;';
     suspend;
+
+    ----------------------------------------------------------------------------------
+
 
   
     " " = 'set term ^;' || v_lf
