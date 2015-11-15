@@ -625,11 +625,9 @@ if .%sid%.==.1. (
     set msg=Performance in TOTAL
     echo %date% %time%. Generating report "%msg%"...
     (
-      echo set heading off;
-      echo set list on; 
-      echo select '' as "%msg%:" from rdb$database; 
-      echo set list off;
-      echo set heading on;
+      echo.
+      echo %msg%:
+      echo.
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perftotal"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
@@ -656,9 +654,27 @@ if .%sid%.==.1. (
     ) > %rpt%
 
     type %rpt% >>%log4all%
+    
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+    set t1=!time!
+
     %run_repo% 1>>%log4all% 2>&1
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+    if .%make_html%.==.1. (
+        set t1=!time!
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff
+        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+        call :add_html_text tmp_file htm_file
+    )
 
     del %rpt% 2>nul
 
@@ -667,11 +683,9 @@ if .%sid%.==.1. (
     set msg=Performance in DYNAMIC
     echo %date% %time%. Generating report "%msg%"...
     (
-      echo set heading off;
-      echo set list on; 
-      echo select '' as "%msg%:" from rdb$database;
-      echo set list off;
-      echo set heading on;
+      echo.
+      echo %msg%:
+      echo.
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfdynam"^> %msg%: ^</a^> !htm_repc!>> %htm_file%
@@ -703,8 +717,26 @@ if .%sid%.==.1. (
     type %rpt% >>%log4all%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    set t1=!time!
+
     %run_repo% 1>>%log4all% 2>&1
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+    if .%make_html%.==.1. (
+        set t1=!time!
+
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff
+        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+        call :add_html_text tmp_file htm_file
+    )
     del %rpt% 2>nul
 
 
@@ -714,11 +746,9 @@ if .%sid%.==.1. (
     set msg=Performance for every MINUTE
     echo %date% %time%. Generating report "%msg%"...
     (
-      echo set heading off;
-      echo set list on; 
-      echo select '' as "%msg%:" from rdb$database;
-      echo set list off;
-      echo set heading on;
+      echo.
+      echo %msg%:
+      echo.
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfminute"^> %msg%: ^</a^> !htm_repc!>> %htm_file%
@@ -743,8 +773,25 @@ if .%sid%.==.1. (
     type %rpt% >>%log4all%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    set t1=!time!
+    
     %run_repo% 1>>%log4all% 2>&1
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+    if .%make_html%.==.1. (
+        set t1=!time!
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff
+        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+        call :add_html_text tmp_file htm_file
+
+    )
 
     del %rpt% 2>nul
 
@@ -755,16 +802,14 @@ if .%sid%.==.1. (
     set msg=Performance in DETAILS
     echo %date% %time%. Generating report "%msg%"...
     (
-      echo --  Get performance report with detaliation per units, for last 3 hours of activity.
-      echo --  "CNT_ALL" = total number of events when unit started,
-      echo --  "CNT_OK"  = total number of events when unit finished successfully.
-      echo --  "OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and average elapsed time of 
-      echo  --  successfully finished transactions which involved this unit in work.
-      echo set heading off;
-      echo set list on; 
-      echo select '' as "%msg%:" from rdb$database; 
-      echo set list off;
-      echo set heading on;
+      echo.
+      echo %msg%:
+      echo.
+      echo Get performance report with detaliation per units, for last 3 hours of activity.
+      echo "CNT_ALL" = total number of events when unit started,
+      echo "CNT_OK"  = total number of events when unit finished successfully.
+      echo "OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and average elapsed time of 
+      echo successfully finished transactions which involved this unit in work.
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfdetail"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
@@ -791,8 +836,26 @@ if .%sid%.==.1. (
 
     type %rpt% >>%log4all%
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    set t1=!time!
+    
     %run_repo% 1>>%log4all% 2>&1
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+    if .%make_html%.==.1. (
+        set t1=!time!
+
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff
+        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+        call :add_html_text tmp_file htm_file
+    )
     del %rpt% 2>nul
 
     @rem --------------------------------------------------------------------------
@@ -802,14 +865,11 @@ if .%sid%.==.1. (
       echo !date! !time!. Generating report "!msg!"...
       (
         echo.
-        echo -- Get report about gathered MONITOR tables data, detalization per UNITS.
-        echo -- NOTE: source view for this report will be created only when config
-        echo -- parameter 'mon_unit_perf' has value 1.
-        echo set heading off;
-        echo set list on; 
-        echo select '!msg!:' as monitor_analysis_msg from rdb$database;
-        echo set list off;
-        echo set heading on;
+        echo %msg%:
+        echo.
+        echo Get report about gathered MONITOR tables data, detalization per UNITS.
+        echo NOTE: source view for this report will be created only when config
+        echo parameter 'mon_unit_perf' has value 1.
       ) >> %log4all%
 
       if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
@@ -824,8 +884,25 @@ if .%sid%.==.1. (
 
       type %rpt% >>%log4all%
       set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+      set t1=!time!
+
       %run_repo% 1>>%log4all% 2>&1
-      if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+      set t2=!time!
+      set tdiff=0
+      call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+      echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+      if .%make_html%.==.1. (
+          set t1=!time!
+          call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+          set t2=!time!
+          set tdiff=0
+          call :timediff "!t1!" "!t2!" tdiff
+          echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+          call :add_html_text tmp_file htm_file
+      )
       del %rpt% 2>nul
   
       if .%fb%.==.30. (
@@ -834,14 +911,11 @@ if .%sid%.==.1. (
    
           (
             echo.
-            echo -- Get report about gathered MONITOR tables data, detalization  per TABLES and UNITS.
-            echo -- NOTE: source view for this report will be created only when config
-            echo -- parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
-            echo set heading off;
-            echo set list on; 
-            echo select '!msg!:' as monitor_analysis_msg from rdb$database;
-            echo set list off;
-            echo set heading on;
+            echo %msg%:
+            echo.
+            echo Get report about gathered MONITOR tables data, detalization  per __TABLES__ and units.
+            echo NOTE: source view for this report will be created only when config
+            echo parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
           ) >> %log4all%
          
           if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4tabs"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
@@ -857,8 +931,24 @@ if .%sid%.==.1. (
 
           type %rpt% >>%log4all%
           set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+          set t1=!time!
+
           %run_repo% 1>>%log4all% 2>&1
-          if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+          set t2=!time!
+          set tdiff=0
+          call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+          echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+          if .%make_html%.==.1. (
+              set t1-!time!
+              call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+              set t2=!time!
+              set tdiff=0
+              call :timediff "!t1!" "!t2!" tdiff
+              echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+              call :add_html_text tmp_file htm_file
+          )
           del %rpt% 2>nul
 
       )
@@ -868,10 +958,8 @@ if .%sid%.==.1. (
       set msg=Config param. mon_unit_perf=%mon_unit_perf%, data from MON$ tables were NOT gathered.
       (
         echo.
-        echo set heading off;set list on; 
-        echo select '!msg!' as monitor_analysis_msg from rdb$database; 
-        echo set list off;
-        echo set heading on;
+        echo %msg%:
+        echo.
       ) >> %log4all%
  
       if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
@@ -906,13 +994,28 @@ if .%sid%.==.1. (
     ) > %rpt%
 
     type %rpt% >>%log4all%
-
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    set t1=!time!
+    
     %run_repo% 1>>%log4all% 2>&1
+
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
 
     if .%make_html%.==.1. (
         echo !htm_repn! ^<a name="exceptions"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
+        set t1=!time!
+
         call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff
+        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+        call :add_html_text tmp_file htm_file
     )
     del %rpt% 2>nul
 
@@ -921,11 +1024,8 @@ if .%sid%.==.1. (
     set msg=MON$DATABASE and FB VERSION info
     (
         echo.
-        echo set heading off;
-        echo set list on; 
-        echo select '' as "%msg%" from rdb$database; 
-        echo set list off;
-        echo set heading on;
+        echo %msg%:
+        echo.
     ) >> %log4all%
  
     (
@@ -986,8 +1086,15 @@ if .%sid%.==.1. (
            echo Result:
         ) >> %log4all%
 
+        set t1=!time!
+
         %run_get_db_sts% 1>%tmp_file% 2>&1
-        echo End of database statistics.>>%tmp_file%
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%tmp_file%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%tmp_file% 2>&1
+
         type %tmp_file% >>%log4all%
 
         if .%make_html%.==.1. (
@@ -1000,6 +1107,7 @@ if .%sid%.==.1. (
 
         copy %tmp_file% %rpt% >nul
 
+        set t1=!time!
         findstr /i /r /c:"[A-Z,0-1,_$]* (" /c:"total records:" /c:"total versions:" %rpt% | findstr /i /v " Index" >%tmp_file%
 
         del %rpt% 2>nul
@@ -1090,6 +1198,11 @@ if .%sid%.==.1. (
           echo !msg!
         ) >>%log4all%
 
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
         type %tmp_file% >>%log4all%
 
         if .%make_html%.==.1. (
@@ -1108,8 +1221,16 @@ if .%sid%.==.1. (
              echo where t.rowset=!xrowset!
              echo ;
            ) > !rpt!
+           
+           set t1=!time!
 
            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+           set t2=!time!
+           set tdiff=0
+           call :timediff "!t1!" "!t2!" tdiff
+           echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+           call :add_html_text tmp_file htm_file
 
         )
 
@@ -1157,31 +1278,19 @@ if .%sid%.==.1. (
 
         if .%make_html%.==.1. (
             echo !htm_sect! ^<a name="dbvalidation"^> !msg! ^</a^> !htm_secc!>>%htm_file%
-            del %rpt% 2>nul
-            for /f "tokens=*" %%a in (!tmp_file!) do (
-              set line=%%a
-              if not .!line!.==.. (
-                @rem change after to 3 and 4
-                set line=!line:depth: 1,=!
-                if not !line!==%%a (
-                  set line=$css$warning$%%a
-                ) else (
-                  set line=!line:depth: 2,=!
-                  if not !line!==%%a set line=$css$error$%%a
-                )
-                echo !line!>>%rpt%
-              ) else (
-                echo.>>%rpt%
-              )
-            )
-            call :add_html_text rpt htm_file
-            del %rpt% 2>nul
-
             @rem call :add_html_text tmp_file htm_file
         )
         
         echo !run_db_validat! val_tab_excl !skip_val_list! > %tmpdir%\tmp_validation.bat
+
+        set t1=!time!
+
         call %tmpdir%\tmp_validation.bat 1>%tmp_file% 2>&1
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%tmp_file%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%tmp_file% 2>&1
 
         type %tmp_file% >>%log4all%
 
@@ -1966,6 +2075,36 @@ goto:eof
       )
     )
     endlocal & set "%~4=%result%"
+goto:eof
+
+
+:timediff
+
+  @rem Takes three arguments: time1, time2 and placeholder for storing difference from time1 to time2 in milliseconds.
+  @rem Sample:
+  @rem set t1=%time%
+  @rem . . .
+  @rem set t2=%time%
+  @rem set tdiff=0
+  @rem call :timediff "%t1%" "%t2%" tdiff
+
+  setlocal
+
+  @rem Add '0' to value of hours, otherwise can not calculate expressions with modulo:
+  for /f "delims= " %%x in ("%~1") do set t1=0%%x
+  for /f "delims= " %%x in ("%~2") do set t2=0%%x
+  @rem Evaluate seconds from midnight. Need doing this using modulo, otherwise get arith.
+  @rem runtime error when number of hours/minutes/seconds is 8 or 9, i.e.:  8:08:09.01 or 9:09:09.01 etc.
+
+  for /f "tokens=1-8 delims=:.," %%a in ("!t1!:!t2!") do (
+    set /a t1s=(100%%a %% 100^) * 3600000 + (100%%b %% 100^) * 60000 + (100%%c %% 100^) * 1000 + (100%%d %% 100^) * 10
+    set /a t2s=(100%%e %% 100^) * 3600000 + (100%%f %% 100^) * 60000 + (100%%g %% 100^) * 1000 + (100%%h %% 100^) * 10
+  )
+  set /a tdiff=!t2s! - !t1s!
+  if .!t2s!. LSS .!t1s!. set /a tdiff=!tdiff!+86400000
+  @echo off
+
+  endlocal&set "%~3=%tdiff%"
 goto:eof
 
 
