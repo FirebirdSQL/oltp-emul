@@ -281,6 +281,16 @@ create_with_compound_columns_order = most_selective_first
 
 make_html = 0
 
+# Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
+# This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
+
+run_db_statistics = 1
+
+# Do we want to include into final report result of database validation (1=yes; 0=no) ?
+# This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
+
+run_db_validation = 1
+
 # Should final report be saved in file with name which contain info about FB, database, test settings ?
 # If no, leave this parameter commented. In that case final report will be always saved with the same name.
 # If yes, choose format of this name:

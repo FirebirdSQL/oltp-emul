@@ -360,6 +360,9 @@ if .%sid%.==.1. (
         echo       background-color: #FFFFCC;
         echo       font-weight: bold;
         echo    }
+        echo    .monosp {
+        echo       font-family: monospace;
+        echo    }
         echo ^</style^>
         echo ^</head^>
         echo ^<body^>
@@ -1061,14 +1064,13 @@ if .%sid%.==.1. (
     echo.>>%log4all%
 
     @rem ---------------------------------------------------------------------------
-
     set skip_fbsvc=0
     @rem 09.10.2015: call fbsvcmgr in embedded mode now is possible, CORE-4938 is fixed
     @rem --- was: if .%is_embed%.==.1. if .%fb%.==.30. set skip_fbsvc=1
 
     @rem ------------------------------------------------------------------------------
 
-    if .%skip_fbsvc%.==.0. (
+    if .%run_db_statistics%.==.1. (
 
         set msg=Database statistics, full
         echo !date! !time!. Generating report "!msg!"...
@@ -1099,7 +1101,7 @@ if .%sid%.==.1. (
 
         if .%make_html%.==.1. (
             echo !htm_sect! ^<a name="dbstatistics"^> !msg! ^</a^> !htm_secc!>>%htm_file%
-            call :add_html_text tmp_file htm_file
+            call :add_html_text tmp_file htm_file 1 null monosp
         )
 
         set msg=Analyzing DB stat log: obtaining values of total records and versions
@@ -1239,18 +1241,20 @@ if .%sid%.==.1. (
 
     ) else (
 
-       set msg=SKIP get database statistics in EMBEDDED mode until CORE-4938 will be fixed.
+       set msg=Database statistics was not gathered, see config parameter 'run_db_statistics'.
        (
            echo.
            echo !msg!
            echo.
        ) >>%log4all%
-       if .%make_html%.==.1. echo !htm_sect! !msg! !htm_secc!>>%htm_file%
+       if .%make_html%.==.1. (
+           echo !htm_sect! ^<a name="dbstatistics"^> !msg! ^</a^> !htm_secc!>>%htm_file%
+       )
     )
 
     @rem ------------------------------------------------------------------------------
 
-    if .%skip_fbsvc%.==.0. (
+    if .%run_db_validation%.==.1. (
 
         set msg=Database validation
         echo !date! !time!. Generating report "!msg!"...
@@ -1307,9 +1311,11 @@ if .%sid%.==.1. (
                 echo.>>%rpt%
               )
             )
-            call :add_html_text rpt htm_file
+            
+            call :add_html_text tmp_file htm_file 1 null monosp
+
             del %rpt% 2>nul
-            @rem call :add_html_text tmp_file htm_file
+
         )
         echo End of database validation report.>>%log4all%
 
@@ -1317,13 +1323,16 @@ if .%sid%.==.1. (
         del %tmpdir%\tmp_validation.bat
 
     ) else (
-       set msg=SKIP get database validation in EMBEDDED mode until CORE-4938 will be fixed.
+       set msg=Database validation was not performed, see config parameter 'run_db_validation'.
        (
            echo.
            echo !msg!
            echo.
        ) >>%log4all%
-       if .%make_html%.==.1. echo !htm_sect! !msg! !htm_secc!>>%htm_file%
+ 
+       if .%make_html%.==.1. (
+           echo !htm_sect! ^<a name="dbvalidation"^> !msg! ^</a^> !htm_secc!>>%htm_file%
+       )
     )
 
     set msg=Differences between old and current firebird.log
@@ -1750,10 +1759,17 @@ goto:eof
     set htm_file=!%2!
     set add_br=%3
     set line_prefix=%4
+    set use_style=%5
 
     if not defined add_br set add_br=1
+    if .%line_prefix%.==.null. set line_prefix=
+
 
     (
+        if not .%use_style%.==.. (
+          echo ^<div class="%use_style%"^>
+        )
+
         for /f "tokens=*" %%a in ('type %tmp_file%') do (
             set line=%line_prefix%%%a
             if not .!line!.==.. (
@@ -1778,6 +1794,11 @@ goto:eof
             @rem do NOT add leading BR tag: excessive empty line will appear.
             if .%add_br%.==.1. ( echo !line!^<br /^> ) else ( echo !line! )
         )
+
+        if not .%use_style%.==.. (
+          echo ^</div^>
+        )
+
     ) >> %htm_file%
 
     endlocal

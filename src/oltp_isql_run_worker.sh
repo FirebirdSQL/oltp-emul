@@ -381,37 +381,38 @@ do
     rm -f $psql
 
 
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
-	cat <<- EOF >>$plog
-	
-		Obtain database statistics after test.
-		Command: $run_fbs
-		
-	EOF
+    if [ $run_db_statistics -eq 1 ]; then
+		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
+		cat <<- EOF >>$plog
+			Obtain database statistics after test.
+			Command: $run_fbs
+		EOF
+		msg="SID=$sid. Gather database statistics"
+		echo $(date +'%H:%M:%S'). $msg - START.
+		$run_fbs 1>>$plog 2>&1
+		echo $(date +'%H:%M:%S'). $msg - FINISH.
+    else
+		cat <<- EOF >>$plog
+			Database statistics was not gathered, see config parameter 'run_db_statistics'.
+		EOF
+    fi
 
-    msg="SID=$sid. Gather database statistics"
-    echo $(date +'%H:%M:%S'). $msg - START.
-
-    $run_fbs 1>>$plog 2>&1
-
-    echo $(date +'%H:%M:%S'). $msg - FINISH.
-
-	skip_val_list="(AGENTS|BUSINESS_OPS|DOC_STATES|FB_ERRORS|EXT_STOPTEST|SETTINGS|OPTYPES|RULES_FOR_%|PHRASES|TMP\$%|MON%|WARE%|Z_%)"
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_validate -dbname $dbnm -val_lock_timeout 1 -val_tab_excl $skip_val_list"
-	cat <<- EOF >>$plog
-	
-		Online validation of database.
-		Command: $run_fbs
-		
-	EOF
-
-    msg="SID=$sid. Database online validation"
-    echo $(date +'%H:%M:%S'). $msg - START.
-
-    $run_fbs 1>>$plog 2>&1
-
-    echo $(date +'%H:%M:%S'). $msg - FINISH.
-
+    if [ $run_db_validation -eq 1 ]; then
+		skip_val_list="(AGENTS|BUSINESS_OPS|DOC_STATES|FB_ERRORS|EXT_STOPTEST|SETTINGS|OPTYPES|RULES_FOR_%|PHRASES|TMP\$%|MON%|WARE%|Z_%)"
+		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_validate -dbname $dbnm -val_lock_timeout 1 -val_tab_excl $skip_val_list"
+		cat <<- EOF >>$plog
+			Online validation of database.
+			Command: $run_fbs
+		EOF
+		msg="SID=$sid. Database online validation"
+		echo $(date +'%H:%M:%S'). $msg - START.
+		$run_fbs 1>>$plog 2>&1
+		echo $(date +'%H:%M:%S'). $msg - FINISH.
+    else
+		cat <<- EOF >>$plog
+			Database validation was not performed, see config parameter 'run_db_validation'.
+		EOF
+    fi
 
     #if [ $fb != 25 ]; then
         run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
