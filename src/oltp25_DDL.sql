@@ -371,6 +371,7 @@ create domain dm_account_type as varchar(1) character set utf8 NOT null check( v
 create domain dm_unit varchar(80);
 create domain dm_info varchar(255);
 create domain dm_stack varchar(512);
+create domain dm_ip varchar(40); -- remote address to be written into perf_log, mon_log: length should be enough for storing IPv6
 commit;
 
 -------------------------------------------------------------------------------
@@ -998,7 +999,7 @@ recreate table perf_log(
   ,info dm_info -- info for debug
   ,exc_info dm_info -- info about exception (if occured)
   ,stack dm_stack
-  ,ip varchar(40)  -- rdb$get_context('SYSTEM','CLIENT_ADDRESS'); for IPv6: 'FF80:0000:0000:0000:0123:1234:ABCD:EF12' - enough 39 chars
+  ,ip dm_ip  -- rdb$get_context('SYSTEM','CLIENT_ADDRESS'); for IPv6: 'FF80:0000:0000:0000:0123:1234:ABCD:EF12' - enough 39 chars
   ,dts_beg timestamp default 'now' -- current_timestamp
   ,dts_end timestamp
   ,aux1 double precision -- for srv_recalc_idx_stat: new value of index statistics
@@ -1031,7 +1032,7 @@ recreate global temporary table tmp$perf_log(
   ,info dm_info
   ,exc_info dm_info
   ,stack dm_stack
-  ,ip varchar(15)
+  ,ip dm_ip
   ,dts_beg timestamp default 'now' -- current_timestamp
   ,dts_end timestamp
   ,aux1 double precision
@@ -1083,7 +1084,7 @@ recreate table mon_log(
    ,remote_pid bigint
    ,stat_id bigint
    ,dump_trn bigint default current_transaction
-   ,ip varchar(15)
+   ,ip dm_ip
    ,usr dm_dbobj
    ,remote_process dm_info
    ,rowset bigint -- for grouping records that related to the same measurement
