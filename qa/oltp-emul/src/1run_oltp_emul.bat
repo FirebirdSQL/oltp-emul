@@ -714,8 +714,15 @@ for /l %%i in (1, 1, %winq%) do (
 echo. && echo %date% %time% Done.
 
 if .%use_external_to_stop%.==.. (
-  set batch4stop=!tmpdir!\1stoptest.tmp.bat
-  call :repl_with_bound_quotes !batch4stop! batch4stop
+  set b4stopbase=1stoptest.tmp
+  set b4stop_bat=!tmpdir!\!b4stopbase!.bat
+  set b4stop_sql=!tmpdir!\!b4stopbase!.sql
+  set b4stop_err=!tmpdir!\!b4stopbase!.err
+
+  call :repl_with_bound_quotes !b4stop_bat! b4stop_bat
+  call :repl_with_bound_quotes !b4stop_sql! b4stop_sql
+  call :repl_with_bound_quotes !b4stop_err! b4stop_err
+
   (
     echo @echo off
     echo rem --------------------------------------------------------------------------------
@@ -724,16 +731,56 @@ if .%use_external_to_stop%.==.. (
     echo rem It is highly rtecommended to use this batch for that goal rather than brute kill
     echo rem ISQL sessions or use Firebird monitoring tables.
     echo rem --------------------------------------------------------------------------------
-    echo echo !time!. Running command to stop all working ISQL sessions:
-    echo @echo on
-    echo echo show sequence g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequence g_stop_test; ^| !fbc!\isql !dbconn! !dbauth! -q -n -nod
-    echo @echo off
-    echo echo !time! Done.
-  ) >!batch4stop!
+    echo setlocal enabledelayedexpansion enableextensions
+    echo echo ^^!time^^!. Start batch for asynchronous stop all working ISQL sessions:
+    echo (
+    echo     echo set list on; 
+    echo     echo -- set echo on;
+    echo     echo set term #;
+    echo     echo execute block returns("Cancelling test, start at:" timestamp, "'g_stop_test' value:" bigint^^^) as
+    echo     echo begin
+    echo     echo     "Cancelling test, start at:" = current_timestamp;
+    echo     echo     "'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
+    echo     echo     suspend;
+    echo     echo end
+    echo     echo #
+    echo     echo alter sequence g_stop_test restart with -999999999
+    echo     echo #
+    echo     echo commit
+    echo     echo #
+    echo     echo execute block returns("Cancelling test, finish at:" timestamp, "'g_stop_test' value:" bigint^^^) as
+    echo     echo begin
+    echo     echo     "Cancelling test, finish at:" = current_timestamp;
+    echo     echo     "'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
+    echo     echo     suspend;
+    echo     echo end
+    echo     echo #
+    echo ^) ^> !b4stop_sql!
+    echo.
+    echo !fbc!\isql !dbconn! !dbauth! -q -n -nod -i !b4stop_sql! 2^>!b4stop_err!
+    echo.
+    echo for %%%%a in (!b4stop_err!^) do (
+    echo     if not %%%%~za lss 1 (
+    echo         echo ^^!time^^! ### ACHTUNG ###
+    echo         echo.
+    echo         echo ISQL that tried to send stop-signal finished with ERROR.
+    echo         echo.
+    echo         echo Check file !b4stop_err!:
+    echo         echo ++++++++++++++++++++++++++++++
+    echo         type !b4stop_err!
+    echo         echo ++++++++++++++++++++++++++++++
+    echo     ^) else (
+    echo         del !b4stop_sql!
+    echo         del !b4stop_err!
+    echo         echo ^^!time^^! Batch finished OK. ISQL sessions can be alive a few minutes - it depends on current workload.
+    echo         echo Note: one of ISQL sessions will close much later: it will create report of test results.
+    echo     ^)
+    echo ^)
+  ) >!b4stop_bat!
   echo.
   echo In order to premature stop all working ISQL sessions run following batch:
   echo.
-  echo !batch4stop!
+  echo !b4stop_bat!
   echo.
 ) else (
   echo.
@@ -744,6 +791,7 @@ if .%use_external_to_stop%.==.. (
 )
 
 echo Config params, running commands and results see in file(s): 
+
 echo 1. TEXT: !log_with_params_in_name!.txt
 if .%make_html%.==.1. (
   echo 2. HTML: !log_with_params_in_name!.html
