@@ -318,7 +318,7 @@ commit;
 recreate exception ex_context_var_not_found 'required context variable(s): @1 - not found or has invalid value';
 recreate exception ex_bad_working_mode_value 'db-level trigger TRG_CONNECT: no found rows for settings.working_mode=''@1'', correct it!';
 recreate exception ex_bad_argument 'argument @1 passed to unit @2 is invalid';
-recreate exception ex_test_cancellation 'test_has_been_cancelled (external text file ''stoptest'' is not empty)';
+recreate exception ex_test_cancellation 'test_has_been_cancelled (either by adding text into external text file ''stoptest'' or by changing value of sequence ''g_stop_test'' to non-zero)';
 
 recreate exception ex_record_not_found 'required record not found, datasource: @1, key: @2';
 recreate exception ex_cant_lock_row_for_qdistr 'can`t lock any row in `qdistr`: optype=@1, ware_id=@2, qty_required=@3';
