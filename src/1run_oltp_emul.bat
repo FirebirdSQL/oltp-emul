@@ -511,24 +511,25 @@ set existing_docs=-1
 set engine=unknown_engine
 set log_tab=unknown_table
 
-call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" existing_docs engine log_tab
+call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
+@rem                         1       2       3        4         5             6          7       8
 
 @rem echo existing_docs=%existing_docs%, log_tab=%log_tab%
 @rem if /i .%init_docs%.==.0. goto more
 
 set initd_bak=%init_docs%
-set /a init_docs = init_docs - %existing_docs%
+set /a required_docs = init_docs - %existing_docs%
 
-if %init_docs% geq 0 (
+if %required_docs% geq 0 (
     if .%existing_docs%.==.0. (
       echo Database has NO documents.
     ) else (
-      echo Database already has %existing_docs% documents.
+      echo There are only %existing_docs% documents in database. Required minimum is: %initd_bak%. 
     )
-    echo We have to create yet ^>^>^>%init_docs%^<^<^< ones before launch working ISQL sessions.
+    echo We have to create yet ^>^>^>%required_docs%^<^<^< ones before launch working ISQL sessions.
 ) else (
     echo Database has all necessary number of documents that should be initially populated.
-    echo Existing = %existing_docs%, required = %initd_bak%. We can launch working ISQL sessions.
+    echo Existing ^>= %existing_docs%, required minimum = %initd_bak%. We can launch working ISQL sessions.
 )
 echo.
 
@@ -536,7 +537,7 @@ if %init_docs% gtr 0 (
   
   @rem ############## I N I T    D A T A    P O P.   ####################
 
-  call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %init_docs% %engine% %log_tab%
+  call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %required_docs% %engine% %log_tab%
 )
 
 @rem -----------------------   w o r k i n g    p h a s e   -----------------------------
@@ -2497,12 +2498,15 @@ goto:eof
     echo !msg! >>%log4tmp%
     echo.
     
-    @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" existing_docs engine log_tab
+    @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
+    @rem                              1       2      3         4           5           6           7       8
 
     set tmpdir=%1
     set fbc=%2
     set dbconn=%3
     set dbauth=%4
+    set init_docs=%5
+
     @rem Remove enclosing double quotes from value ofr dbauth: "-user ... -pas ..."   ==>  -user ... -pas ...
     set dbauth=!dbauth:"=!
 
@@ -2514,7 +2518,6 @@ goto:eof
     call :repl_with_bound_quotes %tmplog% tmplog
     call :repl_with_bound_quotes %tmperr% tmperr
 
-
     @rem echo Check if the database needs to be filled up with necessary number of documents
        
     @rem check that total number of docs (count from doc_list table) is LESS than %init_docs%
@@ -2524,7 +2527,7 @@ goto:eof
     
     (
         echo set list on;
-        echo select (select count(*^) from doc_list^) as "existing_docs="
+        echo select (select count(*^) from (select id from doc_list rows (1+%init_docs%^) ^) ^) as "existing_docs="
         echo       ,rdb$get_context('SYSTEM','ENGINE_VERSION'^) as "engine="
         echo       ,iif( exists( select * from rdb$relations r
         echo                     where r.rdb$relation_name='PERF_LOG'
@@ -2575,10 +2578,11 @@ goto:eof
     )
     del %tmplog% 2>nul
 
-    @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" existing_docs engine log_tab
-
     @rem Assign values to output arguments 'existing_docs' 'engine' and 'log_tab':
-    endlocal & set "%~5=%existing_docs%" & set "%~6=%engine%" & set "%~7=%log_tab%"
+    @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
+    @rem                              1       2      3         4           5           6           7       8
+
+    endlocal & set "%~6=%existing_docs%" & set "%~7=%engine%" & set "%~8=%log_tab%"
 
 goto:eof
 

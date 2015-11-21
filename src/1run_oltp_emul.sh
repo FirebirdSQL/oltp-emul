@@ -530,10 +530,10 @@ upd_init_docs() {
   # check that total number of docs (count from doc_list table) is LESS than $init_docs
   # and correct $init_docs (reduce it) so that its new value + count will be equal to 
   # required total number of docs (which is specified in oltp_config.NN)
-  cat <<- 'EOF' >$tmpchk
+  cat <<- EOF >$tmpchk
       set list on;
       set heading off;
-      select count(*) as "old_docs=" from doc_list;
+      select count(*) as "old_docs=" from (select id from doc_list rows (1+$init_docs));
 	EOF
 
   echo -e Count number of existing documents to compare it with \$init_docs setting.
