@@ -503,7 +503,12 @@ if .%need_rebuild_db%.==.1. (
 
 @rem ################### check for non-empty stoptest.txt ################################
 
-call :chk_stop_test init_chk !tmpdir! !fbc! !dbconn! "!dbauth!"
+if  defined use_external_to_stop (
+  call :chk_stop_test init_chk !tmpdir! !fbc! !dbconn! "!dbauth!"
+) else (
+  echo Config parameter 'use_external_to_stop' is UNDEFINED (this is DEFAULT^).
+  echo SKIP checking for non-empty external file.
+)     
 
 call :show_db_and_test_params !tmpdir! !fbc! !dbconn! "!dbauth!" %is_embed% %log4all%
 

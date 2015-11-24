@@ -240,7 +240,9 @@ if .%sid%.==.1. (
     @rem ------------------------------------------------------------------------------
     @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
     @rem ------------------------------------------------------------------------------
-    find /c /i "shutdown" %err% >nul
+    echo !date! !time! Check whether database state is SHUTDOWN >>%log%
+    @rem find /c /i "shutdown" %err% >nul
+    findstr /m /i "shutdown" %err% >nul
     if errorlevel 1 goto db_online
     goto db_offline
 
@@ -250,7 +252,9 @@ if .%sid%.==.1. (
     @rem ------------------------------------------------------------------
     @rem c h e c k    i f    t e s t   h a s   b e e n    C A N C E L L E D:
     @rem ------------------------------------------------------------------
-    find /c /i "EX_TEST_CANCEL" %err% >nul
+    echo !date! !time! Check whether test has been stopped >>%log%
+    @rem find /c /i "EX_TEST_CANCEL" %err% >nul
+    findstr /m /i "EX_TEST_CANCEL" %err% >nul
     if errorlevel 1 goto start
     goto test_canc
 
