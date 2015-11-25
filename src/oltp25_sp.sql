@@ -3793,7 +3793,9 @@ begin
         from perf_log g
         join business_ops b on b.unit=g.unit
         join a on g.dts_beg >= a.last_job_start_dts -- only rows which are from THIS job!
-        where g.fb_gdscode is null -- :: nb :: we must take in account only SUCCESSFULLY finished units:
+        where  -- we must take in account only SUCCESSFULLY finished units, i.e. fb_gdscode is NULL.
+            g.fb_gdscode + 0 -- 25.11.2015: suppress making bitmap for this index! almost 90% of rows contain NULL in this field.
+            is null
         group by g.unit
     )
     select b.unit, b.info, b.sort_prior, p.report_beg, p.report_end,
