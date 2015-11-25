@@ -199,7 +199,11 @@ begin
             execute statement v_ddl_qstorn;
             execute statement v_ddl_qsidx1;
             execute statement v_ddl_qsidx2;
-            execute statement v_ddl_qsidx3;
+            if ( upper(v_qs_table) <> upper('xqs_3300_3400') ) then
+                -- 25.11.2015, look at index statistics of 'xqs_3300_3400': 
+                -- there are 100% dups in the field 'rcv_id', it has NULL value in all rows.
+                -- We have to avoid creation of this index, it's absolutely useless!
+                execute statement v_ddl_qsidx3;
         end
     end
 
