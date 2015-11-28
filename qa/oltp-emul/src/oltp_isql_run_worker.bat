@@ -241,7 +241,6 @@ if .%sid%.==.1. (
     @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
     @rem ------------------------------------------------------------------------------
     echo !date! !time! Check whether database state is SHUTDOWN >>%log%
-    @rem find /c /i "shutdown" %err% >nul
     findstr /m /i "shutdown" %err% >nul
     if errorlevel 1 goto db_online
     goto db_offline
@@ -253,7 +252,6 @@ if .%sid%.==.1. (
     @rem c h e c k    i f    t e s t   h a s   b e e n    C A N C E L L E D:
     @rem ------------------------------------------------------------------
     echo !date! !time! Check whether test has been stopped >>%log%
-    @rem find /c /i "EX_TEST_CANCEL" %err% >nul
     findstr /m /i "EX_TEST_CANCEL" %err% >nul
     if errorlevel 1 goto start
     goto test_canc
@@ -278,17 +276,19 @@ if .%sid%.==.1. (
 
     set tmp_file=!tmpdir!\oltp%fb%.report.tmp
 
-    set msg=STOPFILE has non-zero size, test has been cancelled
+    set msg=!date! !time!. Test has been CANCELLED.
 
-    @echo.
-    @echo %date% %time% %msg%
-    @echo.
-    @echo %date% %time% %msg% >>%sts%
-
+    echo.
+    echo !msg!
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
+    echo.
     @rem ----------------
 
-    set msg=Writing statistics data about estimated performance from %log%
-    echo %date% %time%. %msg%...
+    set msg=!date! !time!. Writing statistics data about estimated performance from %log%
+    echo !msg!
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
     (
       @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
       for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
@@ -298,14 +298,33 @@ if .%sid%.==.1. (
     ) > %rpt%
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
+    set msg=!date! !time!. Running !run_repo!
+    echo !msg!
+
+    echo !msg! >>%log%
+    @rem type %rpt% >>%log%
+
+    echo !msg! >>%sts%
+
     %run_repo% 1>>%log% 2>&1
+
+    set msg=!date! !time!. Done writing estimated performance data.
+    echo !msg!
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
+    
     del %rpt% 2>nul
 
-    @rem ---------------------------------------------------------------------------------------------------------------
-    @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
-    @rem ---------------------------------------------------------------------------------------------------------------
-
-    if not .%sid%.==.1. goto end
+    if not .%sid%.==.1. (
+        @rem ---------------------------------------------------------------------------------------------------------------
+        @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
+        @rem ---------------------------------------------------------------------------------------------------------------
+        set msg=!date! !time!. Session %sid% is now finishing its work: exit from batch.
+        echo !msg!
+        echo !msg! >>%log%
+        echo !msg! >>%sts%
+        goto end
+    )
     
     @rem All other attachment have to be FINISH before we start to creaing report.
     @rem We check this by periodical query to mon$attachments:
@@ -1817,7 +1836,7 @@ goto:eof
     set dbconn=!%3!
     set dbauth=!%4!
     set sql_in=!%5!
-    set html_file=!%6!
+    set htm_file=!%6!
 
     set dbg=%7
 
@@ -1828,14 +1847,15 @@ goto:eof
     set sql_err=%tmpdir%\make_html_table.tmp.err
     set tmp_sqlda=%tmpdir%\make_html_table.tmp.sqd
     set tmp_nums=%tmpdir%\make_html_table.tmp.num
+    set tmp_html=%tmpdir%\make_html_table.tmp.html
 
     call :repl_with_bound_quotes %sql_temp% sql_temp
     call :repl_with_bound_quotes %sql_log% sql_log
     call :repl_with_bound_quotes %sql_err% sql_err
     call :repl_with_bound_quotes %tmp_sqlda% tmp_sqlda
     call :repl_with_bound_quotes %tmp_nums% tmp_nums
+    call :repl_with_bound_quotes %tmp_html% tmp_html
 
-    @rem set htm_file=%tmpdir%\make_html_table.tmp.htm
 
     (
         echo set sqlda_display on;
@@ -1846,9 +1866,9 @@ goto:eof
     %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%tmp_sqlda% 2>%sql_err%
 
     for %%a in (%sql_err%) do if not %%~za lss 1 (
-        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%htm_file%
-        call :add_html_text sql_temp htm_file
-        call :add_html_text sql_err htm_file 1 $css$fault$
+        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%tmp_html%
+        call :add_html_text sql_temp tmp_html
+        call :add_html_text sql_err tmp_html 1 $css$fault$
     )
 
     @rem 2.5: OUTPUT SQLDA version: 1 sqln: 20 sqld: 1
@@ -1908,7 +1928,7 @@ goto:eof
 
     @rem result: num_list = list of POSITION INDICES which relates to numeric fields.
 
-    echo ^<table border="1" cellpadding="3"^> >>%htm_file%
+    echo ^<table border="1" cellpadding="3"^> >>%tmp_html%
 
     set tho="<th>"
     set tho=!tho:"=!
@@ -1953,12 +1973,12 @@ goto:eof
 
           set /a i=!i!+1
       )
-    ) >> %htm_file%
+    ) >> %tmp_html%
 
     set fld_first=!fld_first: =!
     set fld_last=!fld_last: =!
 
-    @rem echo fld_first=.!fld_first!. fld_last=.!fld_last!. - check header of table in %htm_file%  &pause
+    @rem echo fld_first=.!fld_first!. fld_last=.!fld_last!. - check header of table in %tmp_html%  &pause
 
     (
         echo set list on;
@@ -1978,9 +1998,9 @@ goto:eof
     %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%sql_log% 2>%sql_err%
 
     for %%a in (%sql_err%) do if not %%~za lss 1 (
-        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%htm_file%
-        call :add_html_text sql_temp htm_file
-        call :add_html_text sql_err htm_file 1 $css$fault$
+        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%tmp_html%
+        call :add_html_text sql_temp tmp_html
+        call :add_html_text sql_err tmp_html 1 $css$fault$
     )
 
     @rem Output DATA of report:
@@ -2036,17 +2056,21 @@ goto:eof
           if .!fld_name!.==.!fld_last!. echo !trc!
           set /a fld_num=!fld_num!+1
       )
-    ) >> %htm_file%
+    ) >> %tmp_html%
 
-    echo ^</table^> >>%htm_file%
+    echo ^</table^> >>%tmp_html%
+
+    type %tmp_html% >> %htm_file%
 
     del %sql_temp% 2>nul
     del %sql_log% 2>nul
     del %sql_err% 2>nul
     del %tmp_sqlda% 2>nul
     del %tmp_nums% 2>nul
+    del %tmp_html% 2>nul
 
 goto:eof
+
 
 :trim
     setLocal

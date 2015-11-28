@@ -301,16 +301,13 @@ insert into settings(working_mode, mcode,                      svalue,  init_on)
 insert into settings(working_mode, mcode,         svalue)
               values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'; changed to '0' for branch 'create_with_split_heavy_tabs'
 
--- How records should be handled when OLD one moves from QDistr to QStorned and
--- NEW should be added in QDistr (when we create new document and search for rows
--- from several old docs which are placed immediately BEFORE new one), see SP_MAKE_QTY_STORNO.
--- 'DEL_INS' ==> save fields from OLD and delete it in QDistr; insert data of OLD into qstorno;
--- 'UPD_ROW' ==> insert data of OLD into qstorno; UPDATE qdistr with data of NEW where rdb$db_key = :old
--- 08.09.2014: dimitr recommended choose 'UPD_ROW' (see letter 08.09.2014 2102)
--- 10.09.2014: benchmarks show that 'DEL_INS' better, approx 10%. Confirmed 10.02.2015.
--- 05.09.2015: left only 'DEL_INS' during deep refactoring with 'create_with_split_heavy_tabs' setting.
-insert into settings(working_mode, mcode,         svalue)
-              values('COMMON',     'QDISTR_HANDLING_MODE',  'DEL_INS');
+
+-- 27.11.2015. Minimal interval in minutes between two subsequent calls of service
+-- procedure srv_recalc_idx_stat which updates index statistics and can last
+-- too long (more than 3-4 minutes per table on database with size ~100Gb).
+-- See SP srv_random_unit_choice for choising algorithm:
+insert into settings(working_mode, mcode,                      svalue)
+              values('COMMON',     'RECALC_IDX_MIN_INTERVAL', '15');
 
 -- Do we allow to make 'batch reserve creations' in sp_add_invoice ?
 -- When '1' then search of client orders with incompleted reserve amounts and
@@ -335,7 +332,6 @@ insert into settings(working_mode, mcode,                   svalue)
 -- update settings s set svalue='1000000' where s.working_mode='COMMON' and s.mcode='RANDOM_SEEK_VIA_ROWS_LIMIT';
 insert into settings(working_mode, mcode,                      svalue)
               values('COMMON',       'RANDOM_SEEK_VIA_ROWS_LIMIT', '0');
-
 
 -- Used only in script oltp_data_filling.sql that fills wares table:
 -- min/max cost of purchasing for qty, max profit percent - common for all working_modes:

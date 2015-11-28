@@ -321,6 +321,7 @@ recreate exception ex_bad_argument 'argument @1 passed to unit @2 is invalid';
 recreate exception ex_test_cancellation 'test_has_been_cancelled (either by adding text into external text file ''stoptest'' or by changing value of sequence ''g_stop_test'' to non-zero)';
 
 recreate exception ex_record_not_found 'required record not found, datasource: @1, key: @2';
+recreate exception ex_cant_lock_semaphore_record 'can`t lock record in SEMAPHORES table for serialization';
 recreate exception ex_cant_lock_row_for_qdistr 'can`t lock any row in `qdistr`: optype=@1, ware_id=@2, qty_required=@3';
 recreate exception ex_cant_find_row_for_qdistr 'no rows found for FIFO-distribution: optype=@1, rows in tmp$shopping_cart=@2';
 
@@ -7969,6 +7970,8 @@ returns(
     n int
 ) as
     declare r_max int;
+    declare v_last_recalc_idx_dts timestamp;
+    declare v_last_recalc_idx_minutes_ago int;
     declare v_this dm_dbobj = 'srv_random_unit_choice';
     declare c_unit_for_mon_query dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of thios SP!
     declare fn_internal_enable_mon_query smallint;
@@ -7984,6 +7987,16 @@ begin
     a_excluded_modes = coalesce( a_excluded_modes, '');
     a_excluded_kinds = coalesce( a_excluded_kinds, '');
 
+    select g.dts_beg
+    from perf_log g where g.unit = 'srv_recalc_idx_stat'
+    order by g.dts_beg desc rows 1
+    into v_last_recalc_idx_dts;
+
+    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG')is not null ) then -- see SP_CHECK_TO_STOP_WORK
+        v_last_recalc_idx_dts = maxvalue(v_last_recalc_idx_dts, cast(rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) );
+
+    v_last_recalc_idx_minutes_ago = coalesce( datediff(minute from v_last_recalc_idx_dts to cast('now' as timestamp)), cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int ) );
+
     r_max = rdb$get_context('USER_SESSION', 'BOP_RND_MAX');
     if ( r_max is null ) then
     begin
@@ -7993,12 +8006,21 @@ begin
 
     r=rand()*r_max;
     delete from tmp$perf_log p where p.stack = :v_this;
-    --select count(*) --o.unit, o.sort_prior, o.random_selection_weight
+
     insert into tmp$perf_log(unit, aux1, aux2, stack)
     select o.unit, o.sort_prior, o.random_selection_weight, :v_this
     from business_ops o
     where o.random_selection_weight >= :r
         and (:fn_internal_enable_mon_query = 1 or o.unit <> :c_unit_for_mon_query) -- do NOT choose srv_fill_mon if mon query disabled
+        and ( -- 27.11.2015: skip call of index statistics recalc if it was done not so far:
+                o.unit <> 'srv_recalc_idx_stat'
+                or
+                o.unit = 'srv_recalc_idx_stat'
+                and
+                    :v_last_recalc_idx_minutes_ago
+                    >=
+                    cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int )
+            )
         and (:a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
         and (:a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
         and (:a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
