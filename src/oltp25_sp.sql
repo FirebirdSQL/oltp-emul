@@ -3181,6 +3181,7 @@ as
     declare v_err_msg dm_info;
     declare v_neg_info dm_info;
     declare c_chk_violation_code int = 335544558; -- check_constraint
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
 begin
     -- Gathers all turnovers for wares in 'invnt_turnover_log' table and makes them total
     -- to merge in table 'invnt_saldo'
@@ -3220,9 +3221,16 @@ begin
     -- code:
     begin
         v_semaphore_id = null;
-        select id from semaphores s where s.task = :v_this with lock into v_semaphore_id;
-        if (v_semaphore_id is null) then
-            exception ex_record_not_found;
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found;
+            update semaphores set id = id where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
 
     when any do
         -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
@@ -3237,7 +3245,6 @@ begin
                     -- concurrent_transaction ==> if select for update failed;
                     -- deadlock ==> if attempt of UPDATE set id=id failed.
                     v_deferred_to_next_time = 1;
-                    select e.fb_mnemona from fb_errors e where e.fb_gdscode = gdscode into msg;
                     v_gdscode = gdscode;
                     del_rows = -gdscode;
                 end
@@ -3248,8 +3255,9 @@ begin
 
     if ( v_deferred_to_next_time = 1 ) then
     begin
-        suspend;
-        exit; -- ++++++++++++++    E X I T    +++++++++++++++++++
+        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
+        exception ex_cant_lock_semaphore_record;
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3384,8 +3392,10 @@ begin
 
 when any do
     begin
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
         execute procedure sp_add_to_abend_log(
-            msg,
+            msg, -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
             gdscode,
             v_neg_info,
             v_this,
@@ -3426,6 +3436,7 @@ as
     declare v_dummy bigint;
     declare v_this dm_dbobj = 'srv_make_money_saldo';
     declare fn_infinity bigint;
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
 begin
 
     -- Gathers all turnovers for agents in 'money_turnover_log' table and makes them total
@@ -3450,9 +3461,16 @@ begin
     -- code:
     begin
         v_semaphore_id = null;
-        select id from semaphores s where s.task = :v_this with lock into v_semaphore_id;
-        if (v_semaphore_id is null) then
-            exception ex_record_not_found; -- using('semaphores', v_this);
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found;
+            update semaphores set id = id where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
     when any do
         -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
         -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
@@ -3476,8 +3494,9 @@ begin
 
     if ( coalesce(v_deferred_to_next_time,0) <> 0) then
     begin
-        suspend;
-        exit;
+        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
+        exception ex_cant_lock_semaphore_record;
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3548,8 +3567,10 @@ begin
 
 when any do
     begin
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
         execute procedure sp_add_to_abend_log(
-            '',
+            msg,  -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
             gdscode,
             'agent_id='||agent_id,
             v_this,
@@ -3573,6 +3594,7 @@ create or alter procedure srv_recalc_idx_stat returns(
     elapsed_ms int
 )
 as
+    declare msg dm_info;
     declare v_semaphore_id type of dm_idb;
     declare v_deferred_to_next_time smallint = 0;
     declare v_dummy bigint;
@@ -3580,6 +3602,7 @@ as
     declare v_gdscode int = null;
     declare v_this dm_dbobj = 'srv_recalc_idx_stat';
     declare v_start timestamp;
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
 begin
 
     -- Refresh index statistics for most changed tables.
@@ -3594,15 +3617,20 @@ begin
     -- Otherwise raise error: performance degrades almost to zero.
     execute procedure sp_check_nowait_or_timeout;
 
-    -- Ensure that current attach is the ONLY one which tries to make totals.
     -- Use locking record from `semaphores` table to synchronize access to this
     -- code:
     begin
         v_semaphore_id = null;
-        select id from semaphores s where s.task = :v_this with lock into v_semaphore_id;
-        if (v_semaphore_id is null) then
-            exception ex_record_not_found;
-
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found;
+            update semaphores set id = id where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
     when any do
         -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
         -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
@@ -3623,6 +3651,14 @@ begin
         end
     end
 
+    if ( v_deferred_to_next_time = 1 ) then
+    begin
+       -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
+        exception ex_cant_lock_semaphore_record;
+        exit;
+    end
+
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
@@ -3633,40 +3669,33 @@ begin
     -- use only context variables in user_tran namespace:
     execute procedure srv_increment_tx_bops_counter;
 
-    if ( v_deferred_to_next_time = 1 ) then
-        begin
-                tab_name='semaphore_locked';
-                idx_name='deferred, gds='||v_gdscode;
-                suspend;
-        end
-    else
-        begin
-            for
-                select ri.rdb$relation_name, ri.rdb$index_name, ri.rdb$statistics
-                from rdb$indices ri
-                where
-                    coalesce(ri.rdb$system_flag,0)=0
-                    -- make recalc only for most used tables:
-                    and ri.rdb$relation_name in ( 'DOC_DATA', 'DOC_LIST', 'QDISTR', 'QSTORNED', 'PDISTR', 'PSTORNED')
-                order by ri.rdb$relation_name, ri.rdb$index_name
-            into
-                tab_name, idx_name, idx_stat_befo
-            do begin
-                -- Check that table `ext_stoptest` (external text file) is EMPTY,
-                -- otherwise raises ex`ception to stop test:
-                execute procedure sp_check_to_stop_work;
+    for
+        select ri.rdb$relation_name, ri.rdb$index_name, ri.rdb$statistics
+        from rdb$indices ri
+        where
+            coalesce(ri.rdb$system_flag,0)=0
+            -- make recalc only for most used tables:
+            and ri.rdb$relation_name in ( 'DOC_DATA', 'DOC_LIST', 'QDISTR', 'QSTORNED', 'PDISTR', 'PSTORNED')
+        order by ri.rdb$relation_name, ri.rdb$index_name
+    into
+        tab_name, idx_name, idx_stat_befo
+    do begin
+        -- Check that table `ext_stoptest` (external text file) is EMPTY,
+        -- otherwise raises ex`ception to stop test:
+        execute procedure sp_check_to_stop_work;
 
-                execute procedure sp_add_perf_log(1, v_this||'_'||idx_name);
+        execute procedure sp_add_perf_log(1, v_this||'_'||idx_name);
 
-                v_start='now';
-                execute statement( 'set statistics index '||idx_name );
-                elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
-                --with autonomous transaction; -- ::: nb ::: result of this recal will be seen in TIL = READ COMMITTED
+        v_start='now';
 
-                execute procedure sp_add_perf_log(0, v_this||'_'||idx_name,null,tab_name, idx_stat_befo);
-                suspend;
-            end
-        end
+        execute statement( 'set statistics index '||idx_name )
+        with autonomous transaction; -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
+
+        elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
+
+        execute procedure sp_add_perf_log(0, v_this||'_'||idx_name,null,tab_name, idx_stat_befo);
+        suspend;
+    end
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(0, v_this, v_gdscode);
@@ -3674,7 +3703,14 @@ begin
 
 when any do
     begin
-        execute procedure sp_add_to_abend_log('', gdscode, null, v_this );
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
+        execute procedure sp_add_to_abend_log(
+            msg, -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
+            gdscode,
+            null,
+            v_this
+        );
 
         --#######
         exception; -- ::: nb ::: anonimous but in when-block!
