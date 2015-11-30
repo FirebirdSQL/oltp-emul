@@ -3230,13 +3230,35 @@ goto:eof
         echo set bail on;
         echo commit; 
         echo set transaction no wait;
-        echo delete from %log_tab% g
-        echo where g.unit in ( 'perf_watch_interval',
-        echo                   'sp_halt_on_error',
-        echo                   'dump_dirty_data_semaphore',
-        echo                   'dump_dirty_data_progress'
-        echo                 ^);
+        echo set term ^^;
+        echo -- NB: we have to enclose potentially update-conflicting statements in begin..end blocks with EMPTY when-any section
+        echo -- because of possible launch test from several hosts.
+        echo execute block as
+        echo begin
+        echo     begin
+        echo         delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+        echo     when any do 
+        echo         begin 
+        echo           -- nop ---
+        echo         end
+        echo     end
+        echo     begin
+        echo         delete from %log_tab% g
+        echo         where g.unit in ( 'perf_watch_interval',
+        echo                           'sp_halt_on_error',
+        echo                           'dump_dirty_data_semaphore',
+        echo                           'dump_dirty_data_progress'
+        echo                        ^);
+        echo     when any do 
+        echo         begin 
+        echo           -- nop ---
+        echo         end
+        echo     end
+        echo end
+        echo ^^
+        echo set term ;^^
         echo commit;
+        echo.
         echo insert into %log_tab%( unit,                  info,     exc_info,
         echo                       dts_beg, dts_end, elapsed_ms^)
         echo               values( 'perf_watch_interval', 'active', 'by %~f0',
@@ -3248,7 +3270,6 @@ goto:eof
         echo                       dts_beg, dts_end, elapsed_ms^)
         echo               values( 'dump_dirty_data_semaphore', '',    'by %~f0',
         echo                       null, null, -1^);
-        echo delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
         echo alter sequence g_success_counter restart with 0;
         echo commit;
     
@@ -3275,7 +3296,6 @@ goto:eof
         echo.
         echo set list off;
     )>%tmpsql%
-    
 
     set run_isql=%fbc%\isql
     call :repl_with_bound_quotes %run_isql% run_isql
