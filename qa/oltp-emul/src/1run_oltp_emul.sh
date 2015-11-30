@@ -1404,12 +1404,33 @@ launch_preparing() {
 		set bail on;
 		commit;
 		set transaction no wait;
-		delete from perf_log g
-		where g.unit in ( 'perf_watch_interval',
-		                  'sp_halt_on_error',
-		                  'dump_dirty_data_semaphore',
-		                  'dump_dirty_data_progress'
-		                );
+		-- NB: we have to enclose potentially update-conflicting statements in begin..end blocks with EMPTY when-any section
+		-- because of possible launch test from several hosts.
+		set term ^;
+		execute block as
+		begin
+			begin
+				delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+				when any do
+				begin
+					-- nop --
+				end
+			end
+			begin
+				delete from perf_log g
+				where g.unit in ( 'perf_watch_interval',
+		                          'sp_halt_on_error',
+		                          'dump_dirty_data_semaphore',
+		                          'dump_dirty_data_progress'
+		                        );
+				when any do
+				begin
+					-- nop --
+				end
+			end
+		end
+		^
+		set term ^;
 		commit;
 		insert into perf_log( unit,                  info,     exc_info,
 		                      dts_beg, dts_end, elapsed_ms)
@@ -1422,8 +1443,6 @@ launch_preparing() {
 		                      dts_beg, dts_end, elapsed_ms)
 		              values( 'dump_dirty_data_semaphore', '',    'by $0',
 		                      null, null, -1);
-
-		delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
 		alter sequence g_success_counter restart with 0;
 		commit;
 		set width unit 20;
