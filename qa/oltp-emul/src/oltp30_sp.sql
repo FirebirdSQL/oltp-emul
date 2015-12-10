@@ -3262,7 +3262,7 @@ begin
     begin
         -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
         msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record;
+        exception ex_cant_lock_semaphore_record msg;
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3492,7 +3492,7 @@ begin
     begin
         -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
         msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record;
+        exception ex_cant_lock_semaphore_record msg;
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3651,7 +3651,7 @@ begin
     begin
        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
         msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record;
+        exception ex_cant_lock_semaphore_record msg;
         exit;
     end
 
