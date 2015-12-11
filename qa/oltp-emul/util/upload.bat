@@ -1,0 +1,1 @@
+@rem replace this with actual data: E:\OLTP-EMUL\util\curl\bin\curl.exe -F "name=%1" -F "file=@%2" http://ib-aid.com/service/import_log.php
