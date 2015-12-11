@@ -1865,7 +1865,8 @@ if [ $init_docs -gt 0 ]; then
 
   echo $(date +'%y%m%d_%H%M%S') FINISH initial data population.
   echo
-  if [ $wait_if_not_exists = 1 && $wait_for_copy = 1 ]; then
+  # if [ $wait_if_not_exists = 1 && $wait_for_copy = 1 ]; then
+  if [ $wait_for_copy = 1 ]; then
     echo "### NOTE ###"
     echo
     echo It\'s a good time to make COPY of test database in order 
