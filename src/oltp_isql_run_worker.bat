@@ -1572,6 +1572,7 @@ if .%sid%.==.1. (
     del %rpt% 2>nul
 
     if not .%fname%.==.. (
+        set upload_log=!tmpdir!\oltp_emul_upload_results.log
         for /f %%a in (!tmp_file!) do (
             set name_for_saving=!tmpdir!\%%a
             set final_txt=!name_for_saving!.txt
@@ -1583,7 +1584,31 @@ if .%sid%.==.1. (
               set final_htm=!name_for_saving!.html
               call :repl_with_bound_quotes !final_htm! final_htm
               copy %htm_file% !final_htm! >nul
-              if exist !final_htm! del %htm_file% 2>nul
+              if exist !final_htm! (
+                del %htm_file% 2>nul
+                echo !date! !time!. Upload results in HTML format...
+                for %%n in ("!final_htm!") do set report_name=%%~nxn
+                call ..\util\upload.bat !report_name! !final_htm! 1>!upload_log! 2>&1
+                echo !date! !time!. Done, check !upload_log!:
+                type !upload_log! 
+                findstr /i /c:"success" !upload_log! >nul
+                if not errorlevel 1 (
+                  echo Final HTML report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
+                  del !final_htm!
+                  del !final_txt!
+                ) 
+              )
+            ) else (
+                echo !date! !time! Upload results in TEXT format...
+                for %%n in ("!final_txt!") do set report_name=%%~nxn
+                call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
+                echo !date! !time!. Done, check !upload_log!:
+                type !upload_log! 
+                findstr /i /c:"success" !upload_log! >nul
+                if not errorlevel 1 (
+                  echo Final TEXT report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
+                  del !final_txt!
+                ) 
             )
         )
     ) else (
