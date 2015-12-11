@@ -2941,7 +2941,8 @@ goto:eof
         set msg=Job has been done from %t0% to %time%. Count rows in doc_list: ^>^>^>!act_docs!^<^<^<.
         echo !msg! & echo !msg! >>%log4tmp%
     
-        if .%wait_if_not_exists%.==.1. if .%wait_for_copy%.==.1. (
+        @rem if .%wait_if_not_exists%.==.1. 
+        if .%wait_for_copy%.==.1. (
             @echo.
             @echo ### NOTE ###
             @echo.
