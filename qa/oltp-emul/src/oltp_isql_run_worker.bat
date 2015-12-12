@@ -1571,6 +1571,13 @@ if .%sid%.==.1. (
     
     del %rpt% 2>nul
 
+    @rem %fname% = value of optional config parameter 'file_name_with_test_params' = regular | benchmark, by default it is undefined.
+    @rem When this value is not empty then we have to rename final report (text and html) to the file which will have maximum info
+    @rem about FB build, database FW, test settings and performance result in its name.
+    @rem Sample of report name when this parameter is:
+    @rem 1. 'regular':   20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on.txt
+    @rem 2. 'benchmark': ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
+
     if not .%fname%.==.. (
         set upload_log=!tmpdir!\oltp_emul_upload_results.log
         for /f %%a in (!tmp_file!) do (
@@ -1586,29 +1593,39 @@ if .%sid%.==.1. (
               copy %htm_file% !final_htm! >nul
               if exist !final_htm! (
                 del %htm_file% 2>nul
-                echo !date! !time!. Upload results in HTML format...
-                for %%n in ("!final_htm!") do set report_name=%%~nxn
-                call ..\util\upload.bat !report_name! !final_htm! 1>!upload_log! 2>&1
-                echo !date! !time!. Done, check !upload_log!:
-                type !upload_log! 
-                findstr /i /c:"success" !upload_log! >nul
-                if not errorlevel 1 (
-                  echo Final HTML report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                  del !final_htm!
-                  del !final_txt!
-                ) 
+                @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
+                @rem When this parameter = 1 then we have to upload report and remove it from
+                @rem local drive if upload finished OK.
+                if .%upload_report%.==.1. (
+                    echo !date! !time!. Upload results in HTML format...
+                    for %%n in ("!final_htm!") do set report_name=%%~nxn
+                    call ..\util\upload.bat !report_name! !final_htm! 1>!upload_log! 2>&1
+                    echo !date! !time!. Done, check !upload_log!:
+                    type !upload_log! 
+                    findstr /i /c:"success" !upload_log! >nul
+                    if not errorlevel 1 (
+                      echo Final HTML report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
+                      del !final_htm!
+                      del !final_txt!
+                    ) 
+                )
               )
             ) else (
-                echo !date! !time! Upload results in TEXT format...
-                for %%n in ("!final_txt!") do set report_name=%%~nxn
-                call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
-                echo !date! !time!. Done, check !upload_log!:
-                type !upload_log! 
-                findstr /i /c:"success" !upload_log! >nul
-                if not errorlevel 1 (
-                  echo Final TEXT report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                  del !final_txt!
-                ) 
+                @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
+                @rem When this parameter = 1 then we have to upload report and remove it from
+                @rem local drive if upload finished OK.
+                if .%upload_report%.==.1. (
+                    echo !date! !time!. Upload results in TEXT format...
+                    for %%n in ("!final_txt!") do set report_name=%%~nxn
+                    call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
+                    echo !date! !time!. Done, check !upload_log!:
+                    type !upload_log! 
+                    findstr /i /c:"success" !upload_log! >nul
+                    if not errorlevel 1 (
+                      echo Final TEXT report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
+                      del !final_txt!
+                    ) 
+                )
             )
         )
     ) else (

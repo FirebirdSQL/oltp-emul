@@ -312,3 +312,11 @@ file_name_with_test_params = regular
 
 #postie_send_args = -esmtp -host:mail.local -from:malert@company.com -to:foo@bar.com -user:malert@company.com -pass:QwerTyuI0p
 
+# Windows only. Should final report be uploaded (1=yes; 0 or undefined = no) ?
+# If no, leave this parameter commented. In that case final report will be preserved on local drive, in the folder %tmpdir%.
+# If yes, set its value to 1 and make ensure that batch ..\util\upload.bat has command that is able to upload text html content
+# to external source and store its result in text log with marking successful finish with phrase containing word 'success'.
+# One of such console utility can be found here: http://curl.haxx.se/download.html
+# Sample of its usage: curl.exe -F "name=%1" -F "file=@%2" http://some_external_site_as_storage
+
+#upload_report = 0
