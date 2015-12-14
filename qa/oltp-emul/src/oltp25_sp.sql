@@ -3913,7 +3913,7 @@ end
 
 ^ -- srv_mon_perf_total
 
-create or alter procedure srv_mon_perf_dynamic(
+create or alter procedure srv_mon_perf_dynamic (
     a_intervals_number smallint default 10,
     a_last_hours smallint default 3,
     a_last_mins smallint default 0)
@@ -3935,6 +3935,9 @@ begin
 
     -- 15.09.2014 Get performance results 'in dynamic': split all job time to N
     -- intervals, where N is specified by 1st input argument.
+    -- 03.09.2015 Removed cross join perf_log and CTE 'inp_args as i' because
+    -- of inefficient plan. Input parameters are injected inside DT.
+    -- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
 
     a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
     a_last_hours = abs( a_last_hours );
@@ -3953,13 +3956,7 @@ begin
         ,stack
     )
     with
-    i as(
-        select
-            -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-            ,:a_intervals_number as intervals_number
-        from rdb$database
-    )
-    ,a as(
+    a as(
         -- reduce needed number of minutes from most last event of some SP starts:
         -- 18.07.2014: handle only data which belongs to LAST job.
         -- Record with p.unit = 'perf_watch_interval' is added in
@@ -3976,15 +3973,34 @@ begin
         ) x
         join (
             select
-                dateadd( i.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
+                dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
                 ,p.dts_beg as last_job_finish_dts
-                ,i.intervals_number
-            from perf_log p
-            join i on 1=1
+                ,p.intervals_number
+            from
+            ( -- since 03.09.2015:
+                select
+                    p.*
+                    , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
+                    , :a_intervals_number as intervals_number
+                from perf_log p
+            ) p
             -- nb: do NOT use inner join here (bad plan with sort)
-            where exists(select 1 from business_ops b where b.unit=p.unit) -- 02.12.2014: do NOT use "order by b.unit" in 2.5, it's only for 3.0!
+            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
             order by p.dts_beg desc
             rows 1
+-- Before 03.09.2015
+-- (inefficient plan with nested loops of all pef_log rows + SORT, 'rows 1' was ignored!
+-- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
+--            select
+--                dateadd( i.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
+--                ,p.dts_beg as last_job_finish_dts
+--                ,i.intervals_number
+--            from perf_log p
+--            join i on 1=1  -- CTE 'i' was: "with i as(select :a_intervals_number, :a_last_hours, :a_last_mins from rdb$database)
+--            -- nb: do NOT use inner join here (bad plan with sort)
+--            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
+--            order by p.dts_beg desc
+--            rows 1
         ) y on 1=1
     )
     ,d as(

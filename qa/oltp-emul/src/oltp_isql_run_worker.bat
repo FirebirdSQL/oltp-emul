@@ -23,7 +23,7 @@ set log4all=!%6!
 set lognm=!tmpdir!\%7
 set build=%8
 
-@rem fname = file_name_with_test_params
+@rem fname = value of config parameter file_name_with_test_params: regular | benchmark
 set fname=%9
 
 rem %tmpdir%\oltpNN.report.txt - name of file for overall performance report
@@ -191,7 +191,15 @@ if .%sid%.==.1. (
     if .%size%.==.. set size=0
     echo size of %log% = %size%
     if %size% gtr %maxlog% (
-        echo %date% %time% size of %log% = %size% - exceeds limit %maxlog%, remove it >> %sts%
+
+        @rem ---------------------------------------------------------------------------------
+        @rem Saving estimated performance counters that have been evaluated on each iteration
+        @rem of current ISQL session before every call of business action - see .sql script:
+        @rem ---------------------------------------------------------------------------------
+        
+        call :save_perf_estimated log sts rpt fbc dbconn dbauth
+
+        echo %date% %time% size of log %log% = %size% - exceeds limit %maxlog%, make it EMPTY.>> %sts%
         del %log%
     )
 
@@ -283,37 +291,14 @@ if .%sid%.==.1. (
     echo !msg! >>%log%
     echo !msg! >>%sts%
     echo.
-    @rem ----------------
 
-    set msg=!date! !time!. Writing statistics data about estimated performance from %log%
-    echo !msg!
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-    (
-      @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
-      for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
-        echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
-      )
-      echo commit;
-    ) > %rpt%
-    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    @rem ---------------------------------------------------------------------------------
+    @rem Saving estimated performance counters that have been evaluated on each iteration
+    @rem of current ISQL session before every call of business action - see .sql script:
+    @rem ---------------------------------------------------------------------------------
 
-    set msg=!date! !time!. Running !run_repo!
-    echo !msg!
+    call :save_perf_estimated log sts rpt fbc dbconn dbauth
 
-    echo !msg! >>%log%
-    @rem type %rpt% >>%log%
-
-    echo !msg! >>%sts%
-
-    %run_repo% 1>>%log% 2>&1
-
-    set msg=!date! !time!. Done writing estimated performance data.
-    echo !msg!
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-    
-    del %rpt% 2>nul
 
     if not .%sid%.==.1. (
         @rem ---------------------------------------------------------------------------------------------------------------
@@ -342,13 +327,13 @@ if .%sid%.==.1. (
       @rem #####   S t a r t i n g      w r i t e      i n t o    . h t m l  #####
       @rem #######################################################################
       (
-        echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> 
+        @rem -- dis 14.12.2015 -- this will be added later, see below -- echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> 
         echo ^<html^>
         echo ^<head^>
         echo ^<meta http-equiv="content-type" content="text/html; charset=utf-8" /^>
         echo ^<meta http-equiv="cache-control" content="no-cache"^>
         echo ^<meta http-equiv="pragma" content="no-cache"^>
-        echo ^<title^>FB-%fb% OLTP-EMUL^</title^>
+        @rem -- dis 14.12.2015 -- echo ^<title^>FB-%fb% OLTP-EMUL^</title^> -- this tag will be added with concrete info about FB, database and test settings plus performance score, see below
         echo  ^<style type="text/css"^>
         echo     table {
         echo         border-collapse: collapse;
@@ -1560,6 +1545,8 @@ if .%sid%.==.1. (
     
     )
 
+    @rem Define name of final report file, see 'set name_for_saving=...' below:
+    @rem ######################################################################
     (
         echo set heading off; 
         echo select report_file from srv_get_report_name('%fname%', '%fbb%', %winq%^);
@@ -1590,7 +1577,26 @@ if .%sid%.==.1. (
             if .%make_html%.==.1. (
               set final_htm=!name_for_saving!.html
               call :repl_with_bound_quotes !final_htm! final_htm
-              copy %htm_file% !final_htm! >nul
+
+              for %%i in ("!final_htm!") do set report_name=%%~ni
+              del !final_htm! 2>nul
+
+              @rem HTML report: add DOCTYPE as 1st line and <title>...</title? tag for conveniency:
+              set /a k=1
+              for /f "delims=" %%a in (!htm_file!) do (
+                if .!k!.==.1. (
+                  echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
+                ) 
+                set "line=%%a"
+                echo !line!>>!final_htm!
+                if .!line!.==.^<head^>. (
+                    echo ^<title^>!report_name!^</title^> >>!final_htm!
+                )
+                set /a k=!k!+1
+              )
+
+              @rem old: copy %htm_file% !final_htm! >nul
+
               if exist !final_htm! (
                 del %htm_file% 2>nul
                 @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
@@ -2142,6 +2148,49 @@ goto:eof
     set fld_name=!fld_name: =!
     
     endlocal & set "%~3=%fld_name%"
+goto:eof
+
+:save_perf_estimated
+
+    @rem call {this} log sts rpt fbc dbconn dbauth
+    @rem              1   2   3   4     5     6
+    setlocal
+    set log=!%1!
+    set sts=!%2!
+    set rpt=!%3!
+    set fbc=!%4!
+    set dbconn=!%5!
+    set dbauth=!%6!
+
+    set msg=!date! !time!. Writing statistics data about estimated performance from %log%
+    echo !msg!
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
+    set /a k=0
+    (
+      @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
+      for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
+        echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
+        set /a k=!k!+1
+      )
+      echo commit;
+    ) > %rpt%
+
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+    set msg=!date! !time!. Running !run_repo!
+    echo !msg!
+
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
+
+    %run_repo% 1>>%log% 2>&1
+
+    set msg=!date! !time!. Done, !k! rows were saved in the database before this log will be made empty.
+    echo !msg!
+    echo !msg! >>%log%
+    echo !msg! >>%sts%
+    del %rpt% 2>nul
 goto:eof
 
 :is_num_type
