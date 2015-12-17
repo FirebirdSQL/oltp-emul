@@ -1,1 +1,3 @@
-@rem replace this with actual data: E:\OLTP-EMUL\util\curl\bin\curl.exe -F "name=%1" -F "file=@%2" http://ib-aid.com/service/import_log.php
+@rem Replace this command with appropriate one that will post report from %tmpdir% folder
+@rem to some remote storage: 
+@rem <path>\curl.exe -F "name=%1" -F "file=@%2" http://foo.com/reports/import_log_scenario
