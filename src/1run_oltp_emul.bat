@@ -532,18 +532,16 @@ if %required_docs% geq 0 (
       echo There are only %existing_docs% documents in database. Required minimum is: %initd_bak%. 
     )
     echo We have to create yet ^>^>^>%required_docs%^<^<^< ones before launch working ISQL sessions.
+
+    @rem ############## I N I T    D A T A    P O P.   ####################
+
+    call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %required_docs% %engine% %log_tab%
+
 ) else (
     echo Database has all necessary number of documents that should be initially populated.
     echo Existing ^>= %existing_docs%, required minimum = %initd_bak%. We can launch working ISQL sessions.
 )
 echo.
-
-if %init_docs% gtr 0 (
-  
-  @rem ############## I N I T    D A T A    P O P.   ####################
-
-  call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %required_docs% %engine% %log_tab%
-)
 
 @rem -----------------------   w o r k i n g    p h a s e   -----------------------------
 
@@ -2606,7 +2604,7 @@ goto:eof
     set skip_fbsvc=0
     if .%is_embed%.==.1. if .%fb%.==.30. set skip_fbsvc=1
 
-    @rem call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %init_docs% %engine% %log_tab%
+    @rem call :r~un_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %init_docs% %engine% %log_tab%
 
     set tmpdir=%1
     set fbc=%2
@@ -2660,7 +2658,9 @@ goto:eof
         echo set transaction no wait;
         echo alter sequence g_init_pop restart with 0;
         echo commit;
-        echo show sequence g_init_pop;
+        echo set list on;
+        echo select iif(mon$forced_writes = 1, 'sync', 'async' ^) as "current_fw=" from mon$database;
+        echo set list off;
     )>>%tmpsql%
     
     @rem --- Run ISQL: restart sequence g_init_pop ---
@@ -2684,12 +2684,19 @@ goto:eof
     ) 1>>%log4tmp% 2>&1
 
     call :catch_err run_isql !tmperr! %tmpsql% failed_reset_pop_gen
-    echo  Done.
+
+    set current_fw=unknown
+    for /F "tokens=*" %%a in ('findstr /i /c:"current_fw" %tmplog%') do (
+        set %%a
+        call :trim current_fw !current_fw!
+    )
+    echo Done.
+    echo Current FW (will be restored after data population^): ^|%current_fw%^|.
 
     del %tmpsql% 2>nul
     del %tmplog% 2>nul
     del %tmperr% 2>nul
-    
+
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem  T E M P L Y    S E T    F O R C E D   W R I T E S   =   O F F
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -2896,7 +2903,7 @@ goto:eof
         (
             @echo set list off; set heading off;
             @echo select
-            @echo     'act_docs='^|^|( select count(*^) from doc_list ^)
+            @echo     'act_docs='^|^|( select count(*^) from ( select id from doc_list rows (1+%init_docs%^) ^) ^)
             @echo from rdb$database;
         )>%tmpchk%
     
@@ -2932,7 +2939,8 @@ goto:eof
         @rem  R E S T O R E   I N I T    S T A T E    O F     F O R C E D   W R I T E S
         @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-        call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw%
+        @rem --- wrong! --- call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw%
+        call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %current_fw%
 
         set msg=%time% FINISH initial data population.
         echo !msg! & echo !msg! >>%log4tmp%
@@ -2956,7 +2964,6 @@ goto:eof
         )
     
     )
-
     endlocal
 
 goto:eof    
