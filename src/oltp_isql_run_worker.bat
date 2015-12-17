@@ -126,6 +126,7 @@ if .%fb%.==.30. (
     set run_get_fb_log=%fbsvcrun% action_get_fb_log
 ) else (
     set run_get_fb_log=%fbsvcrun% action_get_ib_log
+    @rem                                     ^------ for 2.5.x: "i", not "f" !
 )
 
 set run_get_db_sts=%fbsvcrun% action_db_stats sts_data_pages sts_idx_pages sts_record_versions dbname %dbnm%
@@ -245,6 +246,29 @@ if .%sid%.==.1. (
     echo %msg% >> %log%
     echo %msg% >> %sts%
 
+    @rem -------------------------------------------------------------
+    @rem c h e c k    i f    s e r v e r   i s   u n a v a i l a b l e
+    @rem -------------------------------------------------------------
+    echo !date! !time! Check whether Firebird server is still in work >>%log%
+    
+    %run_get_fb_ver% 1>%tmp% 2>&1
+
+    findstr /m /i /c:"server version" %tmp% >nul
+
+    if not errorlevel 1 (
+        echo OK, Firebird is active:>>%log%
+        type %tmp%>>%log%
+        del %tmp% 2>nul
+        goto fb_is_active
+    ) else (
+        echo Firebird is UNAVAILABLE.>>%log%
+        type %tmp%>>%log%
+        type %tmp%>>%sts%
+        del %tmp% 2>nul
+        goto fb_unavail
+    )
+
+:fb_is_active
     @rem ------------------------------------------------------------------------------
     @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
     @rem ------------------------------------------------------------------------------
@@ -264,8 +288,15 @@ if .%sid%.==.1. (
     if errorlevel 1 goto start
     goto test_canc
 
+:fb_unavail
+    set msg=Firebird Server is unavailable now. Test has been cancelled.
+    @echo.
+    @echo %date% %time% %msg%
+    @echo.
+    @echo %date% %time% %msg% >>%sts%
+    goto end
 :db_offline
-    set msg=DATABASE SHUTDOWN DETECTED, test has been cancelled
+    set msg=DATABASE SHUTDOWN DETECTED, test has been cancelled.
     @echo.
     @echo %date% %time% %msg%
     @echo.
