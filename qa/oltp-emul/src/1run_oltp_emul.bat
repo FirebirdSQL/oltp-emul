@@ -174,8 +174,6 @@ call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled
 
 @rem Result: build_was_cancelled = 1 ==> previous building process was cancelled (found "SQLSTATE = HY008" in .err).
 
-@rem echo build_was_cancelled=%build_was_cancelled% &pause
-
 if not exist %fbc%\isql.exe goto bad_fbc_path
 if not exist %fbc%\gfix.exe goto bad_fbc_path
 if not exist %fbc%\fbsvcmgr.exe goto bad_fbc_path
@@ -290,6 +288,8 @@ echo.
 @rem ##############################################################
 @rem TODO LATER: change this alg! use hash of all db object names ?
 
+@rem ..................... check that all DB objects was already created Ok ..............
+
 (
      echo set heading off; 
      echo set list on;
@@ -300,73 +300,6 @@ echo.
      echo                     'some_dbo_absent'
      echo           ^) as "build_result="
      echo from rdb$database;
-     set rndname=!random!
-     echo -- Check that database is not in read_only mode.
-     echo -- NOTE: we create GTT in order to check *not* only ability to write into database file,
-     echo -- but also to check that Firebird process has enough rights to WRITE into GTT files.
-     echo -- These files are created in the folder that is defined by 1st environment variable:
-     echo -- from following list: 1^) FIREBIRD_TMP; 2^) TMP; or in 3^) /tmp (for POSIX^).
-     echo -- When Firebird process has no rights to that directory, test will fail with message:
-     echo -- #####################################################
-     echo -- Statement failed, SQLSTATE = 08001
-     echo -- I/O error during "open O_CREAT" operation for file ""
-     echo -- -Error while trying to create file
-     echo -- -No such file or directory
-     echo -- #####################################################
-     echo -- See also: sql.ru/forum/actualutils.aspx?action=gotomsg^&tid=1176238^&msg=18172438
-     echo.
-     echo recreate GLOBAL TEMPORARY table tmp!rndname!(id int, s varchar(36^) unique using index tmp!rndname!_s_unq ^);
-     echo commit;
-     echo set count on;
-     echo insert into tmp!rndname!(id, s^) select rand(^)*1000, uuid_to_char(gen_uuid(^)^) from rdb$types;
-     echo set list on;
-     echo select min(id^) as id_min, max(id^) as id_max, count(*^) as cnt from tmp!rndname!; 
-     echo commit;
-     echo drop table tmp!rndname!;
-     echo.
-     echo alter sequence g_stop_test restart with 0;
-     echo.
-     echo set term ^^;
-     echo execute block as
-     echo begin
-     echo     begin
-     echo         -- Inject value of config parameter `mon_unit_perf` into table SETTINGS.
-     echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
-     echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
-     echo         update settings set svalue=%mon_unit_perf%
-     echo         where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
-     echo         if (row_count = 0^) then 
-     echo             exception ex_record_not_found
-     if .%fb%.==.30. (
-     echo             using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY'''^)
-     )
-     echo         ;
-     echo     when any do 
-     echo         begin
-     echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
-     echo         end
-     echo     end
-
-     echo     begin
-     echo         -- Inject value of config parameter `working_mode` into table SETTINGS.
-     echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
-     echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
-     echo         update settings set svalue = upper('%working_mode%'^)
-     echo         where working_mode=upper('init'^) and mcode=upper('working_mode'^);
-     echo         if (row_count = 0^) then
-     echo             exception ex_record_not_found
-     if .%fb%.==.30. (
-     echo             using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE'''^)
-     )
-     echo         ;
-     echo     when any do 
-     echo         begin
-     echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
-     echo         end
-     echo     end
-     echo end ^^
-     echo set term ;^^
-     echo commit;
 )>%tmpsql%
 
 set run_isql=%fbc%\isql
@@ -384,23 +317,27 @@ echo %time%. Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  >>%log4tmp%
     for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
 ) >>%log4tmp% 2>&1
 
-call :catch_err run_isql !tmperr! !tmpsql! db_notready 0
+@rem This .sql can raise exception when:
+@rem 1. Database does not exist or its name is a directory (incorrect value of config 'dbnm' parameter)
+@rem 2. FB is not running or not listening port specified in config 'port' parameter
+@rem 3. Database is in shutdown mode
+@rem 4. Table 'semaphores' does not exist or has no field 'task' ==> previous creation was not completed:
+
+call :catch_err run_isql !tmperr! !tmpsql! db_not_ready 0
+@rem                1        2        3          4      5 (0=do NOT make abend of this batch)
 
 del %tmpsql% 2>nul
-@rem -- later! -- del %tmpclg% 2>nul
-@rem -- later! -- del %tmperr% 2>nul
 
 set db_build_finished_ok=2
 
-@rem NB: first line in error text DEPENDS on server OS!
+@rem NB: first line in error text depends on server OS when server has a problem with database being opened.
 @rem win: I/O error during "CreateFile (open)" operation for file "c:\temp\test\badname.fdb"
 @rem      -Error while trying to open file
 @rem nix: I/O error during "open" operation for file "/var/db/fb25/badname.fdb"
 @rem      -Error while trying to open file
 @rem PS. Explanation: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1120390&msg=16689978
 
-@rem Seems that this can be on linux only:
-
+@rem Seems that "Is a directory" can be on linux only:
 find /c /i "Is a directory" %tmperr% >nul
 if errorlevel 1 goto chk4unav
 goto bad_dbnm
@@ -417,22 +354,13 @@ goto bad_ods
 
 :chk4online
 find /c /i "shutdown" %tmperr% >nul
-if errorlevel 1 goto chk4read_only
-goto db_offline
-
-:chk4read_only
-find /c /i "read-only" %tmperr% >nul
 if errorlevel 1 goto chk4open
-goto db_read_only
-
+goto db_offline
 
 :chk4open
 find /c /i "Error while trying to open file" %tmperr% >nul
 
 if errorlevel 1 (
-
-    @rem database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
-    @rem -------------------------------------------------------------------------------------------------------
 
     if .%build_was_cancelled%.==.0. (
         for /f "usebackq tokens=*" %%a in ('%tmperr%') do set size=%%~za
@@ -440,6 +368,9 @@ if errorlevel 1 (
         if !size!% gtr 0 (
             set db_build_finished_ok=0
         ) else (
+            @rem Database DOES exist and ONLINE, no errors raised before, but we still have to ensure that ALL objects 
+            @rem was successfully created in it - so, check that log of last .sql contains text "all_dbo_exists"
+            @rem -------------------------------------------------------------------------------------------------------
             set db_build_finished_ok=1
             find /c /i "all_dbo_exists" !tmpclg! >nul
             if errorlevel 1 set db_build_finished_ok=0
@@ -459,6 +390,7 @@ if errorlevel 1 (
         echo Database: ^>%dbnm%^< -- DOES exist but
         echo its creation process was not completed.
         echo.
+
         if .%wait_if_not_exists%.==.1. (
             echo ################################################################################
             echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
@@ -471,10 +403,114 @@ if errorlevel 1 (
 
     ) else (
 
-        echo Database ^>%dbnm%^< avaliable and has all needed objects.
         set need_rebuild_db=0
 
+        echo Database ^>%dbnm%^< does exist and has all needed objects.
+        echo.
+        echo Now we have to ensure that:
+        echo 1. FB service can add rows to GTT, i.e. it *has* access to $FIREBIRD_TMP directory on server;
+        echo 2. Database is not in read-only mode (updating 'settings' table with actual values of some config params^).
+
+        @rem Following script should NOT produce any output to STDERR. 
+        @rem Otherwise we have to STOP test because of DB problem.
+        (
+             set rndname=!random!
+             echo -- Check that database is not in read_only mode.
+             echo -- NOTE: we create GTT in order to check *not* only ability to write into database file,
+             echo -- but also to check that Firebird process has enough rights to WRITE into GTT files.
+             echo -- These files are created in the folder that is defined by 1st environment variable:
+             echo -- from following list: 1^) FIREBIRD_TMP; 2^) TMP; or in 3^) /tmp (for POSIX^).
+             echo -- When Firebird process has no rights to that directory, test will fail with message:
+             echo -- #####################################################
+             echo -- Statement failed, SQLSTATE = 08001
+             echo -- I/O error during "open O_CREAT" operation for file ""
+             echo -- -Error while trying to create file
+             echo -- -No such file or directory
+             echo -- #####################################################
+             echo -- See also: sql.ru/forum/actualutils.aspx?action=gotomsg^&tid=1176238^&msg=18172438
+             echo set echo on;
+             echo set bail on;
+             echo recreate GLOBAL TEMPORARY table tmp!rndname!(id int, s varchar(36^) unique using index tmp!rndname!_s_unq ^);
+             echo commit;
+             echo set count on;
+             echo insert into tmp!rndname!(id, s^) select rand(^)*1000, uuid_to_char(gen_uuid(^)^) from rdb$types;
+             echo set list on;
+             echo select min(id^) as id_min, max(id^) as id_max, count(*^) as cnt from tmp!rndname!; 
+             echo commit;
+             echo drop table tmp!rndname!;
+             echo.
+             echo alter sequence g_stop_test restart with 0;
+             echo commit;
+             echo set transaction no wait;
+             echo.
+             echo set term ^^;
+             echo execute block as
+             echo begin
+             echo     begin
+             echo         -- Inject value of config parameter `mon_unit_perf` into table SETTINGS.
+             echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
+             echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
+             echo         update settings set svalue=%mon_unit_perf%
+             echo         where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
+             echo         if (row_count = 0^) then 
+             echo             exception ex_record_not_found
+             if .%fb%.==.30. (
+             echo             using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY'''^)
+             )
+             echo         ;
+             echo     when any do 
+             echo         begin
+             echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+             echo         end
+             echo     end
+        
+             echo     begin
+             echo         -- Inject value of config parameter `working_mode` into table SETTINGS.
+             echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
+             echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
+             echo         update settings set svalue = upper('%working_mode%'^)
+             echo         where working_mode=upper('init'^) and mcode=upper('working_mode'^);
+             echo         if (row_count = 0^) then
+             echo             exception ex_record_not_found
+             if .%fb%.==.30. (
+             echo             using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE'''^)
+             )
+             echo         ;
+             echo     when any do 
+             echo         begin
+             echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+             echo         end
+             echo     end
+             echo end ^^
+             echo set term ;^^
+             echo commit;
+        )>%tmpsql%
+        
+        set run_isql=%fbc%\isql
+        call :repl_with_bound_quotes %run_isql% run_isql
+        
+        set run_isql=!run_isql! %dbconn% %dbauth% -i %tmpsql% -q -n -nod
+        echo %time%. Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  >>%log4tmp%
+        
+        %run_isql% 1>%tmpclg% 2>%tmperr%
+        
+        (
+            for /f "delims=" %%a in ('type %tmpsql%') do echo RUNSQL: %%a
+            echo %time%. Got:
+            for /f "delims=" %%a in ('type %tmpclg%') do echo STDOUT: %%a
+            for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
+        ) >>%log4tmp% 2>&1
+
+        call :catch_err run_isql !tmperr! !tmpsql! db_cant_write 1
+        @rem                1       2        3         4         5 (1 = do abort from this script).
+        
+        del %tmpsql% 2>nul
+
+        echo.
+        echo All checks PASSED. Database is ready for test.
+        echo.
     )
+    @rem db_build_finished_ok = 0 xor 1
 
 ) else (
 
@@ -3368,7 +3404,7 @@ goto:eof
     @rem set run_cmd=!fbsvcrun! info_server_version
     @rem !run_cmd! 1>%tmplog% 2>%tmperr%
     @rem call :catch_err run_cmd !tmperr! n/a nofbvers
-    @rem call :catch_err run_isql !tmperr! !tmpchk! db_notready 0
+    @rem call :catch_err run_isql !tmperr! !tmpchk! db_not_ready 0
 
     set runcmd=!%1!
     set err_file=%2
@@ -3506,7 +3542,14 @@ goto:eof
     )
 goto:eof
 
-:db_notready
+:db_cant_write
+    echo FAILED check that database is on read-write mode and/or one may to write data into GTT.
+    echo.
+    echo Check database attributes. Also ensure that FB service has sufficient rights on the
+    echo directory that is specified by FIREBIRD_TMP environment variable on server side.
+goto:eof
+
+:db_not_ready
     echo FAILED check that database is avaliable and has all needed objects.
 goto:eof
 
