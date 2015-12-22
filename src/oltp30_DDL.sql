@@ -6376,6 +6376,7 @@ select
     ,min(e.success_count) / nullif(avg(e.success_count), 0) min_to_avg_ratio
     ,max(e.success_count) / nullif(avg(e.success_count), 0) max_to_avg_ratio
     ,count(e.success_count) rows_aggregated
+    ,count(distinct e.att_id) distinct_attachments -- 22.12.2015: helps to ensure that all ISQL sessions were alive in every minute of test work time
 from perf_estimated e
 where e.minute_since_test_start>0
 group by e.minute_since_test_start
