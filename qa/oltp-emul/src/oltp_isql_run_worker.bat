@@ -808,6 +808,7 @@ if .%sid%.==.1. (
       echo       ,min_to_avg_ratio
       echo       ,max_to_avg_ratio
       echo       ,rows_aggregated
+      echo       ,distinct_attachments -- since 22.12.2015: helps to ensure that all ISQL sessions were alive in every minute of test work time
       echo from z_estimated_perf_per_minute;
       echo commit;
     ) > %rpt%

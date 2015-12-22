@@ -256,6 +256,7 @@ do
 		     ,min_to_avg_ratio
 		     ,max_to_avg_ratio
 		     ,rows_aggregated
+		     ,distinct_attachments -- 22.12.2015
 		from z_estimated_perf_per_minute;
 		commit;
 
