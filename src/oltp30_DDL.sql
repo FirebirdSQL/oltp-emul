@@ -1020,6 +1020,21 @@ recreate table perf_isql_stat(
 create index perf_isql_stat_trn on perf_isql_stat(trn_id);
 commit;
 
+-- 23.12.2015 Log of parsed trace for ISQL session #1
+recreate table trace_stat(
+    unit dm_unit
+    ,dts_end timestamp
+    ,success smallint
+    ,elapsed_ms int
+    ,reads bigint
+    ,writes bigint
+    ,fetches bigint
+    ,marks bigint
+);
+commit;
+--create index trace_stat_dts_end on trace_stat(dts_end);
+--create index trace_stat_unit_dts on trace_stat(unit, dts_end);
+
 -- Log for performance and errors (filled via autonom. tx if exc`eptions occur)
 recreate table perf_log(
    id dm_idb -- value from sequence where record has been added into GTT tmp$perf_log

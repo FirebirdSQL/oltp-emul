@@ -88,6 +88,16 @@ set fblog_final=!tmpdir!\%fblog_endnm%
 call :repl_with_bound_quotes %fblog_start% fblog_start
 call :repl_with_bound_quotes %fblog_final% fblog_final
 
+for %%i in ("%sql%") do (
+  set trace_lst=%%~dpitmp_trace.lst
+  set trace_sql=%%~dpitmp_trace.sql
+  set trace_log=%%~dpitmp_trace.log
+  set trace_cfg=%%~dpitmp_trace.conf
+  set trace_run=%%~dpitmp_run1t.sql
+  set trace_prs=%%~dpitmp_parse.log
+  set trace_sav=%%~dpitmp_tsave.sql
+)
+
 set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 
 
 echo.>>%sts%
@@ -134,6 +144,111 @@ set run_db_validat=%fbsvcrun% action_validate dbname %dbnm% val_lock_timeout 1
 set run_fc_compare=fc.exe /n %fblog_start% %fblog_final%
 
 if .%sid%.==.1. (
+
+    if .%trc_unit_perf%.==.1. (
+
+        set msg=1st launching ISQL starts and stops TRACE before and after each packet - see config 'trc_unit_perf' parameter.
+        echo !msg!
+        echo !msg!>>%log4tmp%
+
+        echo Building list of traced units...>>%log4tmp%
+
+        (
+            echo set heading off;
+            echo select cast( list(unit,'^^^|'^) as varchar(4000^)^) from business_ops;
+            echo set heading on;
+        ) >%trace_sql%
+
+        set run_4trc=%fbc%\isql %dbconn% -n -pag 9999 -i %trace_sql% %dbauth% 
+        cmd /c !run_4trc! 1>%trace_log% 2>&1
+
+        for /f %%a in (%trace_log%) do (
+          set traced_units=%%a
+        )
+
+        @rem Pattern for findstr when we'll parse trace log: we have to replace all occurences of PIPE character with space:
+        set unit_pattern=!traced_units:^^^|= !
+
+        set msg=Done. traced_units=!traced_units!
+        echo !msg!>>%log4tmp%
+
+        for %%i in ("%dbnm%") do (
+          set dbfx=%%~nxi
+          set dbfn=%%~ni
+        )
+
+        set msg=Creating temporary config file for trace: %trace_cfg%...
+        echo !msg!
+        echo !msg!>>%log4tmp%
+
+        (
+            if .%fb%.==.25. (
+                echo set heading off;
+                echo shell del %trace_cfg% 2^>nul;
+                echo out %trace_cfg%;
+                echo select '^<database (%%[\\/](!dbfn!^).fdb^)^|(!dbfn!^)^>' from rdb$database union all
+                echo select '    enabled true' from rdb$database union all
+                echo select '    time_threshold 0' from rdb$database union all
+                @rem echo select '    include_filter = ''%%!traced_units:^^=!%%''' from rdb$database union all
+                echo select '    include_filter = ''%%(from sp_^|from srv_^)%%''' from rdb$database union all
+                echo select '    exclude_filter = ''%%execute block%%''' from rdb$database union all
+                echo select '    log_statement_finish true' from rdb$database union all
+                echo select '    print_perf true' from rdb$database union all
+                echo select '    max_sql_length = 16384' from rdb$database union all
+                echo select '    connection_id '^|^|current_connection from rdb$database union all
+                echo select '^</database^>' from rdb$database;
+                echo out;
+            ) else (
+                echo set heading off;
+                echo shell del %trace_cfg% 2^>nul;
+                echo out %trace_cfg%;
+                echo select 'database=(%%[\\/]!dbfx!^|!dbfn!^)^' from rdb$database union all
+                echo select '{'  from rdb$database union all
+                echo select '    enabled = true' from rdb$database union all
+                echo select '    time_threshold = 0' from rdb$database union all
+                @rem echo select '    include_filter = ''%%!traced_units:^^=!%%''' from rdb$database union all
+                echo select '    include_filter = %%(from sp_^|from srv_^)%%' from rdb$database union all
+                echo select '    exclude_filter = %%(execute block^)%%' from rdb$database union all
+                echo select '    log_statement_finish = true' from rdb$database union all
+                echo select '    print_perf = true' from rdb$database union all
+                echo select '    max_sql_length = 16384' from rdb$database union all
+                echo select '    connection_id='^|^|current_connection from rdb$database union all
+                echo select '}' from rdb$database;
+                echo out;
+                
+                @rem echo shell echo database=(%%[\\/]!dbfx!^^^^^|!dbfn!^^^^^)^>%trace_cfg%;
+                @rem echo shell echo { ^>^>%trace_cfg%;
+                @rem echo shell echo     enabled=true^>^>%trace_cfg%;
+                @rem echo shell echo     time_threshold=0 ^>^>%trace_cfg%;
+                @rem echo shell echo     include_filter = %%(!traced_units!^)%%^>^>%trace_cfg%;
+                @rem echo shell echo     log_statement_finish = true^>^>%trace_cfg%;
+                @rem echo shell echo     print_perf = true^>^>%trace_cfg%;
+                @rem echo shell echo     max_sql_length = 16384^>^>%trace_cfg%;
+                @rem echo out %trace_cfg%;
+                @rem echo set heading off;
+                @rem echo select '    connection_id='^|^|current_connection from rdb$database;
+                @rem echo out;
+                @rem echo shell echo }^>^>%trace_cfg%;
+            )
+            echo shell start /min cmd /c "%fbsvcrun% action_trace_start trc_cfg %trace_cfg% 1>%trace_log% 2>&1";
+        ) > %trace_sql%
+
+        (
+            echo in %trace_sql%;
+            echo in %sql%;
+        ) > %trace_run%
+
+        echo Script for creating trace config, %trace_sql%: >> %log4tmp%
+        type %trace_sql% >> %log4tmp%
+        echo. >> %log4tmp%
+        echo Script for running by 1st ISQL window, %trace_run%: >> %log4tmp%
+        type %trace_run% >> %log4tmp%
+
+        set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %trace_run% %dbauth% 
+
+    )
+    @rem end of block for preparing trace when test config parameter 'trc_unit_perf' = 1
+    
     echo This ISQL session will make performance report after test make selfstop.>>%sts%
 
     set msg=Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test.
@@ -158,6 +273,7 @@ if .%sid%.==.1. (
     echo.>>%log4all%
   
     echo %date% %time%. Preparing for test finished. Now launch ISQL sessions. >>%log4tmp%
+
 )
 
 @set k=0
@@ -231,7 +347,6 @@ if .%sid%.==.1. (
     echo ------------------------------------------
     echo WAIT for ISQL will finish current packet...
 
-
     @rem #############################    R U N     I S Q L    ##############################
     if .%use_mtee%.==.1. (
         %run_isql% 2>&1 1>>%log% | mtee /t /+ %err% >nul
@@ -241,10 +356,155 @@ if .%sid%.==.1. (
     @rem ####################################################################################
 
     @echo off
+
+    @rem -----------------------------------------------------------------
+    @rem Stop trace session that was launched for ISQL #1
+    @rem -----------------------------------------------------------------
+
+    if .%sid%.==.1. if .%trc_unit_perf%.==.1. (
+        @rem NB: fvsvcmgr keeps open not only its own trace log but also one that is used for ISQL, i.e. %log%.
+        @rem This is because we launched fbsvcmgr via start /min cmd /c "%fbc%\fbsvcmgr ... > %tmpdir%\tmp_trace.log"
+        @rem - this command will open log for writing trace events but (tmp_trace.log) fbsvcmgr does not know that we
+        @rem redirect ISQL output to other log = %tmpdir%\oltpNN_%computername%_001.log - thus we have to STOP trace
+        @rem before doing any redirection to %tmpdir%\oltpNN_%computername%_001.log after get control here from ISQL.
+
+        set msg=!time!. Stop trace session that was launched for ISQL #1 
+        echo !msg!
+        echo !msg!>>%sts%
+
+
+        %fbsvcrun% action_trace_list >!trace_lst! 2>&1
+        type !trace_lst!>>%sts%
+
+
+        for /f "tokens=1-3" %%a in ('findstr /i /c:"Session ID:" !trace_lst!') do (
+            set run_repo=%fbsvcrun% action_trace_stop trc_id %%c
+            echo !run_repo!
+            echo !run_repo! >>%sts%
+            cmd /c "!run_repo!" 1>>%sts% 2>&1
+        )
+        ping -n 2 127.0.0.1>nul
+        
+        set msg=!time!. Check that currently NO active trace sessions is running:
+        echo !msg!
+        echo !msg!>>%sts%
+        echo ---- list begin ----->>%sts%
+        %fbsvcrun% action_trace_list >>%sts% 2>&1
+        echo ---- list finish ---->>%sts%
+        del !trace_lst!
+    )
+
     set msg=%date% %time%. Finished packet # %k%.
     echo %msg%
     echo %msg% >> %log%
     echo %msg% >> %sts%
+
+    if .%sid%.==.1. if .%trc_unit_perf%.==.1. (
+
+      @rem Now we have to parse trace log and extract from it name of business action, whether result was successful and statistics.
+
+      set msg=!time!. Parsing trace log: obtaining name of units, results of execution and statistics.
+      echo !msg!
+      echo !msg!>>%sts%
+      findstr /i "EXECUTE_STATEMENT_FINISH ms fetched fetch(es) !unit_pattern!" !trace_log! > %trace_prs%
+      del %trace_sav% 2>nul
+      
+      set /a row=0
+      for /f "tokens=*" %%a in (%trace_prs%) do (
+         set /a row=!row!+1
+         set txt=%%a
+         set /a elapsed_ms=0
+         set /a reads=0
+         set /a writes=0
+         set /a fetches=0
+         set /a marks=0
+         set /a "rmod=!row! %% 4"
+
+         if .!rmod!.==.1. (
+           @rem 2015-12-24T03:28:35.037
+           set dts_end=!txt:~0,23!
+           set dts_end=cast('!dts_end:T= !' as timestamp^)
+           (
+               echo -- Line: !txt! 
+               echo --   dts_end=!dts_end! 
+           ) >> %trace_sav%
+         )
+
+         if .!rmod!.==.2. (
+           for /f "tokens=1-4" %%d in ("!txt!") do (
+             @rem select count(*) from sp_client_order
+             set opname=%%g
+             echo --   opname=!opname! >>%trace_sav%
+           )
+         ) 
+         if .!rmod!.==.3. (
+           for /f "tokens=1" %%d in ("!txt!") do (
+             @rem 1 records fetched  __or__  0 records fetched
+             set success=%%d
+             echo --   success=!success! >>%trace_sav%
+           )
+         )
+         if .!rmod!.==.0. (
+           @rem Statistics. OMG...
+           @rem 314 ms, 3 read(s), 6 write(s), 3957 fetch(es), 754 mark(s)
+           for /f "tokens=1-10" %%d in ("!txt!") do (
+             set num=%%d
+             set chr=%%e
+             if "!chr:~0,2!"=="ms" set elapsed_ms=!num!
+
+             set num=%%f
+             set chr=%%g
+             if "!chr:~0,5!"=="read(" set reads=!num!
+             if "!chr:~0,6!"=="write(" set writes=!num!
+             if "!chr:~0,6!"=="fetch(" set fetches=!num!
+             if "!chr:~0,5!"=="mark(" set marks=!num!
+
+             set num=%%h
+             set chr=%%i
+             if "!chr:~0,6!"=="write(" set writes=!num!
+             if "!chr:~0,6!"=="fetch(" set fetches=!num!
+             if "!chr:~0,5!"=="mark(" set marks=!num!
+
+             set num=%%j
+             set chr=%%k
+             if "!chr:~0,6!"=="fetch(" set fetches=!num!
+             if "!chr:~0,5!"=="mark(" set marks=!num!
+
+             set num=%%l
+             set chr=%%m
+             if "!chr:~0,5!"=="mark(" set marks=!num!
+
+             echo --   statistics: !txt! >>%trace_sav%
+
+           )
+           @rem           echo RESULT: !opname! !success! ms=!elapsed_ms! rd=!reads! wr=!writes! fe=!fetches! mk=!marks!
+           (
+             echo insert into trace_stat(unit, dts_end, success, elapsed_ms, reads, writes, fetches, marks^)
+             echo                 values('!opname!', !dts_end!, !success!, !elapsed_ms!, !reads!, !writes!, !fetches!, !marks!^);
+             echo.
+           ) >> %trace_sav%
+        )
+
+      )
+      echo commit;>>%trace_sav%
+
+      set msg=!time!. Saving parsed info from trace to database.
+      echo !msg!
+      echo !msg!>>%sts%
+
+      set run_repo=%fbc%\isql %dbconn% -nod -n -i %trace_sav% %dbauth% 
+      cmd /c !run_repo! 1>>%sts% 2>&1
+      set msg=!time!. Done.
+      echo !msg!
+      echo !msg!>>%sts%
+
+      del %trace_prs% 2>nul
+      del %trace_sav% 2>nul
+      del %trace_log% 2>nul
+      del %trace_cfg% 2>nul
+
+    )
+    @rem end of "if .%sid%.==.1. if .%trc_unit_perf%.==.1."
 
     @rem -------------------------------------------------------------
     @rem c h e c k    i f    s e r v e r   i s   u n a v a i l a b l e
@@ -425,13 +685,13 @@ if .%sid%.==.1. (
         echo     ^<li^>^<a href="#perftotal"^>Performance, TOTAL score^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfdynam"^>Performance, DYNAMIC, 10 intervals^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfminute"^>Performance, per MINUTE, since launch^</a^> ^</li^>
+        echo     ^<li^>^<a href="#perftrace"^>Performance, TRACE data for ISQL #1^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfdetail"^>Performance, DETAILS per units^</a^> ^</li^>
-        if .%mon_unit_perf%.==.1. (
-            echo     ^<li^>^<a href="#perfmon4unit"^>MON$-analysis, per business units^</a^> ^</li^>
-            if not .%fb%.==.25. (
-                echo     ^<li^>^<a href="#perfmon4tabs"^>MON$-analysis, per business units and tables^</a^> ^</li^>
-            )
+        echo     ^<li^>^<a href="#perfmon4unit"^>MON$-analysis, per business units^</a^> ^</li^>
+        if .%mon_unit_perf%.==.1. if not .%fb%.==.25. (
+            echo     ^<li^>^<a href="#perfmon4tabs"^>MON$-analysis, per business units and tables^</a^> ^</li^>
         )
+
         echo     ^<li^>^<a href="#exceptions"^>Exceptions during test run^</a^> ^</li^>
         echo ^</ol^>
         echo ^</td^>
@@ -833,11 +1093,75 @@ if .%sid%.==.1. (
         call :timediff "!t1!" "!t2!" tdiff
         echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
         call :add_html_text tmp_file htm_file
-
     )
 
     del %rpt% 2>nul
 
+    @rem --------------------------------------------------------------------------
+    if .%trc_unit_perf%.==.1. (
+        set msg=Performance from TRACE for ISQL instance #1
+        echo !date! !time!. Generating report "!msg!"...
+
+        if .%make_html%.==.1. echo !htm_repn! ^<a name="perftrace"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+
+        (
+          echo --  Get TRACE performance report for ISQL session #1, with splitting data to 10 equal 
+          echo -- time intervals, for last 3 hours of activity:
+          echo set width action 24; 
+          echo set width itrv_no  7;
+          echo set width itrv_beg 8;         
+          echo set width itrv_end 8;         
+          echo select info as action
+          echo       ,cast(interval_no as smallint^) as itrv_no
+          echo       ,cnt_success
+          echo       ,fetches_per_second
+          echo       ,marks_per_second
+          echo       ,reads_to_fetches_prc
+          echo       ,writes_to_marks_prc
+          echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
+          echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
+          echo from rdb$database 
+          echo left join srv_mon_perf_trace p on 1=1;
+          echo commit;
+        ) > %rpt%
+        
+        type %rpt% >>%log4all%
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+        set t1=!time!
+
+        %run_repo% 1>>%log4all% 2>&1
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+        if .%make_html%.==.1. (
+            set t1=!time!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff
+            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+            call :add_html_text tmp_file htm_file
+        )
+        del %rpt% 2>nul
+
+    ) else (
+
+      set msg=Config param. trc_unit_perf=%trc_unit_perf%, trace for ISQL session #1 was not launched.
+      (
+        echo.
+        echo %msg%:
+        echo.
+      ) >> %log4all%
+ 
+      if .%make_html%.==.1. echo !htm_repn! ^<a name="perftrace"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+
+    )
 
     @rem --------------------------------------------------------------------------
 
