@@ -175,6 +175,34 @@ if .%sid%.==.1. (
         for %%i in ("%dbnm%") do (
           set dbfx=%%~nxi
           set dbfn=%%~ni
+
+          @rem Add default escape character = '\' in order trace can start when database contains
+          @rem symbols from following list: - _ + % ^ { } ( ) [ ]
+
+          set dbfx=!dbfx:-=\-!
+          set dbfx=!dbfx:_=\_!
+          set dbfx=!dbfx:+=\+!
+          set dbfx=!dbfx:%%=\%%!
+          set dbfx=!dbfx:^^=\^^!
+          set dbfx=!dbfx:{=\{!
+          set dbfx=!dbfx:}=\}!
+          set dbfx=!dbfx:^(=\^(!
+          set dbfx=!dbfx:^)=\^)!
+          set dbfx=!dbfx:[=\[!
+          set dbfx=!dbfx:]=\]!
+
+          set dbfn=!dbfn:-=\-!
+          set dbfn=!dbfn:_=\_!
+          set dbfn=!dbfn:+=\+!
+          set dbfn=!dbfn:%%=\%%!
+          set dbfn=!dbfn:^^=\^^!
+          set dbfn=!dbfn:{=\{!
+          set dbfn=!dbfn:}=\}!
+          set dbfn=!dbfn:^(=\^(!
+          set dbfn=!dbfn:^)=\^)!
+          set dbfn=!dbfn:[=\[!
+          set dbfn=!dbfn:]=\]!
+       
         )
 
         set msg=Creating temporary config file for trace: %trace_cfg%...
