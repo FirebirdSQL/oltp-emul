@@ -642,6 +642,8 @@ if .%skipGenSQL%.==.0. (
     @rem Generating script to be used by working isqls.
     @rem ##################################################
     call :gen_working_sql  run_test  %sql%  300   %no_auto_undo%  %detailed_info% %idle_time%
+    @rem temply 23.12.2015
+    @rem call :gen_working_sql  run_test  %sql%  10   %no_auto_undo%  %detailed_info% %idle_time%
     @rem                      1        2     3         4              5              6
     @rem ##################################################
 )
@@ -3286,6 +3288,15 @@ goto:eof
         echo           -- nop ---
         echo         end
         echo     end
+
+        echo     begin
+        echo         delete from trace_stat; -- this table will be used in report "Performance from TRACE", 23.12.2015
+        echo     when any do 
+        echo         begin 
+        echo           -- nop ---
+        echo         end
+        echo     end
+        
         echo     begin
         echo         delete from %log_tab% g
         echo         where g.unit in ( 'perf_watch_interval',

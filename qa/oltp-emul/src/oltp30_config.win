@@ -163,6 +163,19 @@ detailed_info = 0
 
 mon_unit_perf = 0
 
+
+# Should 1st of being launched ISQL instances also start asynchronously FBSVCMGR with 
+# opening TRACE session (1=yes; 0=no; trace session will be stopped on every end of .sql) ?
+# If yes, final report will have result of parsing trace log for that ISQL activity with
+# aggregate data about each business action and average values of:
+# 1) speed of fetches and marks per second;
+# 2) ratios reads / fetches and writes / marks.
+# These values will be splitted on 10 equal time intervals in order to see changes 
+# in performance that could occur during 'test_time' phase of test.
+
+trc_unit_perf = 0
+
+
 # Number of pages for usage during init data population ("-c" switch for ISQL).
 # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
 # initial data population and is IGNORED on main phase of test.

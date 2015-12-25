@@ -4464,6 +4464,150 @@ end
 
 ^ -- srv_mon_exceptions
 
+create or alter procedure srv_mon_perf_trace (
+    a_intervals_number smallint default 10,
+    a_last_hours smallint default 3,
+    a_last_mins smallint default 0
+)
+returns (
+    unit dm_unit
+    ,info dm_info
+    ,interval_no smallint
+    ,cnt_success int
+    ,fetches_per_second int
+    ,marks_per_second int
+    ,reads_to_fetches_prc numeric(6,2)
+    ,writes_to_marks_prc numeric(6,2)
+    ,interval_beg timestamp
+    ,interval_end timestamp
+) as
+begin
+
+    -- Report based on result of parsing TRACE log which was started by
+    -- ISQL session #1 when config parameter trc_unit_perf = 1.
+    -- Data for each business operation are displayed separately because
+    -- they depends on execution plans and can not be compared each other.
+    -- We have to analyze only RATIOS between reads/fetches and writes/marks,
+    -- and also values of speed (fetches and marks per second) instead of
+    -- absolute their values.
+
+    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
+    a_last_hours = abs( a_last_hours );
+    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+
+    for
+        with
+        a as(
+            -- reduce needed number of minutes from most last event of some SP starts:
+            -- 18.07.2014: handle only data which belongs to LAST job.
+            -- Record with p.unit = 'perf_watch_interval' is added in
+            -- oltp_isql_run_worker.bat before FIRST isql will be launched
+            select
+                maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
+                ,y.last_job_finish_dts
+                ,y.intervals_number
+            from (
+                select p.dts_beg as last_added_watch_row_dts
+                from perf_log p
+                where p.unit = 'perf_watch_interval'
+                order by dts_beg desc rows 1
+            ) x
+            join (
+                select
+                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
+                    ,p.dts_beg as last_job_finish_dts
+                    ,p.intervals_number
+                from
+                ( -- since 03.09.2015:
+                    select
+                        p.*
+                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
+                        , :a_intervals_number as intervals_number
+                    from perf_log p
+                ) p
+                -- nb: do NOT use inner join here (bad plan with sort)
+                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
+                order by p.dts_beg desc
+                rows 1
+            ) y on 1=1
+        )
+        ,d as(
+            select
+                a.first_job_start_dts
+                ,a.last_job_finish_dts
+                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
+            from a
+        )
+        --select * from d
+        ,p as(
+            select
+                t.unit
+                ,b.info
+                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
+                ,count(*) cnt_success
+                ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
+                ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
+                ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
+                ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
+                --,count( nullif(t.success,0) ) cnt_ok
+                --,count( nullif(t.success,1) ) cnt_err
+                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
+                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
+                ,min(d.first_job_start_dts) as first_job_start_dts
+                ,min(d.sec_for_one_interval) as sec_for_one_interval
+            from trace_stat t
+            join business_ops b on t.unit = b.unit
+            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS measured test run!
+            where t.success = 1
+            group by 1,2,3
+        )
+        --select * from p
+        ,q as (
+            select
+                unit
+                ,info
+                ,interval_no
+                ,cnt_success
+                ,fetches_per_second
+                ,marks_per_second
+                ,reads_to_fetches_prc
+                ,writes_to_marks_prc
+                ,first_job_start_dts
+                ,sec_for_one_interval
+                ,dateadd( (interval_no-1) * sec_for_one_interval+1 second to first_job_start_dts ) as interval_beg
+                ,dateadd( interval_no * sec_for_one_interval second to first_job_start_dts ) as interval_end
+            from p
+        )
+         --select * from q
+        select
+            unit
+            ,info
+            ,interval_no
+            ,cnt_success
+            ,fetches_per_second
+            ,marks_per_second
+            ,reads_to_fetches_prc
+            ,writes_to_marks_prc
+            ,interval_beg
+            ,interval_end
+        from q
+        into
+            unit
+            ,info
+            ,interval_no
+            ,cnt_success
+            ,fetches_per_second
+            ,marks_per_second
+            ,reads_to_fetches_prc
+            ,writes_to_marks_prc
+            ,interval_beg
+            ,interval_end
+    do
+        suspend;
+end
+
+^ -- srv_mon_perf_trace
+
 create or alter procedure srv_mon_idx
 returns (
     tab_name dm_dbobj,
