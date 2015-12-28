@@ -4608,6 +4608,197 @@ end
 
 ^ -- srv_mon_perf_trace
 
+create or alter procedure srv_mon_perf_trace_pivot (
+    a_intervals_number smallint default 10,
+    a_last_hours smallint default 3,
+    a_last_mins smallint default 0
+)
+returns (
+    traced_data varchar(30),
+    interval_no smallint,
+    sp_client_order bigint,
+    sp_cancel_client_order bigint,
+    sp_supplier_order bigint,
+    sp_cancel_supplier_order bigint,
+    sp_supplier_invoice bigint,
+    sp_cancel_supplier_invoice bigint,
+    sp_add_invoice_to_stock bigint,
+    sp_cancel_adding_invoice bigint,
+    sp_customer_reserve bigint,
+    sp_cancel_customer_reserve bigint,
+    sp_reserve_write_off bigint,
+    sp_cancel_write_off bigint,
+    sp_pay_from_customer bigint,
+    sp_cancel_pay_from_customer bigint,
+    sp_pay_to_supplier bigint,
+    sp_cancel_pay_to_supplier bigint,
+    srv_make_invnt_saldo bigint,
+    srv_make_money_saldo bigint,
+    srv_recalc_idx_stat bigint,
+    interval_beg timestamp,
+    interval_end  timestamp
+) as
+begin
+
+    -- Report based on result of parsing TRACE log which was started by
+    -- ISQL session #1 when config parameter trc_unit_perf = 1.
+    -- Data for each business operation are displayed separately because
+    -- they depends on execution plans and can not be compared each other.
+    -- We have to analyze only RATIOS between reads/fetches and writes/marks,
+    -- and also values of speed (fetches and marks per second) instead of
+    -- absolute their values.
+
+    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
+    a_last_hours = abs( a_last_hours );
+    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+
+    for
+        with recursive
+        a as(
+            -- reduce needed number of minutes from most last event of some SP starts:
+            -- 18.07.2014: handle only data which belongs to LAST job.
+            -- Record with p.unit = 'perf_watch_interval' is added in
+            -- oltp_isql_run_worker.bat before FIRST isql will be launched
+            select
+                maxvalue( x.last_added_watch_row_dts, y.first_trace_statd_start_dts ) as first_job_start_dts
+                ,y.last_job_finish_dts
+                ,y.intervals_number
+            from (
+                select p.dts_beg as last_added_watch_row_dts
+                from perf_log p
+                where p.unit = 'perf_watch_interval'
+                order by dts_beg desc rows 1
+            ) x
+            join (
+                select
+                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_trace_statd_start_dts
+                    ,p.dts_beg as last_job_finish_dts
+                    ,p.intervals_number
+                from
+                ( -- since 03.09.2015:
+                    select
+                        p.*
+                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
+                        , :a_intervals_number as intervals_number
+                    from perf_log p
+                ) p
+                -- nb: do NOT use inner join here (bad plan with sort)
+                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
+                order by p.dts_beg desc
+                rows 1
+            ) y on 1=1
+        )
+        ,d as(
+            select
+                a.first_job_start_dts
+                ,a.last_job_finish_dts
+                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
+            from a
+        )
+        --select * from d
+        ,p as(
+            select
+                t.unit
+                ,b.info
+                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
+                ,count(*) cnt_success
+                ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
+                ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
+                ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
+                ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
+                --,count( nullif(t.success,0) ) cnt_ok
+                --,count( nullif(t.success,1) ) cnt_err
+                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
+                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
+                ,min(d.first_job_start_dts) as first_job_start_dts
+                ,min(d.sec_for_one_interval) as sec_for_one_interval
+            from trace_stat t
+            join business_ops b on t.unit = b.unit
+            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS trace_statd test run!
+            where t.success = 1
+            group by 1,2,3
+        )
+        --select * from p
+        ,q as (
+            select
+                unit
+                ,info
+                ,interval_no
+                ,cnt_success
+                ,fetches_per_second
+                ,marks_per_second
+                ,reads_to_fetches_prc
+                ,writes_to_marks_prc
+                ,first_job_start_dts
+                ,sec_for_one_interval
+                ,dateadd( (interval_no-1) * sec_for_one_interval+1 second to first_job_start_dts ) as interval_beg
+                ,dateadd( interval_no * sec_for_one_interval second to first_job_start_dts ) as interval_end
+            from p
+        )
+         --select * from q
+        , n as (
+          select 1 i from rdb$database union all
+          select n.i+1 from n where n.i+1<=4
+        )
+
+        select
+            decode(n.i, 1, 'fetches per second', 2, 'marks per second', 3, 'reads/fetches, %', 'writes/marks, %') as trace_stat
+            ,interval_no
+            ,max( iif(unit='sp_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as                  sp_client_order
+            ,max( iif(unit='sp_cancel_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as           sp_cancel_client_order
+            ,max( iif(unit='sp_supplier_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as                sp_supplier_order
+            ,max( iif(unit='sp_cancel_supplier_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as         sp_cancel_supplier_order
+            ,max( iif(unit='sp_supplier_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_supplier_invoice
+            ,max( iif(unit='sp_cancel_supplier_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as       sp_cancel_supplier_invoice
+            ,max( iif(unit='sp_add_invoice_to_stock', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as          sp_add_invoice_to_stock
+            ,max( iif(unit='sp_cancel_adding_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as         sp_cancel_adding_invoice
+            ,max( iif(unit='sp_customer_reserve', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_customer_reserve
+            ,max( iif(unit='sp_cancel_customer_reserve', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as       sp_cancel_customer_reserve
+            ,max( iif(unit='sp_reserve_write_off', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             sp_reserve_write_off
+            ,max( iif(unit='sp_cancel_write_off', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_cancel_write_off
+            ,max( iif(unit='sp_pay_from_customer', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             sp_pay_from_customer
+            ,max( iif(unit='sp_cancel_pay_from_customer', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as      sp_cancel_pay_from_customer
+            ,max( iif(unit='sp_pay_to_supplier', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as               sp_pay_to_supplier
+            ,max( iif(unit='sp_cancel_pay_to_supplier', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as        sp_cancel_pay_to_supplier
+            ,max( iif(unit='srv_make_invnt_saldo', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             srv_make_invnt_saldo
+            ,max( iif(unit='srv_make_money_saldo', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             srv_make_money_saldo
+            ,max( iif(unit='srv_recalc_idx_stat', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              srv_recalc_idx_stat
+            ,interval_beg
+            ,interval_end
+        from q
+        cross join n
+        group by n.i, interval_no, interval_beg, interval_end
+        into
+            traced_data
+            ,interval_no
+            ,sp_client_order
+            ,sp_cancel_client_order
+            ,sp_supplier_order
+            ,sp_cancel_supplier_order
+            ,sp_supplier_invoice
+            ,sp_cancel_supplier_invoice
+            ,sp_add_invoice_to_stock
+            ,sp_cancel_adding_invoice
+            ,sp_customer_reserve
+            ,sp_cancel_customer_reserve
+            ,sp_reserve_write_off
+            ,sp_cancel_write_off
+            ,sp_pay_from_customer
+            ,sp_cancel_pay_from_customer
+            ,sp_pay_to_supplier
+            ,sp_cancel_pay_to_supplier
+            ,srv_make_invnt_saldo
+            ,srv_make_money_saldo
+            ,srv_recalc_idx_stat
+            ,interval_beg
+            ,interval_end
+    do
+        suspend;
+end
+
+^ -- srv_mon_perf_trace_pivot
+
+
 create or alter procedure srv_mon_idx
 returns (
     tab_name dm_dbobj,
