@@ -937,7 +937,6 @@ if .%sid%.==.1. (
 
     del %rpt% 2>nul
 
-
     @rem ------------------------------------------------------------------------------
 
     (
@@ -1135,22 +1134,50 @@ if .%sid%.==.1. (
         (
           echo --  Get TRACE performance report for ISQL session #1, with splitting data to 10 equal 
           echo -- time intervals, for last 3 hours of activity:
-          echo set width action 24; 
+          
+          echo set width traced_data 20; 
           echo set width itrv_no  7;
           echo set width itrv_beg 8;         
           echo set width itrv_end 8;         
-          echo select info as action
-          echo       ,cast(interval_no as smallint^) as itrv_no
-          echo       ,cnt_success
-          echo       ,fetches_per_second
-          echo       ,marks_per_second
-          echo       ,reads_to_fetches_prc
-          echo       ,writes_to_marks_prc
-          echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
-          echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
-          echo from rdb$database 
-          echo left join srv_mon_perf_trace p on 1=1;
+          echo select
+          echo      traced_data
+          echo      ,cast(interval_no as smallint^) as itrv_no
+          echo      ,sp_client_order
+          echo      ,sp_cancel_client_order
+          echo      ,sp_supplier_order
+          echo      ,sp_cancel_supplier_order
+          echo      ,sp_supplier_invoice
+          echo      ,sp_cancel_supplier_invoice
+          echo      ,sp_add_invoice_to_stock
+          echo      ,sp_cancel_adding_invoice
+          echo      ,sp_customer_reserve
+          echo      ,sp_cancel_customer_reserve
+          echo      ,sp_reserve_write_off
+          echo      ,sp_cancel_write_off
+          echo      ,sp_pay_from_customer
+          echo      ,sp_cancel_pay_from_customer
+          echo      ,sp_pay_to_supplier
+          echo      ,sp_cancel_pay_to_supplier
+          echo      ,srv_make_invnt_saldo
+          echo      ,srv_make_money_saldo
+          echo      ,srv_recalc_idx_stat
+          echo      ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
+          echo      ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
+          echo from rdb$database left join srv_mon_perf_trace_pivot on 1=1;
           echo commit;
+
+          @rem echo select info as action
+          @rem echo       ,cast(interval_no as smallint^) as itrv_no
+          @rem echo       ,cnt_success
+          @rem echo       ,fetches_per_second
+          @rem echo       ,marks_per_second
+          @rem echo       ,reads_to_fetches_prc
+          @rem echo       ,writes_to_marks_prc
+          @rem echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
+          @rem echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
+          @rem echo from rdb$database 
+          @rem echo left join srv_mon_perf_trace p on 1=1;
+          @rem echo commit;
         ) > %rpt%
         
         type %rpt% >>%log4all%
@@ -2311,21 +2338,19 @@ goto:eof
 
     findstr /i /c:"alias" %tmp_sqlda% 1>%sql_log%
 
-@rem 2.5:
-@rem  :  name: (12)WORKING_MODE  alias: (8)CATEGORY
-@rem  :  name: (5)MCODE  alias: (7)SETTING
-@rem  :  name: (6)SVALUE  alias: (3)VAL
-@rem ^    ^            ^---^        ^
-@rem a    b              c          d
-
-@rem 3.0:
-@rem  :  name: WORKING_MODE  alias: CATEGORY
-@rem  :  name: MCODE  alias: SETTING
-@rem  :  name: SVALUE  alias: VAL
-@rem ^    ^       ^---^        ^
-@rem a    b         c          d
-
-
+    @rem 2.5:
+    @rem  :  name: (12)WORKING_MODE  alias: (8)CATEGORY
+    @rem  :  name: (5)MCODE  alias: (7)SETTING
+    @rem  :  name: (6)SVALUE  alias: (3)VAL
+    @rem ^    ^            ^---^        ^
+    @rem a    b              c          d
+    
+    @rem 3.0:
+    @rem  :  name: WORKING_MODE  alias: CATEGORY
+    @rem  :  name: MCODE  alias: SETTING
+    @rem  :  name: SVALUE  alias: VAL
+    @rem ^    ^       ^---^        ^
+    @rem a    b         c          d
 
     @rem echo tmp_sqlda=%tmp_sqlda% out_line=%out_line%=!out_line!
 
@@ -2333,8 +2358,6 @@ goto:eof
     set /a k=1
     set num_list=
     set fld_name=
-
-    @rem echo sql_log=%sql_log% &pause
 
     for /f "tokens=1-5 delims=:" %%a in ('type !sql_log!') do (
         
@@ -2589,15 +2612,34 @@ goto:eof
     set k=!k:~2,2!
     set result=0
     set num_types=SHORT LONG INT64 DOUBLE LONG FLOAT
+
+    @rem Sample for lines in tmp_file = %tmpdir%\make_html_table.tmp.sqd (result of output SQLDA): with OUPUT parameters:
+    @rem 2.5: 04: sqltype: 497 LONG	  Nullable sqlscale: 0 sqlsubtype: 0 sqllen: 4 -- TAB between "LONG" and NUllable
+    @rem 3.0: 04: sqltype: 496 LONG Nullable scale: 0 subtype: 0 len: 4
+
     for /f "tokens=1-7 delims=: " %%a in ('findstr /n /c:"!k!: sqltype:" %tmp_file%') do (
-      @rem echo a=%%a b =%%b c=%%c d=%%d e=%%e f=%%f g=%%g
+      
       if %%a gtr %out_params_1st_line% (
-       @rem echo type=%%e
-       for /d %%s in ( %num_types% ) do (
-          if .%%e.==.%%s. set result=1
-       )
+         
+         set fld_type=%%e
+
+         @rem ::: NB ::: Token for 2.5 can contain TAB as trailing character, so we have to TRIM it
+         @rem otherwise search for numeric-type columns for this resultset will NOT found any field!
+
+         if not !fld_type!==.. call :trim fld_type !fld_type!
+         @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+         
+         @rem echo rowN=%%a b=1st_token=%%b c=%%c d=%%d fld_type=^|!fld_type!^| f=%%f g=%%g &pause
+
+         for /d %%s in ( %num_types% ) do (
+            if .!fld_type!.==.%%s. (
+               set result=1
+               @rem echo found NUMERIC type, field: %fld_num% &pause
+            )
+         )
       )
     )
+
     endlocal & set "%~4=%result%"
 goto:eof
 
