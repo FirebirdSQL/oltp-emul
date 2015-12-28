@@ -4734,7 +4734,7 @@ begin
         )
 
         select
-            decode(n.i, 1, 'fetches per second', 2, 'marks per second', 3, 'reads/fetches, %', 'writes/marks, %') as trace_stat
+            decode(n.i, 1, 'fetches per second', 2, 'marks per second', 3, 'reads/fetches*100', 'writes/marks*100') as trace_stat
             ,interval_no
             ,max( iif(unit='sp_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as                  sp_client_order
             ,max( iif(unit='sp_cancel_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as           sp_cancel_client_order
