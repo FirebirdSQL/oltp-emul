@@ -1,29 +1,26 @@
-####################################################################
+##########################################################################
 # OLTP-EMUL test for Firebird database - configuration parameters.
 # Get last version: svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/
 # This file is used for launching ISQL sessions test on WINDOWS machine
 # and relates to Firebird 3.0.
 # Parameters are extracted by '1run_oltp_emul.bat' command scenario.
 # You can change order of these key-value pairs (move them up and down)
-# but do NOT remove or make undefined any of them.
-####################################################################
+# but do NOT remove or make undefined any of them if they were uncommented.
+###########################################################################
 
 #::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR LAUNCHING ISQL SESSIONS
 #::::::::::::::::::::::::::::::::::::::
 
-# Folder with Firebird console utilities (isql, fbsvcmgr).
-# Can be specified with spaces inside path.
+# Folder with Firebird console utilities (isql, fbsvcmgr) and client library.
 # Trailing backslash and double quotes are optional.
 # Allows referencing to existing OS environment variable by using "!" sign.
-# When value for this parameter is * (asterisk), batch will try to found home folder
-# of most recent FB service that was installed on current machine (recommended when
-# only single FB instance present on client machine; implemented only for Windows).
-# Samples:
-# fbc = C:\Program Files\Firebird Database Server 3.0
-# fbc = !ProgramFiles!\Firebird Database Server 3.0\
-# fbc = C:\"Program Files"\"Firebird Database Server 3.0"\bin\
-# fbc = *
+# Sample:
+# fbc = C:\Firebird30
+#
+# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
+# If FB binaries are in directory like "C:\Program files (x86)\Firebird Database Server" 
+# then make copy of this folder to something like C:\fb30 etc.
 
 fbc  = C:\MIX\firebird\fb30\
 
@@ -32,8 +29,9 @@ fbc  = C:\MIX\firebird\fb30\
 # FULL PATH and file name. Use only ASCII characters in its name.
 # Samples:
 # dbnm = alias_oltp30
-# dbnm = !appdata!\oltp emul 3.0\ test 3.0.fdb
-# dbnm = !temp!\oltp30.fdb
+# dbnm = c:\temp\oltp30.fdb
+#
+# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
 
 dbnm = C:\MIX\firebird\OLTPTEST\oltp30.fdb
 
@@ -46,13 +44,13 @@ usr =  SYSDBA
 pwd =  masterkey
 
 # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
-# Can be specified with spaces inside path.
 # Trailing backslash and double quotes are optional.
-# Allows referencing to existing OS environment variable by using "!" sign.
-# Samples:
-# tmpdir = "C:\TEMP\logs of oltp emul test 30\ foo bar"
-# tmpdir = !TMP!\logs of oltp emul test 3.0\ .foo .bar\
-# tmpdir = !temp!\logs.oltp30
+# Sample:
+# tmpdir = c:\temp\oltp-emul-25
+#
+# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
+# If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
+# then do not use here !temp! and specify here something like C:\TEMP instead.
 
 tmpdir = !temp!\logs.oltp30
 
@@ -71,7 +69,7 @@ working_mode = small_03
 
 # Time (in minutes) to warm-up database after initial data population
 # will finish and before all following operations will be measured:
-# Recommended value: at least 30 for Firebird 3.0
+# Recommended value: at least 30 for SATA, 10 for SSD storage.
 
 warm_time = 30
 
@@ -172,8 +170,11 @@ mon_unit_perf = 0
 # 2) ratios reads / fetches and writes / marks.
 # These values will be splitted on 10 equal time intervals in order to see changes 
 # in performance that could occur during 'test_time' phase of test.
+# There is no performance penalty when single trace session is active so one may safely
+# to set this value to 1. Note though that if you will interrupt test by brute kill all
+# ISQL sessions than you have also to kill process of FBSVCMGR which can remain active.
 
-trc_unit_perf = 0
+trc_unit_perf = 1
 
 
 # Number of pages for usage during init data population ("-c" switch for ISQL).
