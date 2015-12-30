@@ -1363,7 +1363,7 @@ if .%sid%.==.1. (
           echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
 
           if .%make_html%.==.1. (
-              set t1-!time!
+              set t1=!time!
               call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
               set t2=!time!
               set tdiff=0
@@ -1811,11 +1811,26 @@ if .%sid%.==.1. (
         echo.
     ) >>%log4all%
 
-    echo +++ start of comparison +++>%tmp_file%
+    echo +++ Start of comparison +++>%tmp_file%
 
-    %run_fc_compare% 1>>%tmp_file% 2>&1
+    %run_fc_compare% 1>>%tmp% 2>&1
 
-    echo +++ end of comparison +++>>%tmp_file%
+    set fc_result=%errorlevel%
+    if .!fc_result!.==.0. (
+        echo result: files match. No new messages appeared in firebird.log during test ran. >>!tmp_file!
+    ) else (
+        set /a k=1
+        for /f "tokens=*" %%a in ('type !tmp!') do (
+          @rem First line in output of fc.exe utility is localized, skip it.
+          if not .!k!.==.1. echo %%a >> !tmp_file!
+          set /a k+=1
+        )
+        @rem type !tmp!>>!tmp_file!
+    )
+
+    del %tmp% 2>nul
+
+    echo +++ End of comparison +++>>%tmp_file%
 
     type %tmp_file% >>%log4all%
 
