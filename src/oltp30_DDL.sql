@@ -396,7 +396,12 @@ create domain dm_account_type as varchar(1) character set utf8 NOT null check( v
 create domain dm_unit varchar(80);
 create domain dm_info varchar(255);
 create domain dm_stack varchar(512);
-create domain dm_ip varchar(40); -- remote address to be written into perf_log, mon_log: length should be enough for storing IPv6
+-- Remote address to be written into perf_log, mon_log. 
+-- Size should be enough to fit IPv6 and port number or even port text mnemona! 
+-- See: http://www.networksorcery.com/enp/protocol/ip/ports04000.htm
+-- See also reply from dimitr, letter 11-jan-2016 16:04 (subj: "SOS. M`ON$REMOTE_ADDRESS, ...")
+-- Fixed in http://sourceforge.net/p/firebird/code/62802 (only port numbers will serve as "suffixes")
+create domain dm_ip varchar(255);
 commit;
 
 
@@ -1314,7 +1319,7 @@ begin
 end
 ^
 
-create or alter function fn_remote_address returns varchar(255) deterministic as
+create or alter function fn_remote_address returns dm_ip deterministic as
 begin
     return rdb$get_context('SYSTEM','CLIENT_ADDRESS');
 end
@@ -1903,7 +1908,7 @@ as
     declare v_exc_unit type of column perf_log.exc_unit;
     declare v_stack dm_stack;
     declare v_dbkey dm_dbkey;
-    declare v_remote_addr varchar(15);
+    declare v_remote_addr dm_ip;
 begin
     -- Flushes all data from context variables with names 'PERF_LOG_xxx'
     -- which have been set in sp_f`lush_perf_log_on_abend for saving uncommitted
