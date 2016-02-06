@@ -18,6 +18,11 @@ if .%2.==.. goto noarg1
 set /a k = %2
 if not .%k%. gtr .0. goto no_arg1
 
+@rem 06.02.2016: disable any pauses (even on severe errors like troubles with opening files etc)
+@rem when this batch is called on scheduling basis:
+set can_stop=1
+if /i .%3.==.nostop. set can_stop=0
+
 :ok
 echo %date% %time% - starting %~f0
 echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
@@ -253,7 +258,8 @@ if not defined fbb (
     echo Probably FBSVCMGR output was changed or error in this batch algorithm.
     echo.
     echo See details in %log4tmp%
-    if .%wait_if_not_exists%.==.1. (
+    if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
+        echo.
         echo Press any key to FINISH this batch. . .
         pause>nul
     )
@@ -388,10 +394,10 @@ if errorlevel 1 (
     if .!db_build_finished_ok!.==.0. (
         echo.
         echo Database: ^>%dbnm%^< -- DOES exist but
-        echo its creation process was not completed.
+        echo process of its creation was not completed.
         echo.
 
-        if .%wait_if_not_exists%.==.1. (
+        if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
             echo ################################################################################
             echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
             echo ################################################################################
@@ -519,7 +525,7 @@ if errorlevel 1 (
     echo.
     echo Database file DOES NOT exist or has a problem with ACCESS to it.
     echo.
-    if .%wait_if_not_exists%.==.1. (
+    if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
         echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
         echo.
         pause>nul
@@ -859,18 +865,28 @@ goto :end_of_test
     @echo off
     cls
     echo.
-    echo.
     echo Please specify:
+    echo.
     echo arg #1 =  25 ^| 30 -- version of Firebird for which to make database objects.
-    echo arg #2 =  ^<N^> -- number of ISQL sessions to be opened.
+    echo                       (specify 25 for FIrebird 2.5 and 30 for Firebird 3.0);
     echo.
-    echo Valid variants:
+    echo arg #2 =  ^<N^> -- number of ISQL sessions to be started;
     echo.
-    echo    %~f0 25 ^<N^> - for Firebird 2.5
+    echo arg #3 = nostop -- if this batch should skip any pauses during its work 
+    echo                    (this argument is optional^).
     echo.
-    echo    %~f0 30 ^<N^> - for Firebird 3.0
+    echo Samples:
     echo.
-    echo Where ^<N^> must be greater than 0.
+    echo     1. For Firebird 2.5:
+    echo.
+    echo        %~f0 25 100
+    echo        %~f0 25 100 nostop
+    echo.
+    echo     2. For Firebird 3.0:
+    echo.
+    echo        %~f0 30 100
+    echo        %~f0 30 100 nostop
+    echo.
     echo.
     echo Press any key to FINISH this batch file. . .
     @pause>nul
@@ -884,10 +900,12 @@ goto :end_of_test
     echo #######################################################
     echo,
     echo Check %cfg% file!
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :bad_fbc_path
@@ -897,10 +915,12 @@ goto :end_of_test
     echo variable 'fbc' = ^>^>^>%fbc%^<^<^<
     echo.
     echo This folder has to contain following executeble files: isql, gfix, fbsvcmgr
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :bad_dbnm
@@ -912,10 +932,12 @@ goto :end_of_test
     echo 1) ensure that it specified as full path and file name rather than alias;
     echo 2) ensure that all folders in its path already exists on the host;
     echo 3) ensure that its name meet requirements of OS where Firebird runs;
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :unavail_db
@@ -930,10 +952,12 @@ goto :end_of_test
         echo Message "unavailable database" can appear when ImagePath contains command key "-i" which allows only connections
         echo by remote protocol and disables XNet.
     )
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :bad_ods
@@ -943,10 +967,12 @@ goto :end_of_test
     echo.
     echo 1. Ensure that you have specified proper value of 1st argument to this batch.
     echo 2. Check value of 'dbnm' parameter in file %cfg%
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :db_offline
@@ -954,10 +980,13 @@ goto :end_of_test
     echo.
     echo Database ^>%dbnm%^< DOES exist but is OFFLINE now. Test can not start.
     echo Run first:
-    echo            gfix -online %dbconn% %dbauth%
     echo.
-    echo Press any key to FINISH. . .
-    @pause>nul
+    echo     fbsvcmgr %host%/%port%:service_mgr action_properties dbname %dbnm% prp_db_online %dbauth%
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        @pause>nul
+    )
     goto final
 
 :db_read_only
@@ -965,10 +994,12 @@ goto :end_of_test
     echo.
     echo Database ^>%dbnm%^< DOES exist but in READ ONLY mode now. Test can not start.
     echo Run first:
-    echo            gfix -mode read_write %dbconn% %dbauth%
-    echo.
-    echo Press any key to FINISH. . .
-    @pause>nul
+    echo     fbsvcmgr %host%/%port%:service_mgr action_properties dbname %dbnm% prp_access_mode prp_am_readwrite %dbauth%
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        @pause>nul
+    )
     goto final
 
 :build_not_finished
@@ -980,10 +1011,12 @@ goto :end_of_test
     echo.
     echo Building of database objects was INTERRUPTED or NOT STARTED.
     echo Erase this database and try to run again this batch.
-    echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :no_script
@@ -991,9 +1024,11 @@ goto :end_of_test
     echo.
     echo THERE IS NO .SQL SCRIPT FOR SPECIFIED SCENARIO ^>^>^>%1^<^<^<
     echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :err_setenv
@@ -1002,9 +1037,11 @@ goto :end_of_test
     echo Config file: %cfg% - can NOT set some of environment variables.
     echo Perhaps, there is no equal sign ("=") between name and value in some line.
     echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :test_canc
@@ -1014,7 +1051,7 @@ goto :end_of_test
     echo FILE 'stoptest.txt' ON SERVER SIDE HAS NON-ZERO SIZE, MAKE IT EMPTY TO START TEST!
     echo ##################################################################################
     echo.
-    if .%wait_if_not_exists%.==.1. (
+    if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
         echo Press any key to FINISH. . .
         echo.
         @pause>nul
@@ -1028,11 +1065,13 @@ goto :end_of_test
     echo.
     echo Batch running now: %~f0
     echo.
-    echo Can`t delete file (.sql or .log) - probably it is opened in another window!
+    echo Can not delete file (.sql or .log) - probably it is opened in another window!
     echo.
-    echo Press any key to FINISH. . .
-    echo.
-    @pause>nul
+    if .%can_stop%.==.1. (
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
     @goto final
 
 :gen_working_sql
@@ -1689,7 +1728,7 @@ goto:eof
 
     call :make_db_objects %fb% !tmpdir! !fbc! !dbnm! !dbconn! "!dbauth!" %create_with_split_heavy_tabs%
 
-    if .%wait_after_create%.==.1. (
+    if .%wait_after_create%.==.1. if .%can_stop%.==.1. (
         echo.
         echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
         echo ######################################
@@ -1992,13 +2031,15 @@ goto:eof
     )
     del %tmplog% 2>nul
 
-    if .!engine_err!.==.1. (
+    if .!engine_err!.==.1. ( 
         echo Actual engine version does NOT match input argument ^>%fb%^<
         echo.
         echo Check settings 'host' and 'port' in test config file.
         echo.
-        echo Press any key to FINISH this batch file. . .
-        @pause>nul
+        if .%can_stop%.==.1. (
+            echo Press any key to FINISH this batch file. . .
+            @pause>nul
+        )
         goto final
     )
     echo Result: engine version DOES match to config.
@@ -2988,7 +3029,7 @@ goto:eof
         echo !msg! & echo !msg! >>%log4tmp%
     
         @rem if .%wait_if_not_exists%.==.1. 
-        if .%wait_for_copy%.==.1. (
+        if .%wait_for_copy%.==.1. if .%can_stop%.==.1. (
             @echo.
             @echo ### NOTE ###
             @echo.
@@ -3205,9 +3246,6 @@ goto:eof
             echo ++++++++++++++++++++
             echo.
             echo Database need to be recreated now.
-            @rem echo Press any key to go on, Ctrl-C to FINISH this batch. . .
-            @rem pause >nul
-            @rem set build_was_cancelled=1
         ) else (
             echo.
             echo %txt%
@@ -3221,8 +3259,10 @@ goto:eof
             echo ------------
             echo Remove this file before restarting test.
             echo.
-            echo Press any key to FINISH this batch. . .
-            pause>nul
+            if .%can_stop%.==.1. (
+                echo Press any key to FINISH this batch. . .
+                pause>nul
+            )
             goto final
         )
     ) else (
@@ -3447,13 +3487,15 @@ goto:eof
         type %err_file%
         echo ^=^=^=^=^=^=^=
         echo See details in file %log4tmp%
+
         if .!do_abend!.==.1. (
-            echo.
-            echo Press any key to FINISH this batch. . .
-            pause>nul
+            if .%can_stop%.==.1. (
+                echo.
+                echo Press any key to FINISH this batch. . .
+                pause>nul
+            )
             goto final
         )
-
     )
     endlocal
 goto:eof
