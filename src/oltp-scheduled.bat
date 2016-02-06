@@ -1,6 +1,5 @@
 @echo off
 setlocal enabledelayedexpansion enableextensions
-
 cd /d %~dp0
 
 set fbv=%1
@@ -8,13 +7,29 @@ if not .%1.==.25. if not .%1.==.30. goto no_vers
 set isql_sessions_count=%2
 if not defined isql_sessions_count set isql_sessions_count=10
 
+@rem 06.02.2016: 'nostop' etc:
+set addi_args=%3
+
 cd ..\util
+
+@rem ###############################################
+@rem ###                                         ###
+@rem ###   D O W N L O A D   &   R E P L A C E   ###
+@rem ###                                         ###
+@rem ###############################################
 
 call fbreplace.bat %fbv%
 
 cd /d %~dp0
 
-call :readcfg oltp%fbv%_config.win
+::::::::::::::::::::::::::::::::
+:::: R E A D    C O N G I G ::::
+::::::::::::::::::::::::::::::::
+set err_setenv=0
+call :readcfg oltp%fbv%_config.win !err_setenv!
+
+@rem call :readcfg oltp%fbv%_config.win
+echo Result of parsing config: err_setenv=!err_setenv!
 
 set log=%tmpdir%\%~n0.log
 del %log% 2>nul
@@ -68,7 +83,11 @@ echo !date! !time!. Start copy from etalon test database. 1>>%log%
 @rem 50 Gb: copy E:\OLTP-EMUL\oltp30_050gb.fdb D:\OLTP-EMUL\oltp30_050gb.fdb
 @rem 101 Gb: copy E:\OLTP-EMUL\oltp30_100gb.fdb D:\OLTP-EMUL\oltp30_100gb.fdb
 
-copy E:\OLTP-EMUL\oltp%fbv%-docs_50000.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
+set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw__ON.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
+@rem set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw_OFF.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
+echo !cmd_run!
+echo !cmd_run!>>%log%
+cmd /c !cmd_run! 1>>%log% 2>&1
 
 @echo off
 echo !date! !time!. Finish copy from etalon test database. 1>>%log%
@@ -114,7 +133,13 @@ echo Check command: echo ... ^| %fbc%\isql %host%/%port%:%dbnm% -user %usr% -pas
 echo show version; show database; set width setting_name 40; set width setting_value 20; select setting_name, setting_value from Z_CURRENT_TEST_SETTINGS; | %fbc%\isql %host%/%port%:%dbnm% -user %usr% -password %pwd% 1>>%log% 2>&1
 echo !date! !time!. Done. Now we can launch 1run_oltp_emul.bat 1>>%log% 2>&1
 
-E:\OLTP-EMUL\src\1run_oltp_emul.bat %fbv% %isql_sessions_count%
+@rem ###############################################
+@rem ###                                         ###
+@rem ###   r u n n i n g     o l t p - e m u l   ###
+@rem ###                                         ###
+@rem ###############################################
+
+E:\OLTP-EMUL\src\1run_oltp_emul.bat %fbv% %isql_sessions_count% %addi_args%
 
 goto end
 
@@ -148,6 +173,8 @@ goto end
       )
     )
     set %~2 = %err_setenv%
+    @rem if .%err_setenv%.==.1. goto err_setenv
+
 goto:eof
 
 :trim
