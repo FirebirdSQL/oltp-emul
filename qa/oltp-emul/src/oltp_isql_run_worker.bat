@@ -98,6 +98,14 @@ for %%i in ("%sql%") do (
   set trace_sav=%%~dpitmp_tsave.sql
 )
 
+if .%is_embed%.==.1. (
+    set dbauth=
+    set dbconn=%dbnm%
+) else (
+    set dbauth=-user %usr% -password %pwd%
+    set dbconn=%host%/%port%:%dbnm%
+)
+
 set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 
 
 echo.>>%sts%
@@ -107,14 +115,6 @@ echo !run_isql!>>%sts%
 echo --- end of command for launch isql --->>%sts%
 echo.>>%sts%
 echo sid=%sid%
-
-if .%is_embed%.==.1. (
-    set dbauth=
-    set dbconn=%dbnm%
-) else (
-    set dbauth=-user %usr% -password %pwd%
-    set dbconn=%host%/%port%:%dbnm%
-)
 
 set fbsvcrun=%fbc%\fbsvcmgr
 
@@ -126,7 +126,7 @@ call :repl_with_bound_quotes %fbsvcrun% fbsvcrun
 if .%is_embed%.==.1. (
     set fbsvcrun=%fbsvcrun% service_mgr
 ) else (
-    set fbsvcrun=%fbsvcrun% %host%/%port%:service_mgr %dbauth%
+    set fbsvcrun=%fbsvcrun% %host%/%port%:service_mgr user %usr% password %pwd%
 )
 :: fbsvcrun="C:\Program Files\Firebird Database Server 2.5.5\bin\fbsvcmgr" localhost/3255:service_mgr -user SYSDBA -password masterke
 
