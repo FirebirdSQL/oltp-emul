@@ -28,7 +28,7 @@ commit;
 set term ^;
 execute block as
 begin
-    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '3.' ) then
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.' ) then
     begin
         exception ex_not_suitable_fb_version;
     end
