@@ -2022,11 +2022,11 @@ goto:eof
 
     set engine_err=0
     if .%fb%.==.25. (
-        find /c /i "engine=2.5" %tmplog% >nul
+        findstr /i "engine=2.5" %tmplog% 
         if errorlevel 1 set engine_err=1
     )
     if .%fb%.==.30. (
-        find /c /i "engine=3.0" %tmplog% >nul
+        findstr /r /i "engine=[3-9]." %tmplog% 
         if errorlevel 1 set engine_err=1
     )
     del %tmplog% 2>nul
@@ -2042,13 +2042,12 @@ goto:eof
         )
         goto final
     )
-    echo Result: engine version DOES match to config.
+    echo Result: OK, actual engine version GREATER or EQUAL to specified in config.
     echo.
     echo #################################################
     echo Database will be created for FB ^>^>^> %fb% ^<^<^<
     echo #################################################
     echo.
-
 
     @rem :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem :::    A d j u s t i n g     F W   a n d   S W E E P  i n t.   t o     c o n f i g    s e t t i n g   :::
