@@ -310,7 +310,13 @@ create sequence g_stop_test; -- serves as signal to self-stop every ISQL attachm
 commit;
 
 -- create collations:
+-- NB, 09-mar-2016: at least on 2.5.3 attempt to create two collations w/o commit lead to:
+-- -DEFINE COLLATION failed
+-- -attempt to store duplicate value (visible to active transactions) in unique index "RDB$INDEX_26"
+-- -Problematic key value is ("RDB$COLLATION_ID" = NULL, "RDB$CHARACTER_SET_ID" = 4)
+-- Found on WI-V2.5.3.26780, official release.
 create collation name_coll for utf8 from unicode case insensitive;
+commit; -- mandatory for versions <=2.5.3!
 create collation nums_coll for utf8 from unicode case insensitive 'NUMERIC-SORT=1';
 commit;
 
