@@ -694,15 +694,21 @@ set run_stat=!fbsvcrun! action_db_stats sts_hdr_pages dbname %dbnm%
 ) >>%log4tmp%
 
 %run_isql% 1>%tmpclg% 2>%tmperr%
-    
+
 if not .%file_name_with_test_params%.==.. (
     for /f %%a in (!tmpclg!) do (
         set log_with_params_in_name=!tmpdir!\%%a
+        if not .%file_name_this_host_info%.==.. (
+            set log_with_params_in_name=!log_with_params_in_name!_%file_name_this_host_info%
+        )
         call :repl_with_bound_quotes !log_with_params_in_name! log_with_params_in_name
     )
     echo Final report will be saved with name = !log_with_params_in_name!.txt >> %log4tmp%
 ) else (
     set log_with_params_in_name=%log4all%
+    if not .%file_name_this_host_info%.==.. (
+        set log_with_params_in_name=!log_with_params_in_name!_%file_name_this_host_info%
+    )
     echo Final report will be saved with name = %log4all% >> %log4tmp%
 )
 
