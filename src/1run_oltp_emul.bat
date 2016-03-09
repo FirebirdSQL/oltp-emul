@@ -2970,9 +2970,17 @@ goto:eof
     del %tmpsql% 2>nul
     del %tmplog% 2>nul
     del %tmperr% 2>nul
+
+
+    @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    @rem  R E S T O R E   I N I T    S T A T E    O F     F O R C E D   W R I T E S
+    @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+    @rem --- wrong! --- call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw%
+    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %current_fw%
+
     
     @rem If we are here than no more init docs should be created
-    
     if %init_docs% gtr 0 (
     
         del %tmpchk% 2>nul
@@ -3012,13 +3020,6 @@ goto:eof
         del %tmpclg% 2>nul
         del %tmpchk% 2>nul
         del %tmperr% 2>nul
-
-        @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-        @rem  R E S T O R E   I N I T    S T A T E    O F     F O R C E D   W R I T E S
-        @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-        @rem --- wrong! --- call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw%
-        call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %current_fw%
 
         set msg=%time% FINISH initial data population.
         echo !msg! & echo !msg! >>%log4tmp%
