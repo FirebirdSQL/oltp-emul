@@ -142,7 +142,7 @@ set varlist=%varlist%,use_mtee,detailed_info,init_docs,init_buff,wait_after_crea
 set varlist=%varlist%,wait_for_copy,warm_time,test_time,idle_time,remove_isql_logs
 set varlist=%varlist%,create_with_split_heavy_tabs,create_with_separate_qdistr_idx
 set varlist=%varlist%,create_with_compound_columns_order,create_with_debug_objects
-set varlist=%varlist%,working_mode,wait_if_not_exists
+set varlist=%varlist%,working_mode,wait_if_not_exists,file_name_this_host_info
 
 if .%is_embed%.==.0. (
     set varlist=%varlist%,usr,pwd,host,port
