@@ -1988,20 +1988,32 @@ if .%sid%.==.1. (
     @rem When this value is not empty then we have to rename final report (text and html) to the file which will have maximum info
     @rem about FB build, database FW, test settings and performance result in its name.
     @rem Sample of report name when this parameter is:
-    @rem 1. 'regular':   20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on.txt
-    @rem 2. 'benchmark': ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
+    @rem 1. 'regular':   
+    @rem    20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on_<host_info>.txt
+    @rem 2. 'benchmark': 
+    @rem    ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448_<host_info>.txt
+    @rem -- where <host_info> = content of config parameter %file_name_this_host_info% // 09-mar-2016
 
     if not .%fname%.==.. (
         set upload_log=!tmpdir!\oltp_emul_upload_results.log
         for /f %%a in (!tmp_file!) do (
             set name_for_saving=!tmpdir!\%%a
-            set final_txt=!name_for_saving!.txt
+            set final_txt=!name_for_saving!
+            if not .%file_name_this_host_info%.==.. (
+              set final_txt=!final_txt!_%file_name_this_host_info%
+            )
+            set final_txt=!final_txt!.txt
             call :repl_with_bound_quotes !final_txt! final_txt
+
             copy %log4all% !final_txt! >nul
             if exist !final_txt! del %log4all% 2>nul
     
             if .%make_html%.==.1. (
-              set final_htm=!name_for_saving!.html
+              set final_htm=!name_for_saving!
+              if not .%file_name_this_host_info%.==.. (
+                set final_htm=!final_htm!_%file_name_this_host_info%
+              )
+              set final_htm=!final_htm!.html
               call :repl_with_bound_quotes !final_htm! final_htm
 
               for %%i in ("!final_htm!") do set report_name=%%~ni
@@ -2031,7 +2043,9 @@ if .%sid%.==.1. (
                 if .%upload_report%.==.1. (
                     echo !date! !time!. Upload results in HTML format...
                     for %%n in ("!final_htm!") do set report_name=%%~nxn
+
                     call ..\util\upload.bat !report_name! !final_htm! 1>!upload_log! 2>&1
+
                     echo !date! !time!. Done, check !upload_log!:
                     type !upload_log! 
                     findstr /i /c:"success" !upload_log! >nul
