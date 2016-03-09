@@ -2044,7 +2044,13 @@ if .%sid%.==.1. (
                     echo !date! !time!. Upload results in HTML format...
                     for %%n in ("!final_htm!") do set report_name=%%~nxn
 
-                    call ..\util\upload.bat !report_name! !final_htm! 1>!upload_log! 2>&1
+                    (
+                        echo # This log was created by %~dp0%~nx0
+                        echo # Command: call ..\util\upload.bat !report_name! !final_htm!
+                        echo.
+                    ) >!upload_log!
+
+                    call ..\util\upload.bat !report_name! !final_htm! 1>>!upload_log! 2>&1
 
                     echo !date! !time!. Done, check !upload_log!:
                     type !upload_log! 
