@@ -29,7 +29,7 @@ set fname=%9
 rem %tmpdir%\oltpNN.report.txt - name of file for overall performance report
 rem (do NOT overwrite it here, it has already some info that was added there in 1run*.bat):
 
-if not .%3.==.25. if not .%3.==.30. (
+if not .%3.==.25. if not .%3.==.30. if not .%3.==.40. (
   echo.
   echo This batch must be called from 1run_oltp_emul.bat 
   echo #################################################
@@ -132,7 +132,7 @@ if .%is_embed%.==.1. (
 
 set run_get_fb_ver=%fbsvcrun% info_server_version info_implementation
 
-if .%fb%.==.30. (
+if NOT .%fb%.==.25. (
     set run_get_fb_log=%fbsvcrun% action_get_fb_log
 ) else (
     set run_get_fb_log=%fbsvcrun% action_get_ib_log
@@ -1327,7 +1327,7 @@ if .%sid%.==.1. (
       )
       del %rpt% 2>nul
   
-      if .%fb%.==.30. (
+      if NOT .%fb%.==.25. (
           set msg=Monitoring data, per TABLES and application UNITS
           echo !date! !time!. Generating report "!msg!"...
    
@@ -1485,7 +1485,6 @@ if .%sid%.==.1. (
     @rem ---------------------------------------------------------------------------
     set skip_fbsvc=0
     @rem 09.10.2015: call fbsvcmgr in embedded mode now is possible, CORE-4938 is fixed
-    @rem --- was: if .%is_embed%.==.1. if .%fb%.==.30. set skip_fbsvc=1
 
     @rem ------------------------------------------------------------------------------
 

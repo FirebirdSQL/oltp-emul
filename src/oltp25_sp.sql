@@ -5532,6 +5532,7 @@ as
     declare v_dts_beg timestamp;
     declare v_dts_end timestamp;
     declare k smallint;
+    declare v_fb_major_vers varchar(10);
 begin
 
     -- Aux. SP for returning FILE NAME of final report which does contain all
@@ -5539,6 +5540,18 @@ begin
     -- Sample:
     -- select * from srv_get_report_name('regular', 31236)
     -- select * from srv_get_report_name('benchmark', 31236)
+
+    select d1 || d2
+    from (
+        select d1, left(s, position('.' in s)-1) d2
+        from (
+            select left(r,  position('.' in r)-1) d1, substring(r from 1+position('.' in r)) s
+            from (
+              select rdb$get_context('SYSTEM','ENGINE_VERSION') r from rdb$database
+            )
+        )
+    ) into v_fb_major_vers; -- '2.5.0' ==> '25'; '3.0.0' ==> '30'; '19.17.1' ==> '1917' :-)
+
 
     select p.fb_arch from sys_get_fb_arch p into fb_arch;
     fb_arch =
@@ -5549,8 +5562,9 @@ begin
                     )
                 )
            )
-        || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
+        || v_fb_major_vers -- prev: iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
     ;
+
     fw_setting='fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off');
 
     select

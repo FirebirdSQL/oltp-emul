@@ -1,58 +1,54 @@
-###########################################################################
+####################################################################
 # OLTP-EMUL test for Firebird database - configuration parameters.
 # Get last version: svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/
-# This file is used for launching ISQL sessions test on WINDOWS machine
-# and relates to Firebird 2.5.
-# Parameters are extracted by '1run_oltp_emul.bat' command scenario.
+# This file is used for launching ISQL sessions test on POSIX machine
+# and relates to Firebird 3.0.
+# Parameters are extracted by '1run_oltp_emul.sh' command scenario.
 # You can change order of these key-value pairs (move them up and down)
-# but do NOT remove or make undefined any of them if they were uncommented.
-###########################################################################
+# but do NOT remove or make undefined any of them.
+####################################################################
 
 #::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR LAUNCHING ISQL SESSIONS
 #::::::::::::::::::::::::::::::::::::::
 
-# Folder with Firebird console utilities (isql, fbsvcmgr) and client library.
+# Folder with Firebird console utilities (isql, fbsvcmgr).
 # Trailing backslash and double quotes are optional.
-# Allows referencing to existing OS environment variable by using "!" sign.
-# Sample:
-# fbc = C:\Firebird25\bin
-#
-# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
-# If FB binaries are in directory like "C:\Program files (x86)\Firebird 2.5\bin" 
-# then make copy of this folder to something like C:\fb25\bin etc.
+# Allows referencing to existing OS environment variable by using dollar sign.
+# Samples:
+# fbc = $FB40_HOME/bin
+# fbc = /opt/firebird.40/bin
 
-fbc  = C:\MIX\firebird\fb25\bin
+fbc  = /opt/fb40ss/bin
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. Use only ASCII characters in its name.
+# Allows referencing to existing OS environment variable by using dollar sign.
+# Use forward slash ("/) in all cases, even when database is on Windows host.
 # Samples:
-# dbnm = alias_oltp25
-# dbnm = c:\temp\oltp25.fdb
-#
-# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+# dbnm = $HOME/data/oltp40.fdb
+# dbnm = /var/db/fb40/oltp40.fdb
+# dbnm = C:/MIX/firebird/OLTPTEST/oltp40.fdb
 
-dbnm = C:\MIX\firebird\OLTPTEST\oltp25.fdb
+dbnm = /var/db/fb40/oltp40.fdb
 
 # Parameters for remote connection and authentication.
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3255
+port = 3400
 usr =  SYSDBA
-pwd =  masterke
+pwd =  masterkey
 
 # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
-# Trailing backslash and double quotes are optional.
-# Sample:
-# tmpdir = c:\temp\oltp-emul-25
-#
-# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
-# If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
-# then do not use here !temp! and specify here something like C:\TEMP instead.
+# Trailing backslash is optional.
+# Allows referencing to existing OS environment variable by using dollar sign.
+# Samples:
+# tmpdir = /var/tmp/logs.oltp40
+# tmpdir = $TMP/logs.oltp40
 
-tmpdir = !temp!\logs.oltp25
+tmpdir = /var/tmp/logs.oltp40
 
 # Test has several settings that define how much work should be done by each business action in average.
 # All of them are considered as separate enumerations: when new ISQL session creates connection, it reads
@@ -69,7 +65,7 @@ working_mode = small_03
 
 # Time (in minutes) to warm-up database after initial data population
 # will finish and before all following operations will be measured:
-# Recommended value: at least 30 for SATA, 10 for SSD storage.
+# Recommended value: at least 30 for Firebird 3.0
 
 warm_time = 30
 
@@ -87,7 +83,7 @@ test_time = 60
 idle_time = 0
 
 # Do we use mtee.exe utility to provide timestamps for error messages 
-# before they are logged in .err files (1=yes, 0=no) ?
+# before they are logged in .err files (1=yes, 0=no) ? 
 # Windows only. Not implemented for Linux, will be ignored at runtime.
 
 use_mtee = 0
@@ -113,8 +109,9 @@ is_embed = 0
 #
 # Default setting: parameter is UNDEFINED, i.e. test will not check content of external file to stop.
 
-# use_external_to_stop = c:\temp\stoptext.txt
+# use_external_to_stop = c:/temp/stoptext.txt
 # use_external_to_stop = stoptext.txt
+
 
 # Condition where all ISQL logs should be removed after test will finish.
 # Possible values: always | never | if_no_severe_errors
@@ -124,8 +121,8 @@ is_embed = 0
 # Test considers following exceptions as 'severe':
 #   335544558 check_constraint     (Operation violates CHECK constraint @1 on view or table @2).
 #   335544347 not_valid            (Validation error for column @1, value "@2").
-#   335544665 unique_key_violation (Violation of PRIMARY or UNIQUE KEY constraint "..." on table ...")
-#   335544349 no_dup               (attempt to store duplicate value (visible to active transactions) in unique index "***") 
+#   335544665 unique_key_violation (Violation of PRIMARY or UNIQUE KEY constraint "..." on table ...") - if table has unique CONSTRAINT
+#   335544349 no_dup               (attempt to store duplicate value (visible to active transactions) in unique index "***") - if table has only unique INDEX
 
 # Recommended value: if_no_severe_errors
 
@@ -153,29 +150,14 @@ detailed_info = 0
 
 # Do we add call to mon$ tables before and after each application unit 
 # in generated file tmp_random_run.sql (1=yes, 0=no) ? 
-# NOTE-1. Value of this parameter will be written by 1run_oltp_emul.bat into
-# table SETTINGS on each new test run by issuing SQL command: 
-# update settings set svalue=%mon_unit_perf% where mcode='ENABLE_MON_QUERY' and ...;
+# NOTE-1. Value of this parameter will be written by script 1run_oltp_emul.sh
+# into table SETTINGS on each new test run by issuing SQL command: 
+# update settings set svalue = $mon_unit_perf where mcode='ENABLE_MON_QUERY' and ...;
 # Each ISQL session that will create workload will read this value before starting job.
 # NOTE-2. More detailed analysis with detalization down to separate stored procedures
 # can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
 
 mon_unit_perf = 0
-
-# Should 1st of being launched ISQL instances also start asynchronously FBSVCMGR with 
-# opening TRACE session (1=yes; 0=no; trace session will be stopped on every end of .sql) ?
-# If yes, final report will have result of parsing trace log for that ISQL activity with
-# aggregate data about each business action and average values of:
-# 1) speed of fetches and marks per second;
-# 2) ratios reads / fetches and writes / marks.
-# These values will be splitted on 10 equal time intervals in order to see changes 
-# in performance that could occur during 'test_time' phase of test.
-# There is no performance penalty when single trace session is active so one may safely
-# to set this value to 1. Note though that if you will interrupt test by brute kill all
-# ISQL sessions than you have also to kill process of FBSVCMGR which can remain active.
-
-trc_unit_perf = 1
-
 
 # Number of pages for usage during init data population ("-c" switch for ISQL).
 # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
@@ -200,6 +182,7 @@ create_with_fw = sync
 
 create_with_sweep = 20000
 
+
 # Should script be paused if database does not exist or its creation
 # did not finished properly (e.g. was interrupted; 1=yes; 0=no) ?
 # You have to set this parameter to 0 if this batch is launched by 
@@ -218,14 +201,14 @@ wait_after_create = 0
 
 # Number of documents, total of all types, for initial data population.
 # Command scenario will compare number of existing document with this
-# value. Missing number of documents will be added when needed.
+# and create new ones only if <init_docs> still greater than obtained.
 # Recommended value: 
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 101
+init_docs = 30000
 
-# Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
+# Should command scenario - 1run_oltp_emul.sh - be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
 # Value = 1 can be set if you want to make copy of .fdb and restore later
 # this database to 'origin' state. This can save time because of avoiding need
@@ -259,13 +242,10 @@ create_with_debug_objects = 1
 create_with_split_heavy_tabs = 0
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
-# compound index or two separate indices.
+# compound index or two separate indices (1=yes, 0=no).
 # Number of columns in compound index depends on value of two parameters:
 # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
 # Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
-# Avaliable values: 
-# 0 = do NOT separate indices, user only one ("wide" compound).
-# 1 = USE two indices instead of one ("wide" compound).
 # Recommended value: nope (choose yourself and compare).
 
 create_with_separate_qdistr_idx = 0
@@ -275,7 +255,7 @@ create_with_separate_qdistr_idx = 0
 # Avaliable options: 'most_selective_first' or 'least_selective_first'.
 # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / <W>,
 # where <W> = number of rows in the table 'WARES', depends on selected workload mode.
-# Second and third columns will have poor selectivity = 1/6.
+# Second and third columns will have selectivity about 1/6.
 # When choice = 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
 # and third column will have selectivity = 1 / <W>.
 #
@@ -289,10 +269,9 @@ create_with_compound_columns_order = most_selective_first
 #::::::::::::::::::::::::::::::::::::::
 
 # Create report in HTML format (beside plain text one; 1=yes, 0=no) ?
-# Value = 1 leads to increased time of final report building.
 # Windows only. Not implemented for Linux, will be ignored at runtime.
 
-make_html = 1
+make_html=0
 
 # Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
 # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
@@ -310,24 +289,19 @@ run_db_validation = 1
 # regular   - appropriate for quick found performance degradation, without details of test settings
 # benchmark - appropriate for analysis when different settings are applied
 # Sample of report name when this parameter = 'regular':
-# 20151102_1448_score_06543_build_26949_cs25__3h00m_100_att_fw__on.txt
+# 20151102_1448_score_06543_build_31236_ss40__3h00m_100_att_fw__on.txt
 # Sample of report name when this parameter = 'benchmark':
-# cs25_fw_off_split_most__sel_1st_one_index_score_06543_build_26949__3h00m_100_att_20151102_1448.txt
+# ss40_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
+
+# Available options: regular | benchmark, or leave commented (undefined).
 
 file_name_with_test_params = regular
 
-# Suffix for adding at the end of report name.
-# CHANGE this value to some useful info about host location, 
-# hardware specifics, FB instance etc.
-
-file_name_this_host_info = no_host_info
-
-# When this setting is defined batch will send final report to required e-mail using console
-# client POSTIE.EXE with arguments that are defined here plus add auto generated subject and 
+# When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
+# client POSTIE.EXE with arguments that are defined here plus add auto generated subject and
 # attach report. This setting is OPTIONAL. Note: executable 'postie.exe' must be either in one
 #  of PATH-list or in ..\util related to current ('src') folder.
 # Windows only. Not implemented for Linux, will be ignored at runtime.
-# NOTE: this parameter is OPTIONAL. Leave it commented if no e-mail sending is planned.
 
 #postie_send_args = -esmtp -host:mail.local -from:malert@company.com -to:foo@bar.com -user:malert@company.com -pass:QwerTyuI0p
 

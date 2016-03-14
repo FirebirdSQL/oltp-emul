@@ -236,16 +236,14 @@ insert into settings(working_mode, mcode,                  svalue
 -- do we ALLOW to query mon$-tables in ALL cases (not only when some blocking bug encountered) ?
 -- update settings set svalue='0' where mcode='ENABLE_MON_QUERY';
 -- update settings set svalue='1' where mcode='ENABLE_MON_QUERY';
-insert into settings(working_mode, mcode, svalue
-                    ,description)
-              values( 'COMMON',
-                      'ENABLE_MON_QUERY',
-                      decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
-                             ,'3.0', '0' -- can be = '1' since ~10.08.2014
-                             ,'2.5', '0' -- do NOT set = '1' at all!
-                             ,'0'
-                            )
-                    ,'0 =  do not gather mon$ tables at all; 1 = gather mon$ tables before and after each Tx, in every ISQL session'
+insert into settings(working_mode, mcode, svalue, description)
+              values(  'COMMON'
+                      ,'ENABLE_MON_QUERY'
+                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.'
+                            ,'0'
+                            ,'0'  -- for 3.0 and above can be = '1' since ~10.08.2014
+                          )
+                      ,'0 =  do not gather mon$ tables at all; 1 = gather mon$ tables before and after each Tx, in every ISQL session'
                     );
 
 -- Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
@@ -260,14 +258,14 @@ insert into settings(working_mode, mcode, svalue
 -- Detailed investigation:
 -- sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
 -- (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
-insert into settings(working_mode, mcode, svalue)
-              values( 'COMMON',
-                      'HALT_TEST_ON_ERRORS',
-                      decode( left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3)
-                             ,'3.0', ',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
-                             ,'2.5', ',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 2.5
-                             ,',NONE,'
-                            )
+insert into settings(working_mode, mcode, svalue, description)
+              values(  'COMMON'
+                      ,'HALT_TEST_ON_ERRORS'
+                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.'
+                            ,',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
+                            ,',CK,'  -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
+                          )
+                      ,'Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode))'
                     );
 
 -- LOG_PK_VIOLATION:
