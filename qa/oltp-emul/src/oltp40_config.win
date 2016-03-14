@@ -1,8 +1,8 @@
-###########################################################################
+##########################################################################
 # OLTP-EMUL test for Firebird database - configuration parameters.
 # Get last version: svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/
 # This file is used for launching ISQL sessions test on WINDOWS machine
-# and relates to Firebird 2.5.
+# and relates to Firebird 3.0.
 # Parameters are extracted by '1run_oltp_emul.bat' command scenario.
 # You can change order of these key-value pairs (move them up and down)
 # but do NOT remove or make undefined any of them if they were uncommented.
@@ -16,43 +16,43 @@
 # Trailing backslash and double quotes are optional.
 # Allows referencing to existing OS environment variable by using "!" sign.
 # Sample:
-# fbc = C:\Firebird25\bin
+# fbc = C:\Firebird40
 #
 # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
-# If FB binaries are in directory like "C:\Program files (x86)\Firebird 2.5\bin" 
-# then make copy of this folder to something like C:\fb25\bin etc.
+# If FB binaries are in directory like "C:\Program files (x86)\Firebird Database Server" 
+# then make copy of this folder to something like C:\fb40 etc.
 
-fbc  = C:\MIX\firebird\fb25\bin
+fbc  = C:\MIX\firebird\fb40
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
 # FULL PATH and file name. Use only ASCII characters in its name.
 # Samples:
-# dbnm = alias_oltp25
-# dbnm = c:\temp\oltp25.fdb
+# dbnm = alias_oltp40
+# dbnm = c:\temp\oltp40.fdb
 #
-# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+# WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
 
-dbnm = C:\MIX\firebird\OLTPTEST\oltp25.fdb
+dbnm = C:\MIX\firebird\OLTPTEST\oltp40.fdb
 
 # Parameters for remote connection and authentication.
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3255
+port = 3400
 usr =  SYSDBA
-pwd =  masterke
+pwd =  masterkey
 
 # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
 # Trailing backslash and double quotes are optional.
 # Sample:
-# tmpdir = c:\temp\oltp-emul-25
+# tmpdir = c:\temp\oltp-emul-40
 #
 # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
 # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
 # then do not use here !temp! and specify here something like C:\TEMP instead.
 
-tmpdir = !temp!\logs.oltp25
+tmpdir = !temp!\logs.oltp40
 
 # Test has several settings that define how much work should be done by each business action in average.
 # All of them are considered as separate enumerations: when new ISQL session creates connection, it reads
@@ -125,12 +125,11 @@ is_embed = 0
 #   335544558 check_constraint     (Operation violates CHECK constraint @1 on view or table @2).
 #   335544347 not_valid            (Validation error for column @1, value "@2").
 #   335544665 unique_key_violation (Violation of PRIMARY or UNIQUE KEY constraint "..." on table ...")
-#   335544349 no_dup               (attempt to store duplicate value (visible to active transactions) in unique index "***") 
+#   335544349 no_dup               (attempt to store duplicate value (visible to active transactions) in unique index "***")
 
 # Recommended value: if_no_severe_errors
 
 remove_isql_logs = if_no_severe_errors
-
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR PREPARING WORKLOAD SQL SCRIPT
@@ -161,6 +160,7 @@ detailed_info = 0
 # can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
 
 mon_unit_perf = 0
+
 
 # Should 1st of being launched ISQL instances also start asynchronously FBSVCMGR with 
 # opening TRACE session (1=yes; 0=no; trace session will be stopped on every end of .sql) ?
@@ -209,21 +209,22 @@ wait_if_not_exists = 0
 
 # Should script be PAUSED after creation database objects before starting
 # initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
+# Number of documents, total of all types, for initial data population.
+# Command scenario will compare number of existing document with this
+# value. Missing number of documents will be added when needed.
+# Recommended value: at least 30000 
+
+wait_after_create = 0
+
 # NOTE: test database will be (re-)created only when it does not contain all necessary objects.
 # Command scenario verifies this by searching special record in table 'SEMAPHORES' which should
 # be added there at the end-point of building process. If this record is found, test will use 
 # existing database and following parameters will be IGNORED.
-
-wait_after_create = 0
-
-# Number of documents, total of all types, for initial data population.
-# Command scenario will compare number of existing document with this
-# value. Missing number of documents will be added when needed.
 # Recommended value: 
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 101
+init_docs = 30000
 
 # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
@@ -259,7 +260,7 @@ create_with_debug_objects = 1
 create_with_split_heavy_tabs = 0
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
-# compound index or two separate indices.
+# compound index or two separate indices (1=yes, 0=no).
 # Number of columns in compound index depends on value of two parameters:
 # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
 # Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
@@ -275,7 +276,7 @@ create_with_separate_qdistr_idx = 0
 # Avaliable options: 'most_selective_first' or 'least_selective_first'.
 # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / <W>,
 # where <W> = number of rows in the table 'WARES', depends on selected workload mode.
-# Second and third columns will have poor selectivity = 1/6.
+# Second and third columns will have selectivity about 1/6.
 # When choice = 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
 # and third column will have selectivity = 1 / <W>.
 #
@@ -310,9 +311,11 @@ run_db_validation = 1
 # regular   - appropriate for quick found performance degradation, without details of test settings
 # benchmark - appropriate for analysis when different settings are applied
 # Sample of report name when this parameter = 'regular':
-# 20151102_1448_score_06543_build_26949_cs25__3h00m_100_att_fw__on.txt
+# 20151102_1448_score_06543_build_31236_ss40__3h00m_100_att_fw__on.txt
 # Sample of report name when this parameter = 'benchmark':
-# cs25_fw_off_split_most__sel_1st_one_index_score_06543_build_26949__3h00m_100_att_20151102_1448.txt
+# ss40_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
+
+# Available options: regular | benchmark, or leave commented (undefined).
 
 file_name_with_test_params = regular
 
@@ -322,8 +325,8 @@ file_name_with_test_params = regular
 
 file_name_this_host_info = no_host_info
 
-# When this setting is defined batch will send final report to required e-mail using console
-# client POSTIE.EXE with arguments that are defined here plus add auto generated subject and 
+# When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
+# client POSTIE.EXE with arguments that are defined here plus add auto generated subject and
 # attach report. This setting is OPTIONAL. Note: executable 'postie.exe' must be either in one
 #  of PATH-list or in ..\util related to current ('src') folder.
 # Windows only. Not implemented for Linux, will be ignored at runtime.

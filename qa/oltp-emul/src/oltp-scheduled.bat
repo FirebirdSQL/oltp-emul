@@ -3,24 +3,12 @@ setlocal enabledelayedexpansion enableextensions
 cd /d %~dp0
 
 set fbv=%1
-if not .%1.==.25. if not .%1.==.30. goto no_vers
+if not .%1.==.25. if not .%1.==.30. if not .%1.==.40. goto no_vers
 set isql_sessions_count=%2
 if not defined isql_sessions_count set isql_sessions_count=10
 
 @rem 06.02.2016: 'nostop' etc:
 set addi_args=%3
-
-cd ..\util
-
-@rem ###############################################
-@rem ###                                         ###
-@rem ###   D O W N L O A D   &   R E P L A C E   ###
-@rem ###                                         ###
-@rem ###############################################
-
-call fbreplace.bat %fbv%
-
-cd /d %~dp0
 
 ::::::::::::::::::::::::::::::::
 :::: R E A D    C O N G I G ::::
@@ -33,6 +21,18 @@ echo Result of parsing config: err_setenv=!err_setenv!
 
 set log=%tmpdir%\%~n0.log
 del %log% 2>nul
+
+cd ..\util
+
+@rem ###############################################
+@rem ###                                         ###
+@rem ###   D O W N L O A D   &   R E P L A C E   ###
+@rem ###                                         ###
+@rem ###############################################
+
+call fbreplace.bat %fbv% %log%
+
+cd /d %~dp0
 
 set FB_SERVICES=fb%fbv%_tmp
 
@@ -84,7 +84,7 @@ echo !date! !time!. Start copy from etalon test database. 1>>%log%
 @rem 101 Gb: copy E:\OLTP-EMUL\oltp30_100gb.fdb D:\OLTP-EMUL\oltp30_100gb.fdb
 
 set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw__ON.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
-@rem set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw_OFF.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
+
 echo !cmd_run!
 echo !cmd_run!>>%log%
 cmd /c !cmd_run! 1>>%log% 2>&1
@@ -122,22 +122,26 @@ for /d %%s in ( %FB_SERVICES% ) do (
 
 )
 
-if .%fbv%.==.30. (
+if NOT .%fbv%.==.25. (
     echo !date! !time!. Applying 'gfix -icu' for adjust database with existing ICU version... 1>>%log%
     %fbc%\gfix.exe -icu %host%/%port%:%dbnm% -user %usr% -password %pwd% 1>>%log% 2>&1
     echo !date! !time!. Done.
 )
 
-echo !date! !time!. Make probe connect to database and show FB version, DB and test settings... 1>>%log%
-echo Check command: echo ... ^| %fbc%\isql %host%/%port%:%dbnm% -user %usr% -password %pwd% 1>>%log%
-echo show version; show database; set width setting_name 40; set width setting_value 20; select setting_name, setting_value from Z_CURRENT_TEST_SETTINGS; | %fbc%\isql %host%/%port%:%dbnm% -user %usr% -password %pwd% 1>>%log% 2>&1
-echo !date! !time!. Done. Now we can launch 1run_oltp_emul.bat 1>>%log% 2>&1
+(
+  echo !date! !time!. Make probe connect to database and show FB version, DB and test settings...
+  echo Check command: echo ... ^| %fbc%\isql %host%/%port%:%dbnm% -user %usr% -password %pwd%
+  echo show version; show database; set width setting_name 40; set width setting_value 20; select setting_name, setting_value from Z_CURRENT_TEST_SETTINGS; | %fbc%\isql %host%/%port%:%dbnm% -user %usr% -password %pwd%
+  echo !date! !time!. Done. Now we can launch 1run_oltp_emul.bat
+) 1>>%log% 2>&1
 
-@rem ###############################################
-@rem ###                                         ###
-@rem ###   r u n n i n g     o l t p - e m u l   ###
-@rem ###                                         ###
-@rem ###############################################
+(
+  echo ###############################################
+  echo ###                                         ###
+  echo ###   r u n n i n g     o l t p - e m u l   ###
+  echo ###                                         ###
+  echo ###############################################
+) >>%log%
 
 E:\OLTP-EMUL\src\1run_oltp_emul.bat %fbv% %isql_sessions_count% %addi_args%
 
@@ -186,7 +190,7 @@ goto:eof
 
 :no_vers
     echo Syntax: %~n0.bat ^<firebird_version^> [ ^<number_of_ISQL_sessions^> ]
-    echo Where:  ^<firebird_version^> = 25 ^| 30 - mandatory argument
+    echo Where:  ^<firebird_version^> = 25 ^| 30 ^| 40 - mandatory argument
     echo         ^<number_of_ISQL_sessions^> - default = 10.
     echo Press any key. . .
     pause >nul

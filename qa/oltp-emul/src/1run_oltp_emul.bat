@@ -11,6 +11,7 @@ if .%1.==.. goto no_arg1
 set fb=%1
 if .%fb%.==.25. goto chk2
 if .%fb%.==.30. goto chk2
+if .%fb%.==.40. goto chk2
 goto no_arg1
 
 :chk2
@@ -147,7 +148,7 @@ set varlist=%varlist%,working_mode,wait_if_not_exists,file_name_this_host_info
 if .%is_embed%.==.0. (
     set varlist=%varlist%,usr,pwd,host,port
 )
-if .%1.==.30. (
+if NOT .%1.==.25. (
     set varlist=!varlist!,mon_unit_perf
 )
 
@@ -460,7 +461,7 @@ if errorlevel 1 (
              echo         where working_mode=upper('common'^) and mcode=upper('enable_mon_query'^);
              echo         if (row_count = 0^) then 
              echo             exception ex_record_not_found
-             if .%fb%.==.30. (
+             if NOT .%fb%.==.25. (
              echo             using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY'''^)
              )
              echo         ;
@@ -478,7 +479,7 @@ if errorlevel 1 (
              echo         where working_mode=upper('init'^) and mcode=upper('working_mode'^);
              echo         if (row_count = 0^) then
              echo             exception ex_record_not_found
-             if .%fb%.==.30. (
+             if NOT .%fb%.==.25. (
              echo             using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE'''^)
              )
              echo         ;
@@ -873,13 +874,18 @@ goto :end_of_test
     echo.
     echo Please specify:
     echo.
-    echo arg #1 =  25 ^| 30 -- version of Firebird for which to make database objects.
-    echo                       (specify 25 for FIrebird 2.5 and 30 for Firebird 3.0);
+    echo arg #1 =  25 ^| 30 ^| 40 -- version of Firebird which will be tested:
+    echo           ^^    ^^    ^^
+    echo           ^|    ^|    ^|
+    echo           ^|    ^|    +--- Firebird 4.0
+    echo           ^|    ^|
+    echo           ^|    +------------ Firebird 3.0
+    echo           ^|
+    echo.          +--------------------- Firebird 2.5
     echo.
     echo arg #2 =  ^<N^> -- number of ISQL sessions to be started;
     echo.
-    echo arg #3 = nostop -- if this batch should skip any pauses during its work 
-    echo                    (this argument is optional^).
+    echo arg #3 = nostop -- (optional) skip any pauses during work 
     echo.
     echo Samples:
     echo.
@@ -1970,6 +1976,11 @@ goto:eof
     set dbconn=%5
     set dbauth=%6
     set create_with_split_heavy_tabs=%7
+    if .%fb%.==.25. (
+      set vers_family=25
+    ) else (
+      set vers_family=30
+    )
 
     @rem Remove enclosing double quotes from value ofr dbauth: "-user ... -pas ..."   ==>  -user ... -pas ...
     set dbauth=!dbauth:"=!
@@ -2030,8 +2041,7 @@ goto:eof
     if .%fb%.==.25. (
         findstr /i "engine=2.5" %tmplog% 
         if errorlevel 1 set engine_err=1
-    )
-    if .%fb%.==.30. (
+    ) else (
         findstr /r /i "engine=[3-9]." %tmplog% 
         if errorlevel 1 set engine_err=1
     )
@@ -2076,9 +2086,10 @@ goto:eof
         echo set list off;
         @rem echo -- ?? set echo on;
 
-        @rem these scripts DIFFERS for each version of Firebird:
-        echo in "%~dp0oltp%fb%_DDL.sql";
-        echo in "%~dp0oltp%fb%_sp.sql";
+        @rem oltpNN_DDL.sql, oltpNN_sp.sql -- these scripts DIFFER for each version of Firebird:
+
+        echo in "%~dp0oltp%vers_family%_DDL.sql";
+        echo in "%~dp0oltp%vers_family%_sp.sql";
 
         @rem Following scripts are COMMON for each version of Firebird:
         if .%create_with_debug_objects%.==.1. (
@@ -2686,7 +2697,6 @@ goto:eof
     echo.
 
     set skip_fbsvc=0
-    if .%is_embed%.==.1. if .%fb%.==.30. set skip_fbsvc=1
 
     @rem call :r~un_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %init_docs% %engine% %log_tab%
 
@@ -3097,7 +3107,6 @@ goto:eof
      
     set skip_fbsvc=0
     @rem 09.10.2015: call fbsvcmgr in embedded mode now is possible, CORE-4938 is fixed
-    @rem --- was: if .%is_embed%.==.1. if .%fb%.==.30. set skip_fbsvc=1
 
     if .%skip_fbsvc%.==.0. (
 
@@ -3553,9 +3562,9 @@ goto:eof
     @rem after it - testing ('WI-T*').
 
     if .%1.==.25. (
-        set preflst=WI-V2.5.,WI-T2.5,WI-V3.,WI-T3.,WI-V,WI-T
+        set preflst=WI-V2.5.,WI-T2.5,WI-V3.,WI-T3.,WI-V4.,WI-T4.,WI-V,WI-T
     ) else (
-        set preflst=WI-V3.,WI-T3.,WI-V2.5.,WI-T2.5,WI-V,WI-T
+        set preflst=WI-V4.,WI-T4.,WI-V3.,WI-T3.,WI-V2.5.,WI-T2.5,WI-V,WI-T
     )
 
     for %%k in (%preflst%) do (

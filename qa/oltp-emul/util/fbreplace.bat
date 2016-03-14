@@ -13,7 +13,7 @@
 @rem         After backup will be created - replace <name>.conf with the same file from SNAPSHOT_DIR.
 @rem    3.2. All other files - try to remove file with the same name in the <FB_HOME>, log if fault.
 @rem    3.2. In case of successfully removed file - copy it from %SNAPSHOT_DIR%
-@rem 4. Create SYSDBA/masterke account in each security3.fdb using gsec utility
+@rem 4. Create SYSDBA/masterke account in each securityN.fdb using gsec utility
 @rem 5. Restore firebird.conf and databases.conf in <FB_HOME>: copy <name>.conf.previous <name>.conf
 @rem 6. Start all Firebird services.
 @rem 7. Obtain server versions via fbsvcmgr and display them.
@@ -22,68 +22,103 @@
 
 setlocal enabledelayedexpansion enableextensions
 set fbv=%1
-if not .%1.==.25. if not .%1.==.30. goto no_vers
+if not .%1.==.25. if not .%1.==.30. if not .%1.==.40. goto no_vers
+set log=%2
+if %log%==.. ( 
+  set log=%~n0.log
+  del %log% 2>nul
+)
 
-set tmp=%~n0.tmp
-set log=%~n0.log
-set zip=%~n0.fb-snapshot-%fbv%.7z
-set pdb=%~n0.fb-snapshot-%fbv%.pdb.7z
+set FB_SERVICES=fb%fbv%_tmp
 if .%fbv%.==.25. (
   set url=http://web.firebirdsql.org/download/snapshot_builds/win/2.5/
-  set FB_SERVICES=fb25_tmp
-) else (
+) else if .%fbv%.==.30. (
   set url=http://web.firebirdsql.org/download/snapshot_builds/win/3.0/
-  set FB_SERVICES=fb30_tmp
+) else if .%fbv%.==.40. (
+  set url=http://web.firebirdsql.org/download/snapshot_builds/win/4.0/
 )
+
+set lst=%~n0.lst
+set tmp=%~n0.tmp
+set zip=%~n0.fb-snapshot-%fbv%.7z
+set pdb=%~n0.fb-snapshot-%fbv%.pdb.7z
 set ptn4fbs=_x64.7z
 set ptn4pdb=_x64_pdb.7z
 
-del %log% 2>nul
+(
+  echo !time!. Starting batch %~dp0%~nx0 
+  echo Check variables:
+  echo fbv=!fbv!
+  echo url=!url!
+  echo lst=!lst!
+  echo tmp=!tmp!
+  echo zip=!zip!
+  echo pdb=!pdb!
+  echo ptn4fbs=!ptn4fbs!
+  echo ptn4pdb=!ptn4pdb!
+) >>%log%
+
+del %lst% 2>nul
 del %tmp% 2>nul
 del %zip% 2>nul
 del %pdb% 2>nul
 
 @rem check that 7-Zip is avaliable:
-7za 1>>%log% 2>&1
-findstr /i /c /b "7-Zip" %log% 1>nul 2>&1
+7za 1>>%tmp% 2>&1
+
+findstr /i /c /b "7-Zip" %tmp% 1>nul 2>&1
 if errorlevel 1 (
-  del %log%
+  del %tmp%
   echo.
   (
      echo 7za.exe - command line stand alone version of 7-Zip archiver - is required for this batch.
      echo Download it from: http://sourceforge.net/projects/sevenzip/files/7-Zip
-  ) >>%log%
-  type %log%
+  ) >>%tmp%
+  type %tmp%
+  type %tmp% >>%log%
   goto end
 )
-del %log% 2>nul
+del %tmp% 2>nul
 
-wget --help 1>%log% 2>&1
-findstr /i /b /c "GNU Wget" %log% 1>nul 2>&1
+wget --help 1>%tmp% 2>&1
+findstr /i /b /c "GNU Wget" %tmp% 1>nul 2>&1
 if errorlevel 1 (
-  del %log%
+  del %tmp%
   echo.
   echo msg=GNU Wget non-interactive network retriever - is required for this batch. >>%log%
-  type %log%
+  type %tmp%
   goto end
 )
 
 
-@rem --------------------------------------------------
-@rem Download DIRECTORY content with Firebird snapshots
-@rem --------------------------------------------------
+(
+  echo ###################################################################
+  echo #######  Download DIRECTORY content with Firebird snapshots #######
+  echo ###################################################################
+) >>%log%
 
-wget.exe --tries=2 -o %log% --output-document=%tmp% %url%
+del %lst% 2>nul
+@echo on
+wget.exe --tries=2 -o %tmp% --output-document=%lst% %url%
+@echo off
+
+echo Checking result of downloading and content of directory page.
+findstr /c:" 200 OK" %tmp% >nul
 if errorlevel 1 (
-  echo FAILED to get directory content for %url%
-  type %log%
+  echo FAILED to get directory content for %url%: can not find result '200 OK'.
+  type %tmp%
+  type %tmp% >> %log%
   goto end
+) else (
+  for /f "tokens=1-3" %%a in ('find /c "Firebird-" %lst%') do (
+     echo Number of files related to FB snapshot: %%c
+  )
 )
+@echo off
 
-@rem findstr /i /c:"Firebird" %tmp% | findstr /i /c:"%ptn4fbs%"
 set urlbak=%url%
 
-for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %tmp% ^| findstr /i /c:"%ptn4fbs%"') do (
+for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %lst% ^| findstr /i /c:"%ptn4fbs%"') do (
   set word=%%a
   call :trim word !word!
   if not .!word!.==.. (
@@ -96,57 +131,76 @@ for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %tmp% ^| findstr
 
 if .%urlbak%.==.!url!. (
   set msg=FAILED to parse node in directory !urlbak! for pattern !ptn4fbs!
+  echo !msg!
   echo !msg! >>%log%
-  type %log%
   goto end
 )
 
-@rem ------------------------------
-@rem Download Firebird .7z-snapshot
-@rem ------------------------------
+(
+  echo ###############################################
+  echo #######  Download Firebird .7z-snapshot #######
+  echo ###############################################
+) >>%log%
 
-set run_cmd=wget.exe --tries=2 -o %log% --output-document=%zip% !url!
+set run_cmd=wget.exe --tries=2 -o %tmp% --output-document=%zip% !url!
 
 echo Download Firebird %fbv% snapshot.
 echo !run_cmd!
 echo !run_cmd! >> %log%
+
 !run_cmd!
 
-findstr %zip% %log% | findstr saved > nul
+echo Result of downloading FB snapshot:>>%log%
+type %tmp% >> %log%
+
+findstr %zip% %tmp% | findstr saved > nul
 if errorlevel 1 (
-  echo FAILED to download URL: !url! >>%log%
-  type %log%
+  echo FAILED to download URL: !url! >>%tmp%
+  type %tmp%
+  type %tmp% >>%log%
   goto end
 ) else (
   echo Downloaded OK.
 )
+set url=%urlbak%
+
+dir /-c %zip% | findstr /i /c:%zip% >%tmp%
+type %tmp%
+type %tmp% >> %log%
 
 (
   dir %zip% | findstr /i /c:%zip%
+  @rem Make TEST of downloaded .7z:
   7za t %zip% | findstr /i /c:"Everything is Ok" /c:"Files:" /c:"Size:" /c:"Compressed:"
-) >>%log%
+) >%tmp%
 
-findstr /i /c:"Everything is Ok" %log% >nul
+findstr /i /c:"Everything is Ok" %tmp% >nul
 
 if errorlevel 1 (
-  echo Downloaded archieve seems to be broken. >>%log%
-  type %log%
+  echo Downloaded archieve seems to be broken. >>%tmp%
+  type %tmp%
+  type %tmp% >>%log%
   goto end
 ) else (
   echo Integrity test passed OK.
 )
 
-@rem -------------------------------------------------------------------------------------------------
-@rem Download PDB files. One may need to send them together with FB process dump to FB developer team.
-@rem NOTE: extracting of these files does not needed.
-@rem -------------------------------------------------------------------------------------------------
+@rem echo uuu &exit
 
-set url=%urlbak%
-for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %tmp% ^| findstr /i /c:"%ptn4pdb%"') do (
+(
+  echo #################################################################################################
+  echo Download PDB files. One may need to send them together with FB process dump to FB developer team.
+  echo NOTE: extracting of these files does not needed.
+  echo #################################################################################################
+) >>%log%
+
+set urlbak=%url%
+
+for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %lst% ^| findstr /i /c:"%ptn4pdb%"') do (
   set word=%%a
   call :trim word !word!
   if not .!word!.==.. (
-    set url=!url!!word!
+    set url=!urlbak!!word!
     set msg=Firebird PDB files download URL: !url! 
     echo !msg!
     echo !msg! >>%log%
@@ -160,12 +214,20 @@ if .%urlbak%.==.!url!. (
   @rem -- do NOT, it's not critical: goto end
 )
 
-set run_cmd=wget.exe --tries=2 -o %log% --output-document=%pdb% !url!
+set run_cmd=wget.exe --tries=2 -o %tmp% --output-document=%pdb% !url!
 
 echo Download PDB files.
 echo !run_cmd!
 echo !run_cmd! >> %log%
+
 !run_cmd!
+
+echo Result of downloading PDB files: >>%log%
+type %tmp% >> %log%
+
+dir /-c %pdb% | findstr /i /c:%pdb% >%tmp%
+type %tmp%
+type %tmp% >> %log%
 
 @rem ---------------------  e x t r a c t i n g -----------------------
 
@@ -176,19 +238,25 @@ md %SNAPSHOT_DIR% 2>nul
 set msg=!time! Extracting files from %zip% to %SNAPSHOT_DIR%
 echo !msg!
 echo !msg!>>%log%
+
 set run_cmd=7za x -y -o%SNAPSHOT_DIR% -mmt %zip%
+
 echo !run_cmd!
 echo !run_cmd! >>%log%
 
-!run_cmd! 1>>%log% 2>&1
+!run_cmd! 1>>%tmp% 2>&1
 
+type %tmp% >>%log%
 set msg=!time! Done.
 echo !msg!
 echo !msg!>>%log%
 
-@rem #############################################################################################################
-@rem ##########################  T R Y I N G    T O    S T O P    S E R V I C E S  ###############################
-@rem #############################################################################################################
+(
+  echo ###################################################################
+  echo ########  T R Y I N G    T O    S T O P    S E R V I C E  #########
+  echo ###################################################################
+) >>%log%
+
 for /d %%s in ( %FB_SERVICES% ) do (
   echo %%s
   echo.>>%log%
@@ -230,10 +298,12 @@ for /d %%s in ( %FB_SERVICES% ) do (
   sc query FirebirdServer%%s>>%log%
 )
 
-@rem ########################################################################################################
-@rem ####################  C R E A T E    T E M P    B A C K U P S   (.7Z)   A N D  #########################
-@rem ####################  T R Y     T O    D E L E T E    F B C L I E N T . D L L  #########################
-@rem ########################################################################################################
+(
+  echo ########################################################################################################
+  echo ####################  C R E A T E    T E M P    B A C K U P S   A N D   T R Y  #########################
+  echo ####################      T O    D E L E T E    F B C L I E N T . D L L        #########################
+  echo ########################################################################################################
+) >>%log%
 
 set archsuff=19000101000000
 call :getFileDTS gen_vbs
@@ -316,9 +386,12 @@ del %~n0.err 2>nul
 @rem these files will be removed only after SUCCESSFUL finish of this batch: dir tmp.%~n0.backup.*.rar
 :m1
 
-@rem #############################################################################################################
-@rem #################  C O P Y I N G     A L L    F I L E S    F R O M     S N A P S H O T ######################
-@rem #############################################################################################################
+(
+  echo #############################################################################################################
+  echo #################  C O P Y I N G     A L L    F I L E S    F R O M     S N A P S H O T ######################
+  echo #############################################################################################################
+) >>%log%
+
 for /d %%i in ( %FB_SERVICES% ) do (
 
   for /f "tokens=3" %%k in ('REG.EXE query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\FirebirdServer%%i ^| findstr /i /c:"ImagePath"') do (
@@ -405,11 +478,15 @@ for /d %%i in ( %FB_SERVICES% ) do (
 )
 del %~n0.tmp.vbs 2>nul
 
-@rem #############################################################################################################
-@rem #############################   C R E A T I N G    S Y S D B A    A C C O U N T  ############################
-@rem #############################                        a n d                       ############################
-@rem #############################   R E S T O R I N G     .c o n f    F I L E S      ############################
-@rem #############################################################################################################
+(
+  echo #############################################################################################################
+  echo #############################   C R E A T I N G    S Y S D B A    A C C O U N T  ############################
+  echo #############################                        a n d                       ############################
+  echo #############################   R E S T O R I N G     .c o n f    F I L E S      ############################
+  echo #############################################################################################################
+) >>%log%
+
+@rem echo create database '/:E:\FB30.TMPINSTANCE\test.fdb' user sysdba password 'masterkey'; | ./isql -z
 
 for /d %%s in ( %FB_SERVICES% ) do (
   for /f "tokens=3" %%k in ('REG.EXE query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\FirebirdServer%%s ^| findstr /i /c:"ImagePath"') do (
@@ -420,10 +497,13 @@ for /d %%s in ( %FB_SERVICES% ) do (
     )
     set fp=!fp:~0,-1!
 
-    if .%fbv%.==.30. (
-        set cmd_run=!fp!\gsec -user sysdba -pass 1 -add sysdba -pw masterke -database !fp!\security3.fdb
+    if NOT .%fbv%.==.25. (
+        set secsuff=!fbv:~0,1!
+        set secname=security!secsuff!.fdb
+        set cmd_run=!fp!\gsec -user sysdba -pass 1 -add sysdba -pw masterke -database !fp!\!secname!
         echo !time! Trying to add SYSDBA into security database: !cmd_run!
         echo !cmd_run!
+
         echo !cmd_run!>>%log%
 
         echo !time! Check record: point BEFORE using gsec for add SYSDBA, instance: %%s>>%log%
@@ -444,7 +524,7 @@ for /d %%s in ( %FB_SERVICES% ) do (
         del %~n0.err 2>nul
         del %~n0.tmp 2>nul
 
-        set cmd_run=!fp!\gsec -display -database !fp!\security3.fdb -user sysdba -pass masterke
+        set cmd_run=!fp!\gsec -display -database !fp!\!secname! -user sysdba -pass masterke
         echo !time! Trying to display SYSDBA info:
         echo !cmd_run!
         echo !cmd_run!>>%log%
@@ -468,7 +548,7 @@ for /d %%s in ( %FB_SERVICES% ) do (
         del %~n0.err 2>nul
         del %~n0.tmp 2>nul
     )
-    @rem end of "if fbv==30"
+    @rem end of "if fbv NOT == 25"
 
     set msg=Restore files that was backed up before copying:
     echo !msg!
@@ -484,9 +564,12 @@ for /d %%s in ( %FB_SERVICES% ) do (
   )
 )
 
-@rem #############################################################################################################
-@rem ################################   S T A R T I N G     S E R V I C E S    ###################################
-@rem #############################################################################################################
+(
+  echo #############################################################################################################
+  echo ################################   S T A R T I N G     S E R V I C E S    ###################################
+  echo #############################################################################################################
+) >>%log%
+
 for /d %%s in ( %FB_SERVICES% ) do (
   set msg=Starting service FirebirdServer%%s
   echo !msg!
@@ -514,9 +597,12 @@ for /d %%s in ( %FB_SERVICES% ) do (
 
 )
 
-@rem #############################################################################################################
-@rem ###########################   O B T A I N    S E R V E R    V E R S I O N S   ###############################
-@rem #############################################################################################################
+(
+  echo #############################################################################################################
+  echo ###########################   O B T A I N    S E R V E R    V E R S I O N S   ###############################
+  echo #############################################################################################################
+) >>%log%
+
 for /d %%s in ( %FB_SERVICES% ) do (
   for /f "tokens=3" %%k in ('REG.EXE query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\FirebirdServer%%s ^| findstr /i /c:"ImagePath"') do (
     set fn=%%k
@@ -601,6 +687,9 @@ if errorlevel 1 (
   exit
 )
 del %~n0.err 2>nul
+del %lst% 2>nul
+del %tmp% 2>nul
+
 echo.
 echo Check log in the file: %log%
 echo.

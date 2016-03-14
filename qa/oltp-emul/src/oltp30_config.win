@@ -39,14 +39,14 @@ dbnm = C:\MIX\firebird\OLTPTEST\oltp30.fdb
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3050
+port = 3333
 usr =  SYSDBA
 pwd =  masterkey
 
 # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
 # Trailing backslash and double quotes are optional.
 # Sample:
-# tmpdir = c:\temp\oltp-emul-25
+# tmpdir = c:\temp\oltp-emul-30
 #
 # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters!
 # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
@@ -293,7 +293,7 @@ create_with_compound_columns_order = most_selective_first
 # Value = 1 leads to increased time of final report building.
 # Windows only. Not implemented for Linux, will be ignored at runtime.
 
-make_html = 0
+make_html = 1
 
 # Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
 # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
