@@ -2,7 +2,7 @@
 # # #                                                                   # # #
 # # #                         O L T P   -   E M U L                     # # #
 # # #                                                                   # # #
-# # #   f o r    F i r e b i r d   D a t a b a s e    2.5   &   3.0     # # #
+# # #   f o r    F i r e b i r d   D a t a b a s e   v.  >= 2.5         # # #
 # # #                                                                   # # #
 # # #                                                                   # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
@@ -13,12 +13,12 @@ svn checkout svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/ .
 
 ===============================================================================
 
-This is Quick-Start guide for test that emulates OLTP workload on FB 2.5 & 3.0.
+This is Quick-Start guide for test that emulates OLTP workload on FB 2.5 and above.
 Please READ all this file carefully before making any attempt to run test.
 
 In case of any questions feel free to contact: p519446@yandex.ru
 
-(C) Pavel Zotov, Moscow, Russia. 2014-2015.
+(C) Pavel Zotov, Moscow, Russia. 2014-2016.
 
 ===============================================================================
 
@@ -37,6 +37,8 @@ In case of any questions feel free to contact: p519446@yandex.ru
    !       2.5        !        Linux           ! oltp25_config.nix !
    !       3.0        !        Windows         ! oltp30_config.win !
    !       3.0        !        Linux           ! oltp30_config.nix !
+   !       4.0        !        Windows         ! oltp40_config.win !
+   !       4.0        !        Linux           ! oltp40_config.nix !
    -----------------------------------------------------------------
 
 3. Open selected configuration file and change settings to be suitable for you.
@@ -80,7 +82,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
 
    For medium workload (about 30-40 connects) following values can be set:
 
-   a) for Firebird 3.0:
+   a) for Firebird 3.0 and above:
 
       DefaultDbCachePages =  128K - for SuperServer; 
                              512 or 1024 - for Classic and SuperClassic;
@@ -90,21 +92,23 @@ In case of any questions feel free to contact: p519446@yandex.ru
    b) for Firebird 2.5:
 
       DefaultDbCachePages = 65536 - for SuperServer; 
-                            512 or 1024 - for SuperClassic
+                            512 or 1024 - for Classic and SuperClassic
       TempCacheLimit = 1073741824
       LockHashSlots = 22111
 
 6. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
 
-   1run_oltp_emul <V> <N>
-   ######################
+   1run_oltp_emul <V> <N> [nostop]
+   ###############################
 
    where:
-     1run_oltp_emul.bat / 1run_oltp_emul.sh - name of test script scenario on Windows / Linux;
-     <V> = 25 or 30 (for Firebird 2.5 or 3.0)
-     <N> = number of ISQL sessions which should be launched.
+       <V> = 25, 30 or 40 - major version in simplified form for FB 2.5, 3.0 or 4.0 respectively;
+       <N> = number of ISQL sessions which should be launched;
+       nostop = (optional) literal argument that forces script to skip any pauses, even if work
+             will be impossible (useful when scenario is launched from scheduler)
 
-   If database that is specified in config file does not exist, script will attempt to create it for you.
+   If database that is specified in config file does not exist, script will attempt to create it for you
+   but only if it's specified as fully qualified file name (not alias).
    If database DOES exists but is empty or it creation was not completed before test will recreate all objects. 
 
 
@@ -135,7 +139,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
    * FB architecture name, database and test settings;
    * overall performance results: total, dynamic for 10 time intervals, detailed per each unit;
    * when test config setting 'mon_unit_perf' is 1: gathered monitoring data about performance
-     with detalization down to: 1) for FB 2.5 - application units; for FB 3.0 - application
+     with detalization down to: 1) for FB 2.5 - application units; for FB 3.0 and above - application
      units and tables;
    * exceptions that occured during test;
    * database statistics after test finish;
@@ -199,4 +203,4 @@ In case of any questions feel free to contact: p519446@yandex.ru
    If parameter 'use_external_to_stop' is defined, do not forget to make server-side file 'stoptest.txt'
    empty before running new test session!
 
-10. Full description of test: oltp_emul_test_fb_25_30_-_rus.htm (currently only in Russian).
+10. Full description of test: doc/firebird-oltp-emulation-test.html (currently only in Russian).
