@@ -69,13 +69,32 @@ call :repl_with_bound_quotes %tmp% tmp
 call :repl_with_bound_quotes %sts% sts
 call :repl_with_bound_quotes %rpt% rpt
 
+echo tmp=%tmp%
 echo log=%log%
 echo err=%err%
 echo rpt=%rpt%
 echo sts=%sts%
 
-del %log% 2>nul
-del %err% 2>nul
+@rem Launch of more than 150 sessions from one PC box: some of them
+@rem could not start because of strange result of creating file %tmp%:
+@rem Windows did create DIRECTORY with name = %tmp% instead of FILE!
+@rem Because of this, we have to ensure that there is no dir or file
+@rem with such name:
+
+rd /q /s %sts% 1>nul 2>&1
+
+for /d %%i in (%tmp% %log% %err% %rpt%)  do (
+  set msg=Trying to remove FILE %%i
+  echo !msg!
+  echo !msg!>>%sts%
+  del /q /s %%i 1>>%sts% 2>&1
+
+  set msg=Trying to remove DIR %%i
+  echo !msg!
+  echo !msg!>>%sts%
+  rd /q /s %%i 1>>%sts% 2>&1
+)
+
 
 @rem Only for 3.0: we can get content of firebird.log before and after test
 @rem and compare them:
