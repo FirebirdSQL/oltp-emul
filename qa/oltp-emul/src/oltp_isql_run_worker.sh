@@ -81,6 +81,7 @@ if [ $sid -eq 1 ]; then
   $run_fbs 1>$fblog_beg 2>>$rpt
   echo Got:>>$rpt
   ls -l $fblog_beg 1>>$rpt 2>&1
+  ls -l $fblog_beg
 fi
 
 echo
@@ -97,21 +98,25 @@ while :
 do
   #echo stat=$(stat -c%s $log) 
   #echo maxlog=$maxlog
-  
-  if [ $(stat -c%s $log) -gt $maxlog ]; then
-    echo size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it >> $sts
-    rm -f $log
-  fi 
-  if [ $(stat -c%s $err) -gt $maxerr ]; then
-    echo size of $err = $(stat -c%s $err) - exceeds limit $maxerr, remove it >> $sts
-    rm -f $err
-  fi 
+  if [ -s $log ]; then
+    if [ $(stat -c%s $log) -gt $maxlog ]; then
+      echo size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it >> $sts
+      rm -f $log
+    fi
+  fi
+  if [ -s $err ]; then
+    if [ $(stat -c%s $err) -gt $maxerr ]; then
+      echo size of $err = $(stat -c%s $err) - exceeds limit $maxerr, remove it >> $sts
+      rm -f $err
+    fi
+  fi
 
   [[ $packet -gt 1 ]] && echo ------------------------------------------
   echo $(date +'%H:%M:%S'). SID=$sid. Start isql, packet No. $packet
   echo Command: $run_isql
   echo Redirection of STDOUT to: $log
   echo Redirection of STDERR to: $err
+
   ##############################################################
   ####################   r u n    i s q l   ####################
   ##############################################################
@@ -122,10 +127,29 @@ do
   #echo Size of $err: $(stat -c%s $err)
   echo $(date +'%H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
 
-  if grep -i "shutdown" $err > /dev/null ; then
+  if grep -i "SQLSTATE = HY000" $err > /dev/null ; then
     msg="$(date +'%H:%M:%S'). DATABASE SHUTDOWN DETECTED, test has been cancelled."
+    echo $msg
     echo $msg>>$sts
     exit
+  fi
+
+  run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
+  msg="$(date +'%H:%M:%S'). SID=$sid. Check that FB is still alive: ask server version."
+  echo
+  echo $msg
+  echo $msg>>$sts
+  $run_fbs 1>>$tmpsidlog 2>&1
+  cat $tmpsidlog>>$sts
+  if grep -i "connection rejected" $tmpsidlog > /dev/null ; then
+    cat $tmpsidlog
+    msg="$(date +'%H:%M:%S'). Server unavaliable, test has been cancelled."
+    echo $msg
+    echo $msg>>$sts
+    exit
+  else
+    msg="$(date +'%H:%M:%S').OK, Firebird is active, test can be continued."
+    echo $msg>>$sts
   fi
 
   if grep -i "ex_test_cancel" $err > /dev/null ; then
