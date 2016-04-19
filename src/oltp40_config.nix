@@ -188,7 +188,7 @@ create_with_sweep = 20000
 # You have to set this parameter to 0 if this batch is launched by 
 # scheduler on regular basis. Otherwise it is recommended to set 1.
 
-wait_if_not_exists = 0
+wait_if_not_exists = 1
 
 # Should script be PAUSED after creation database objects before starting
 # initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
@@ -197,7 +197,7 @@ wait_if_not_exists = 0
 # be added there at the end-point of building process. If this record is found, test will use 
 # existing database and following parameters will be IGNORED.
 
-wait_after_create = 0
+wait_after_create = 1
 
 # Number of documents, total of all types, for initial data population.
 # Command scenario will compare number of existing document with this
@@ -206,7 +206,7 @@ wait_after_create = 0
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 30000
+init_docs = 500
 
 # Should command scenario - 1run_oltp_emul.sh - be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
@@ -214,7 +214,7 @@ init_docs = 30000
 # this database to 'origin' state. This can save time because of avoiding need
 # to create <init_docs> again:
 
-wait_for_copy = 0
+wait_for_copy = 1
 
 # Do we want to create some DEBUG objects (tables, views and procedures)
 # in order to:
@@ -239,7 +239,7 @@ create_with_debug_objects = 1
 # 1 = USE several tables with the same structure in order to split heavy workload on them.
 # Recommended value: nope (choose yourself and compare).
 
-create_with_split_heavy_tabs = 0
+create_with_split_heavy_tabs = 1
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
 # compound index or two separate indices (1=yes, 0=no).
@@ -296,6 +296,13 @@ run_db_validation = 1
 # Available options: regular | benchmark, or leave commented (undefined).
 
 file_name_with_test_params = regular
+
+# Suffix for adding at the end of report name.
+# CHANGE this value to some useful info about host location, 
+# hardware specifics, FB instance etc.
+
+file_name_this_host_info = no_host_info
+
 
 # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
 # client POSTIE.EXE with arguments that are defined here plus add auto generated subject and

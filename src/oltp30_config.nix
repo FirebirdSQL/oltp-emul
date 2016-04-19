@@ -297,6 +297,13 @@ run_db_validation = 1
 
 file_name_with_test_params = regular
 
+# Suffix for adding at the end of report name.
+# CHANGE this value to some useful info about host location, 
+# hardware specifics, FB instance etc.
+
+file_name_this_host_info = no_host_info
+
+
 # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
 # client POSTIE.EXE with arguments that are defined here plus add auto generated subject and
 # attach report. This setting is OPTIONAL. Note: executable 'postie.exe' must be either in one
