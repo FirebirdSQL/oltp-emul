@@ -1517,8 +1517,8 @@ gen_temp_sh_for_stop()
 	cat <<- EOF >$tmpsh4stop
 	    # --------------------------------------------------------------------------------
 	    # Generated auto, do NOT edit.
-	    # This batch can be used in order to immediatelly STOP all working ISQL sessions.
-	    # It is highly rtecommended to use this batch for that goal rather than brute kill
+	    # This scenario can be used in order to immediatelly STOP all working ISQL sessions.
+	    # It is highly rtecommended to use this script for that goal rather than brute kill
 	    # ISQL sessions or use Firebird monitoring tables.
 	    # --------------------------------------------------------------------------------
 	    echo \$(date +'%H:%M:%S'). Running command to stop all working ISQL sessions:
@@ -1811,7 +1811,13 @@ rm -f $tmpclg $tmperr $tmpchk
 
 
 # ....................... check that file 'stoptest.txt' is EMPTY .....................
-check_stoptest
+if [ -n "$use_external_to_stop" ]; then
+  check_stoptest
+else
+  echo Config parameter 'use_external_to_stop' is UNDEFINED, this is DEFAULT.
+  echo SKIP checking for non-empty external file.
+fi
+
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # INITIATE REPORT FILE "oltp30.report.txt"
