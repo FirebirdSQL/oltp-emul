@@ -1960,7 +1960,7 @@ for i in `seq $winq`
 do
     # 10.02.2015: it's wrong to start separate session via `sh`:
     # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}&
-    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb}
+    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${file_name_this_host_info}&
+    #./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${file_name_this_host_info}
 done
 echo Done script $0

@@ -12,6 +12,7 @@ sid=$4 # ISQL window (session) sequential number
 rpt=$5 # final report where sid N1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
 fname=$6 # file_name_with_test_params
 build=$7
+ainfo=$8 #file_name_this_host_info
 
 #echo build=$build
 
@@ -466,25 +467,23 @@ do
 		EOF
     fi
 
-    #if [ $fb != 25 ]; then
-        run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
-        msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
-        echo $msg
-        echo $msg >>$plog
-        echo Command: $run_fbs>>$plog
-        $run_fbs 1>$fblog_end 2>>$plog
-        echo Got:>>$plog
-        ls -l $fblog_end 1>>$plog 2>&1
+    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
+    msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
+    echo $msg
+    echo $msg >>$plog
+    echo Command: $run_fbs>>$plog
+    $run_fbs 1>$fblog_end 2>>$plog
+    echo Got:>>$plog
+    ls -l $fblog_end 1>>$plog 2>&1
 
-        msg="$(date +'%H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
-        echo $msg
-        echo $msg >>$plog
-        echo --- start of diff output --- >> $plog
-        diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$plog 2>&1
-        echo --- end of diff output --- >> $plog
-        rm -f $fblog_beg $fblog_end
-    #fi
-
+    msg="$(date +'%H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
+    echo $msg
+    echo $msg >>$plog
+    echo --- start of diff output --- >> $plog
+    diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$plog 2>&1
+    echo --- end of diff output --- >> $plog
+    rm -f $fblog_beg $fblog_end
+  
     msg="$(date +'%H:%M:%S'). Done."
     echo $msg>>$sts
     echo $msg>>$plog
@@ -552,7 +551,6 @@ do
 		  select report_file from srv_get_report_name('$fname', '$build', $winq);
 		EOF
 		echo Evaluate new name of final report.
-		echo Comment config parameter 'file_name_with_test_params' if this is not needed.
 
 		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
 		$run_isql 1>$tmpsidlog 2>&1
@@ -560,8 +558,17 @@ do
 		# ----- do not --- og_with_params_in_name=`grep -v "^$" $tmpsidlog`
 
 		log_with_params_in_name=`grep -v "^$" $tmpsidlog | sed 's/[ \t]*$//'`
+        if [ -n "$ainfo" ]; then
+          # Suffix for adding at the end of report name: host location, hardware specific
+          # FB instance info etc (useful when analyze lot of logs).
+          # Make config parameter 'file_name_with_test_params\ commented if this is not needed.
+          log_with_params_in_name=${log_with_params_in_name}_$ainfo
+        fi
 		log_with_params_in_name=$tmpdir/$log_with_params_in_name.txt
 		
+        echo Report will be written into file: 
+        echo $log_with_params_in_name
+
 		rm -f $log_with_params_in_name $psql $tmpsidlog
 		mv $plog $log_with_params_in_name
 		plog=$log_with_params_in_name
@@ -580,7 +587,10 @@ do
 		$(date +'%H:%M:%S'). Bye-bye from SID=1. Test has been FINISHED.
 		------------------------------------------------------------
 		
-		Final report see in: $plog
+		Final report see in: 
+		####################
+		$plog
+		####################
 		Press any key to EXIT. . .
 	EOF
 
