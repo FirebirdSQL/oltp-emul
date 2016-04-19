@@ -68,25 +68,28 @@ tmpsiderr=$tmpdir/tmp_$sid.err
 
 fblog_beg=$tmpdir/fb_log_when_test_started.$fb.log
 fblog_end=$tmpdir/fb_log_when_test_finished.$fb.log
+
 if [ $sid -eq 1 ]; then
   [[ $fb -eq 25 ]] && get_log_switch=action_get_ib_log || get_log_switch=action_get_fb_log
-  #if [ $fb != 25 ]; then
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
-    msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
-    echo
-    echo $msg
-    echo $msg >>$rpt
-    echo Command: $run_fbs >>$rpt
-    $run_fbs 1>$fblog_beg 2>>$rpt
-    echo Got:>>$rpt
-    ls -l $fblog_beg 1>>$rpt 2>&1
-  #fi
+
+  run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
+  msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
+  echo
+  echo $msg
+  echo $msg >>$rpt
+  echo Command: $run_fbs >>$rpt
+  $run_fbs 1>$fblog_beg 2>>$rpt
+  echo Got:>>$rpt
+  ls -l $fblog_beg 1>>$rpt 2>&1
 fi
 
 echo
-echo $(date +'%H:%M:%S'). Intro separate ISQL session, sid=$sid. Take initial random pause. . .
-#echo TEMPLY DISABLED, UNCOMMENT LATER.
-sleep $[ ( $RANDOM % 8 )  + 2 ]s
+echo $(date +'%H:%M:%S'). Intro separate ISQL session, sid=$sid.
+if [ $winq -gt 1 ]; then
+  echo Take initial random pause. . .
+  #echo TEMPLY DISABLED, UNCOMMENT LATER.
+  sleep $[ ( $RANDOM % 8 )  + 2 ]s
+fi
 echo $(date +'%H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
 
 packet=1
@@ -141,9 +144,9 @@ do
     $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
     rm -f $tmpsidsql $tmpsidlog $tmpsiderr
 
-    # ---------------------------------------------------------------------------------------------------------------
-    # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
-    # ---------------------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------------------
+    # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   I d   g r e a t e r   t h a n   "1".
+    # -------------------------------------------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
       echo Bye-bye from SID=$sid
       exit
