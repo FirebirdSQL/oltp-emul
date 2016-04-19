@@ -7,7 +7,7 @@ msg_noarg() {
   clear
   echo Specify:
   echo
-  echo arg#1 = 25 or 30 - version of Firebird;
+  echo arg#1 = 25 or 30 or 40 - version of Firebird without dot: 2.5, 3.0, 4.0;
   echo -e arg#2 = \<N\> - number of ISQL sessions to be opened.
   echo
   echo Sample: 
@@ -176,12 +176,18 @@ db_build() {
   local tmp=$tmpdir/$prf.tmp
   local run_isql="$fbc/isql $dbconn -nod -i $bld $dbauth"
 
+  if [[ $fb == 25 ]]; then
+     vers_family=25
+  else
+     vers_family=30
+  fi
+
   rm -f $bld $log $err $tmp
 
   cat <<- EOF >>$bld
 		set bail on;
-		in "$shdir/oltp$(($fb))_DDL.sql";
-		in "$shdir/oltp$(($fb))_sp.sql";
+		in "$shdir/oltp$(($vers_family))_DDL.sql";
+		in "$shdir/oltp$(($vers_family))_sp.sql";
 	EOF
 
   if [ $create_with_debug_objects=1 ]; then
@@ -242,7 +248,7 @@ db_build() {
 
 	EOF
 
-	local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$fb.tmp
+	local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$vers_family.tmp
 	rm -f $post_handling_out
 
 	cat <<- EOF >>$bld
@@ -345,12 +351,15 @@ db_build() {
     exit 1
   fi
 
+  echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
+  echo -e "######################################"
+  echo
   echo Creation of database objects COMPLETED. See results in $log.
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 
   rm -f $err $tmp $post_handling_out
-  rm -f $bld $log
+  rm -f $bld
 
 }
 
@@ -1526,13 +1535,22 @@ gen_temp_sh_for_stop()
 # ----------------------------   M A I N   ----------------------------
 #######################################################################
 
+
 [ -z $1 ] && msg_noarg && exit 1
 [ -z $2 ] && msg_noarg && exit 1
 
-echo Intro $0: arg1=$1, arg2=$2
+echo Intro $0: arg1=$1, arg2=$2, arg3=$3
 
 export fb=$1
 export k=$2
+
+# 19.04.2016: disable any pause, even severe, when this script is launched from scheduler:
+can_stop=1
+if [ "$3" == "nostop" ];then
+  can_stop=0
+fi
+export can_stop
+
 export cfg=./oltp$fb"_config.nix"
 [[ -s $cfg ]] && echo "Config file '$cfg' found and not empty." || msg_nocfg $cfg
 
@@ -1729,7 +1747,7 @@ if [ $(grep -i "Error while trying to open" $tmperr | wc -l) -gt 0 ]; then
 		Press ENTER for attempt to CREATE it, Ctrl-C to QUIT.
 		#####################################################
 	EOF
-  if [ $wait_if_not_exists = 1 ]; then
+  if [[ $wait_if_not_exists = 1 && $can_stop = 1 ]]; then
     pause
   fi
 
@@ -1768,7 +1786,7 @@ else
     echo -e Database: \>$dbnm\< -- DOES exist but
     echo process of creation its objects was not completed.
     echo
-    if [ $wait_if_not_exists = 1 ]; then
+    if [[ $wait_if_not_exists = 1 && $can_stop = 1 ]]; then
         echo -e '################################################################################'
         echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
         echo -e '################################################################################'
@@ -1784,17 +1802,11 @@ fi # grep "Error while trying to open" $tmperr ==> true or false
 
 rm -f $tmpclg $tmperr $tmpchk
 
-if [ $wait_after_create = 1 ]; then
+if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
+    echo Change config setting \'wait_after_create\' to 0 in order to remove this pause.
     echo
-    echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
-    echo "######################################"
-    echo
-    if [ $wait_if_not_exists = 1 ]; then
-        echo Change config setting 'wait_after_create' to 0 in order to remove this pause.
-        echo
-        echo Press ENTER to go on. . .
-        pause
-    fi
+    echo Press ENTER to go on. . .
+    pause
 fi
 
 # ....................... check that file 'stoptest.txt' is EMPTY .....................
@@ -1865,8 +1877,7 @@ if [ $init_docs -gt 0 ]; then
 
   echo $(date +'%y%m%d_%H%M%S') FINISH initial data population.
   echo
-  # if [ $wait_if_not_exists = 1 && $wait_for_copy = 1 ]; then
-  if [ $wait_for_copy = 1 ]; then
+  if [[ $wait_for_copy = 1 && $can_stop = 1 ]]; then
     echo "### NOTE ###"
     echo
     echo It\'s a good time to make COPY of test database in order 
