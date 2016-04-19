@@ -351,12 +351,19 @@ db_build() {
     exit 1
   fi
 
-  echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
-  echo -e "######################################"
-  echo
   echo Creation of database objects COMPLETED. See results in $log.
   echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
   echo
+
+  if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
+    echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
+    echo -e "######################################"
+    echo
+    echo Change config setting \'wait_after_create\' to 0 in order to remove this pause.
+    echo
+    echo Press ENTER to go on. . .
+    pause
+  fi
 
   rm -f $err $tmp $post_handling_out
   rm -f $bld
@@ -1802,12 +1809,6 @@ fi # grep "Error while trying to open" $tmperr ==> true or false
 
 rm -f $tmpclg $tmperr $tmpchk
 
-if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
-    echo Change config setting \'wait_after_create\' to 0 in order to remove this pause.
-    echo
-    echo Press ENTER to go on. . .
-    pause
-fi
 
 # ....................... check that file 'stoptest.txt' is EMPTY .....................
 check_stoptest
