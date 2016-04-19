@@ -100,8 +100,26 @@ do
   #echo maxlog=$maxlog
   if [ -s $log ]; then
     if [ $(stat -c%s $log) -gt $maxlog ]; then
+
+      # Before removing log we have to save in database data about performance
+      # that we have evaluated on-the-fly in this session after each call
+      # of business operation:
+      msg="$(date +'%H:%M:%S'). Preserving data about estimated performance for displaying later in final report."
+      echo $msg>>$sts
+      echo $msg
+      
+      grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
+      while read s
+      do
+        a=( $s )
+        echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
+      done < $tmpsidlog >$tmpsidsql
+      echo commit\;>>$tmpsidsql
+
+      $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
+
       echo size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it >> $sts
-      rm -f $log
+      rm -f $log $tmpsidlog
     fi
   fi
   if [ -s $err ]; then
@@ -127,7 +145,7 @@ do
   #echo Size of $err: $(stat -c%s $err)
   echo $(date +'%H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
 
-  if grep -i "SQLSTATE = HY000" $err > /dev/null ; then
+  if grep -E "database.*shutdown" $err > /dev/null ; then
     msg="$(date +'%H:%M:%S'). DATABASE SHUTDOWN DETECTED, test has been cancelled."
     echo $msg
     echo $msg>>$sts
@@ -139,7 +157,9 @@ do
   echo
   echo $msg
   echo $msg>>$sts
-  $run_fbs 1>>$tmpsidlog 2>&1
+
+  $run_fbs 1>$tmpsidlog 2>&1
+
   cat $tmpsidlog>>$sts
   if grep -i "connection rejected" $tmpsidlog > /dev/null ; then
     cat $tmpsidlog
@@ -154,6 +174,10 @@ do
 
   if grep -i "ex_test_cancel" $err > /dev/null ; then
     msg="$(date +'%H:%M:%S'). SID=$sid. STOPFILE has non-zero size, test has been cancelled."
+    echo $msg>>$sts
+    echo $msg
+
+    msg="Saving data about estimated performance for displaying later in final report."
     echo $msg>>$sts
     echo $msg
 
