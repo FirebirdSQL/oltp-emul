@@ -129,7 +129,6 @@ del %log4all% 2>nul
 del %log4tmp% 2>nul
 ::if errorlevel 1 goto :cannot_del
 
-echo Created by: %~f0>>%log4all%.
 (
   echo %date% %time%. Preparing for test started.
   echo Currently running batch: %~f0
@@ -165,6 +164,12 @@ for %%v in (%varlist%) do (
 )
 
 if .%err_setenv%.==.1. goto no_env
+
+(
+  echo Created by: %~f0
+  echo At host:    %file_name_this_host_info%
+) >>%log4all%
+
 
 @rem Change PATH variable: insert %fbc% to the HEAD of path list:
 set pbak=%path%

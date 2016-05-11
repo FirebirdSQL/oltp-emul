@@ -1,5 +1,14 @@
 #!/bin/bash
 
+log_elapsed_time() {
+    local s1=$s1
+    local plog=$2
+    local s2=$(date +%s)
+    local sd=$(date -u -d "0 $s2 sec - $s1 sec" +"%H:%M:%S")
+    local msg="Done for $sd, from $(date -d @$s1 +'%d-%m-%Y %H:%M:%S') to $(date -d @$s2 +'%d-%m-%Y %H:%M:%S')."
+    echo $msg >>$plog
+}
+
 # limits for log of work and errors
 # (zap if size exceed and fill again from zero):
 maxlog=25000000
@@ -97,8 +106,6 @@ echo $(date +'%H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + t
 packet=1
 while :
 do
-  #echo stat=$(stat -c%s $log) 
-  #echo maxlog=$maxlog
   if [ -s $log ]; then
     if [ $(stat -c%s $log) -gt $maxlog ]; then
 
@@ -108,7 +115,7 @@ do
       msg="$(date +'%H:%M:%S'). Preserving data about estimated performance for displaying later in final report."
       echo $msg>>$sts
       echo $msg
-      
+
       grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
       while read s
       do
@@ -140,21 +147,21 @@ do
   ####################   r u n    i s q l   ####################
   ##############################################################
   $run_isql 1>>$log 2>>$err
-  
-  #echo Done.
-  #echo Size of $log: $(stat -c%s $log)
-  #echo Size of $err: $(stat -c%s $err)
+
   echo $(date +'%H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
 
   if grep -E "database.*shutdown" $err > /dev/null ; then
     msg="$(date +'%H:%M:%S'). DATABASE SHUTDOWN DETECTED, test has been cancelled."
     echo $msg
     echo $msg>>$sts
+    ###################################################
+    # ....................  e x i t ...................
+    ###################################################
     exit
   fi
 
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
-  msg="$(date +'%H:%M:%S'). SID=$sid. Check that FB is still alive: ask server version."
+  msg="$(date +'%H:%M:%S'). SID=$sid. Check that FB is still alive: attempt to get server version."
   echo
   echo $msg
   echo $msg>>$sts
@@ -167,11 +174,15 @@ do
     msg="$(date +'%H:%M:%S'). Server unavaliable, test has been cancelled."
     echo $msg
     echo $msg>>$sts
+    ###################################################
+    # ....................  e x i t ...................
+    ###################################################
     exit
   else
     msg="$(date +'%H:%M:%S').OK, Firebird is active, test can be continued."
     echo $msg>>$sts
   fi
+  rm -f $tmpsidlog
 
   if grep -i "ex_test_cancel" $err > /dev/null ; then
     msg="$(date +'%H:%M:%S'). SID=$sid. STOPFILE has non-zero size, test has been cancelled."
@@ -233,23 +244,23 @@ do
 
     $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
     echo>>$plog
-
-    rm -f $psql
     echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - FINISH
+    rm -f $psql
 
 
     ###############################################################################################
     ##########################   P e r f o r m a n c e    R e p o r t s    ########################
     ###############################################################################################
 
-	cat <<- "EOF" >>$psql
+	cat <<- EOF >>$plog
+		
+		Performance in TOTAL:
+		=====================
+		Get overall performance report for last test_time=$test_time minutes of activity.
+		Value in column "avg_times_per_minute" in 1st row is OVERALL PERFORMANCE INDEX.
+	EOF
 	
-		set heading off;
-		select 'Performance TOTAL:' as " " from rdb$database;
-		set heading on;
-		--  Get overall performance report for last 3 hours of activity:
-		--  Value in column "avg_times_per_minute" in 1st row is overall performance index.
-
+	cat <<- "EOF" >>$psql
 		set width action 35;
 		select
 		   business_action as action,
@@ -261,12 +272,27 @@ do
 		from rdb$database
 		left join srv_mon_perf_total on 1=1;
 		commit;
+	EOF
 	
-		set heading off;
-		select 'Performance in DYNAMIC:' as " " from rdb$database;
-		set heading on;
-		--  Get performance report with splitting data to 10 equal time intervals,
-		--  for last 3 hours of activity:
+	cat $psql >> $plog
+
+	s1=$(date +%s)
+	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1, $plog
+	rm -f $psql
+
+    #------------------------------------------------------------------------------------
+
+	cat <<- EOF >>$plog
+		
+		Performance in DYNAMIC:
+		=======================
+		Get performance report with split data to 10 equal time intervals for 
+		last test_time=$test_time minutes of activity.
+	EOF
+	
+	cat <<- "EOF" >$psql
 		set width action 24;
 		set width itrv_no  7;
 		set width itrv_beg 8;
@@ -286,19 +312,30 @@ do
 		      p.business_action containing 'interval'
 		      and p.business_action containing 'overall';
 		commit;
+	EOF
+	cat $psql >> $plog
 
-		set heading off;
-		select 'Performance for every MINUTE:' as " " from rdb$database;
-		set heading on;
-		-- Extract values of ESTIMATED performance that was evaluated after EACH business
-		-- operation finished. View is base on table PERF_ESTIMATED which was filled up
-		-- by every ISQL session after it finished and before it was terminated.
-		-- These data can help to find proper value of config parameter 'warm_time'.
-		-- Current value of config parameter 'warm_time' = %warm_time%.
-		set width test_phase 10;
+	s1=$(date +%s)
+	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1, $plog
+	rm -f $psql
+
+    #------------------------------------------------------------------------------------
+
+	cat <<- EOF >>$plog
+		
+		Performance for every MINUTE:
+		=============================
+		Extract values of ESTIMATED performance that was evaluated after EACH business
+		operation finished. View is base on table PERF_ESTIMATED which was filled up
+		by every ISQL session after it finished and before it was terminated.
+		These data can help to find proper value of config parameter 'warm_time'.
+		Current value of config parameter 'warm_time' = $warm_time.
 	EOF
 
 	cat <<- EOF >>$psql
+		set width test_phase 10;
 		select iif( minute_since_test_start <= $warm_time, 'WARM_TIME', 'TEST_TIME') test_phase
 	EOF
 
@@ -311,17 +348,29 @@ do
 		     ,distinct_attachments -- 22.12.2015
 		from z_estimated_perf_per_minute;
 		commit;
+	EOF
+	cat $psql >> $plog
 
-		--  Get performance report with detaliation per units, for last 3 hours of activity.
-		--  "CNT_ALL" = total number of events when unit started,
-		--  "CNT_OK"  = total number of events when unit finished successfully.
-		--  "OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and average elapsed time of
-		 --  successfully finished transactions which involved this unit in work.
-		set heading off;
-		select 'Performance in DETAILS:' as " " from rdb$database;
-		set heading on;
+	s1=$(date +%s)
+	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1, $plog
+	rm -f $psql
+
+    #------------------------------------------------------------------------------------
+
+	cat <<- EOF >>$plog
+	
+		Preformance in DETAILS:
+		=======================
+		Get performance report with detaliation per units, for last test_time=$test_time minutes of workload.
+		"CNT_ALL" = total number of any level actions (business and internal) that were launched,
+		"CNT_OK"  = total number of any level actions that finished SUCCESSFULLY,
+		"OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and avg time of actions from CNT_OK.
+	EOF
+
+	cat <<- "EOF" >$psql
 		set width unit 40;
-
 		select
 		    unit
 		    ,cnt_all
@@ -338,68 +387,83 @@ do
 		left join srv_mon_perf_detailed on 1=1;
 		commit;
 	EOF
+	cat $psql >> $plog
 
-    echo $(date +'%H:%M:%S'). SID=$sid. Analyzing performance log table - START.
+	s1=$(date +%s)
+	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1, $plog
+	rm -f $psql
 
-    $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-    rm -f $psql
-      
-    echo>>$plog
-    echo $(date +'%H:%M:%S'). SID=$sid. Analyzing performance log table - FINISH.
-
+    #------------------------------------------------------------------------------------
 
     if [ $mon_unit_perf -eq 1 ]; then
-		cat <<- "EOF" >>$psql
-			-- Get report about gathered MONITOR tables data, detalization per UNITS.
-			-- NOTE: source view for this report will be created only when config
-			-- parameter 'mon_unit_perf' has value 1.
-			set heading off;
-			select 'Monitoring data, per application UNITS:' as " " from rdb$database;
-			set heading on;
+		cat <<- EOF >>$plog
+			
+			Monitoring data, per application UNITS:
+			=======================================
+			Get report about gathered MONITOR tables data, detalization per UNITS.
+			NOTE: source view for this report will be created only when config
+			parameter 'mon_unit_perf' has value 1.
+		EOF
+		cat <<- "EOF" >$psql
 			set width unit 31;
 			select z.*
 			from rdb$database
 			left join srv_mon_stat_per_units z on 1=1;
 			commit;
 		EOF
+		cat $psql >> $plog
 
-      if [ $fb -eq 30 ]; then
-		cat <<- "EOF" >>$psql
-		  -- Get report about gathered MONITOR tables data, detalization  per TABLES and UNITS.
-		  -- NOTE: source view for this report will be created only when config
-		  -- parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
-		  set heading off;
-		  select 'Monitoring data, per TABLES and UNITS (avail. only in FB 3.0):' as " " from rdb$database;
-		  set heading on;
-		  set width unit 31;
-		  set width table_name 31;
-		  select z.*
-		  from rdb$database
-		  left join srv_mon_stat_per_tables z on 1=1;
-		  commit;
-		EOF
-      fi # fb = 30 
+		s1=$(date +%s)
+		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+		# Add timestamps of start and finish and how long last ISQL was:
+		log_elapsed_time $s1, $plog
+		rm -f $psql
 
-      msg="SID=$sid. Analyzing gathered MONITOR data"
-      echo $(date +'%H:%M:%S'). $msg - START.
+		if [ $fb -gt 25 ]; then
 
-      $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-      rm -f $psql
+			cat <<- EOF >>$plog
+				
+				Monitoring data, per TABLES and UNITS (avail. only in FB 3.0):
+				==============================================================
+				Get report about gathered MONITOR tables data, detalization  per TABLES and UNITS.
+				NOTE: source view for this report will be created only when config
+				parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
+			EOF
 
-      echo>>$plog
-      echo $(date +'%H:%M:%S'). $msg - FINISH.
+			cat <<- "EOF" >$psql
+				set width unit 31;
+				set width table_name 31;
+				select z.*
+				from rdb$database
+				left join srv_mon_stat_per_tables z on 1=1;
+				commit;
+			EOF
 
+			cat $psql >> $plog
+			s1=$(date +%s)
+			$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+			# Add timestamps of start and finish and how long last ISQL was:
+			log_elapsed_time $s1, $plog
+			rm -f $psql
+		fi # fb is 30 or higher 
     else
 		cat <<- EOF >>$plog
-		  Config parameter mon_unit_perf=0, data from MON$ tables were NOT gathered.
+		
+			Config parameter mon_unit_perf=0, data from MON$ tables were NOT gathered.
+			==========================================================================
 		EOF
     fi # mon_unit_perf = 1 | 0
-
 	rm -f $psql
+
+	cat <<- EOF >>$plog
+		
+		Exceptions occured during test was in run:
+		==========================================
+	EOF
+
 	cat <<- "EOF" >>$psql
-		set heading off;
-		select 'Exceptions occured during test was in run:' as " " from rdb$database;
-		set heading on;
 		set width fb_mnemona 31;
 		set width unit 40;
 		set width dts_beg 16;
@@ -411,20 +475,20 @@ do
 		left join srv_mon_exceptions on 1=1;
 	EOF
 
-    msg="SID=$sid. Analyzing exceptions while test was running"
-    echo $(date +'%H:%M:%S'). $msg - START.
+	cat $psql >> $plog
+	s1=$(date +%s)
+	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1, $plog
+	rm -f $psql
 
-    $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-    rm -f $psql
 
-    echo>>$plog
-    echo $(date +'%H:%M:%S'). $msg - FINISH.
-
-    rm -f $psql
+	cat <<- EOF >>$plog
+		
+		Database and FB version info:
+		=============================
+	EOF
 	cat <<- "EOF" >>$psql
-		set heading off;
-		select 'Get info about database and FB version:' as " " from rdb$database;
-		set heading on;
 		set list on;
 		select * from mon$database;
 		set list off;
@@ -437,16 +501,25 @@ do
     if [ $run_db_statistics -eq 1 ]; then
 		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
 		cat <<- EOF >>$plog
+			
 			Obtain database statistics after test.
+			======================================
 			Command: $run_fbs
 		EOF
 		msg="SID=$sid. Gather database statistics"
 		echo $(date +'%H:%M:%S'). $msg - START.
+
+		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
+		# Add timestamps of start and finish and how long last action was:
+		log_elapsed_time $s1, $plog
+		
 		echo $(date +'%H:%M:%S'). $msg - FINISH.
     else
 		cat <<- EOF >>$plog
+			
 			Database statistics was not gathered, see config parameter 'run_db_statistics'.
+			===============================================================================
 		EOF
     fi
 
@@ -454,31 +527,54 @@ do
 		skip_val_list="(AGENTS|BUSINESS_OPS|DOC_STATES|FB_ERRORS|EXT_STOPTEST|SETTINGS|OPTYPES|RULES_FOR_%|PHRASES|TMP\$%|MON%|WARE%|Z_%)"
 		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_validate -dbname $dbnm -val_lock_timeout 1 -val_tab_excl $skip_val_list"
 		cat <<- EOF >>$plog
+			
 			Online validation of database.
+			==============================
 			Command: $run_fbs
 		EOF
 		msg="SID=$sid. Database online validation"
 		echo $(date +'%H:%M:%S'). $msg - START.
+
+		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
+		# Add timestamps of start and finish and how long last action was:
+		log_elapsed_time $s1, $plog
+
 		echo $(date +'%H:%M:%S'). $msg - FINISH.
     else
 		cat <<- EOF >>$plog
+			
 			Database validation was not performed, see config parameter 'run_db_validation'.
+			================================================================================
 		EOF
     fi
 
     run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
     msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
     echo $msg
-    echo $msg >>$plog
-    echo Command: $run_fbs>>$plog
+
+	cat <<- EOF >>$plog
+		
+		$msg
+		Command: $run_fbs
+	EOF
+
     $run_fbs 1>$fblog_end 2>>$plog
-    echo Got:>>$plog
+
+	cat <<- EOF >>$plog
+		Check new firebird.log:
+	EOF
+	
     ls -l $fblog_end 1>>$plog 2>&1
 
     msg="$(date +'%H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
     echo $msg
-    echo $msg >>$plog
+
+	cat <<- EOF >>$plog
+		
+		$msg
+	EOF
+
     echo --- start of diff output --- >> $plog
     diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$plog 2>&1
     echo --- end of diff output --- >> $plog
@@ -486,9 +582,12 @@ do
   
     msg="$(date +'%H:%M:%S'). Done."
     echo $msg>>$sts
-    echo $msg>>$plog
 
-    echo $(date +'%H:%M:%S'). SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
+	cat <<- EOF >>$plog
+		
+		$msg
+		$(date +'%H:%M:%S'). SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
+	EOF
 
     # 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
     # 335544347    not_valid    Validation error for column @1, value "@2".
