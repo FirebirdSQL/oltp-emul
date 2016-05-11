@@ -3,6 +3,18 @@
 function pause(){
    read -p "$*"
 }
+
+log_elapsed_time() {
+  local s1=$s1
+  local plog=$2
+  sleep 4
+  local s2=$(date +%s)
+  local sd=$(date -u -d "0 $s2 sec - $s1 sec" +"%H:%M:%S")
+  local msg="Done for $sd, from $(date -d @$s1 +'%d-%m-%Y %H:%M:%S') to $(date -d @$s2 +'%d-%m-%Y %H:%M:%S')."
+  #echo $msg
+  echo $msg >>$plog
+}
+
 msg_noarg() {
   clear
   echo Specify:
@@ -1647,7 +1659,7 @@ echo Check result of previous building database objects.
 rm -f $tmpchk $tmpclg
 rndname=$RANDOM
 
-if [[ $fb = 30 ]]; then
+if [[ $fb != 25 ]]; then
    fb30exc_1 = "using ('settings', 'working_mode=''COMMON'' and mcode=''ENABLE_MON_QUERY''')"
    fb30exc_2 = "using ('settings', 'working_mode=''INIT'' and mcode=''WORKING_MODE''')"
 fi
@@ -1826,7 +1838,11 @@ log4all=$tmpdir/oltp$1.report.txt
 rm -f $log4all
 ##########################################
 
-echo Created by: $0>$log4all
+this_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+cat <<- EOF > $log4all
+	Created by: $this_sh
+	At host:    $file_name_this_host_info
+EOF
 
 # ...................... s h o w    D B   a n d    t e s t    p a r a m s  ............
 show_db_and_test_params
@@ -1899,6 +1915,7 @@ fi # $init_docs -gt 0
 ##############################################################
 #               w o r k i n g     p h a s e
 ##############################################################
+
 export mode=oltp$1
 
 # winq = number of opening isqls
