@@ -553,6 +553,35 @@ if .%sid%.==.1. (
     )
     @rem end of "if .%sid%.==.1. if .%trc_unit_perf%.==.1."
 
+    @rem ------------------------------------------------
+    @rem c h e c k    n u m b e r    o f    c r a s h e s
+    @rem ------------------------------------------------
+
+    @rem 27.05.2016 Check whether server crashed during this round:
+    @rem count number of lines 'error reading / writing from/to connection'
+    @rem in the %err% file. If this number exceeds config parameter then
+    @rem we TERMINATE further execution of test.
+
+    set crash_msg="SQLSTATE = 08006"
+    findstr /i /c:!crash_msg! %err% | find /i /c !crash_msg! >%tmp%
+
+    @rem set crash_msg="Elapsed time"
+    @rem findstr /i /c:!crash_msg! %log% | find /i /c !crash_msg! >%tmp%
+
+    for /f "delims=" %%x in (%tmp%) do set /a crashes_cnt=%%x
+    if !crashes_cnt! gtr 5 (
+      (
+        echo !time!. FB crashed during last run !crashes_cnt! times.
+        echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg!
+        echo Number of this messages exceeds configurable limit.
+        echo Details see in file: %err%
+        echo.
+      ) >>%sts%
+      goto fb_lot_of_crashes
+    ) else (
+      echo !time!. No FB craches detected during last package was run.>>%sts%
+    )
+
     @rem -------------------------------------------------------------
     @rem c h e c k    i f    s e r v e r   i s   u n a v a i l a b l e
     @rem -------------------------------------------------------------
@@ -602,6 +631,15 @@ if .%sid%.==.1. (
     @echo.
     @echo %date% %time% %msg% >>%sts%
     goto end
+
+:fb_lot_of_crashes
+    set msg=Too many messages about connection problem during this test. Test has been cancelled.
+    @echo.
+    @echo %date% %time% %msg%
+    @echo.
+    @echo %date% %time% %msg% >>%sts%
+    goto end
+
 :db_offline
     set msg=DATABASE SHUTDOWN DETECTED, test has been cancelled.
     @echo.
