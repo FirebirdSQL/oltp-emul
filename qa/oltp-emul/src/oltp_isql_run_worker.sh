@@ -160,6 +160,27 @@ do
     exit
   fi
 
+  # 27.05.2016 Check whether server crashed during this round:
+  # count number of lines 'error reading / writing from/to connection'
+  # in the %err% file. If this number exceeds config parameter then
+  # we TERMINATE further execution of test.
+  
+  crashes_cnt=$(grep -i -c "SQLSTATE = 08006" $err)
+  #crashes_cnt=$(grep -i -c "elapsed time" $log)
+  if [ $crashes_cnt -gt 5 ] ; then
+    msg="$(date +'%H:%M:%S'). Number of times when connection was terminated: $crashes_cnt - exceeds limit. Test has been cancelled."
+    echo $msg
+    echo $msg>>$sts
+    ###################################################
+    # ....................  e x i t ...................
+    ###################################################
+    exit
+  else
+    msg="$(date +'%H:%M:%S'). No FB craches detected during last package was run."
+    echo $msg
+    echo $msg>>$sts
+  fi
+
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
   msg="$(date +'%H:%M:%S'). SID=$sid. Check that FB is still alive: attempt to get server version."
   echo
