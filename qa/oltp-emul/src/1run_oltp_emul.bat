@@ -1493,14 +1493,7 @@ goto :end_of_test
 
             echo set list on; >>%sql%
 
-            if %%i equ 1 (
-               (
-                  echo select left( cast( p.dts_end as varchar(24^) ^), 19 ^)
-                  echo      as test_ends_at
-               )>>%sql%
-            ) else (
-              (
-                  
+            (
                   echo select
                   echo     -- Variable 'PERF_WATCH_END' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
                   echo     -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'
@@ -1510,10 +1503,6 @@ goto :end_of_test
                   echo           19
                   echo        ^)
                   echo     as test_ends_at
-              )>>%sql%
-            )
-
-            (
                   echo     ,rdb$get_context('USER_SESSION','GDS_RESULT'^) as last_operation_gds_code
                   echo     ,lpad( iif( minutes_since_start ^>0, 1.00 * success_ops_count / minutes_since_start, 0 ^), 12, ' ' ^)
                   echo      ^|^|

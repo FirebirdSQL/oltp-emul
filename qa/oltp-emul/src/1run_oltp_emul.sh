@@ -1067,11 +1067,14 @@ gen_working_sql() {
 			-----  S H O W    R E S U L T S    O F   E X E C U T I O N
 			----- ####################################################  -------
 		EOF
-		if [ $i = 1 ]; then
-		  end_time_dts="left( cast( p.dts_end as varchar(24) ), 19 )"
-		else
-		  end_time_dts="left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') as varchar(24)), 19)"
-		fi
+
+#		if [ $i = 1 ]; then
+#		  end_time_dts="left( cast( p.dts_end as varchar(24) ), 19 )"
+#		else
+#		  end_time_dts="left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') as varchar(24)), 19)"
+#		fi
+
+		end_time_dts="left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') as varchar(24)), 19)"
 		cat <<- EOF >>$sql
 			set list on;
 			select

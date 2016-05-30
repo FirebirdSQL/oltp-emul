@@ -570,16 +570,16 @@ if .%sid%.==.1. (
 
     for /f "delims=" %%x in (%tmp%) do set /a crashes_cnt=%%x
     if !crashes_cnt! gtr 5 (
-      (
-        echo !time!. FB crashed during last run !crashes_cnt! times.
-        echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg!
-        echo Number of this messages exceeds configurable limit.
-        echo Details see in file: %err%
-        echo.
-      ) >>%sts%
-      goto fb_lot_of_crashes
+        (
+          echo !time!. FB crashed during last run !crashes_cnt! times.
+          echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg!
+          echo Number of this messages exceeds configurable limit.
+          echo Details see in file: %err%
+          echo.
+        ) >>%sts%
+        goto fb_lot_of_crashes
     ) else (
-      echo !time!. No FB craches detected during last package was run.>>%sts%
+        echo !time!. No FB craches detected during last package was run.>>%sts%
     )
 
     @rem -------------------------------------------------------------
@@ -594,6 +594,7 @@ if .%sid%.==.1. (
     if not errorlevel 1 (
         echo OK, Firebird is active:>>%log%
         type %tmp%>>%log%
+        type %tmp%>>%sts%
         del %tmp% 2>nul
         goto fb_is_active
     ) else (
@@ -608,7 +609,7 @@ if .%sid%.==.1. (
     @rem ------------------------------------------------------------------------------
     @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
     @rem ------------------------------------------------------------------------------
-    echo !date! !time! Check whether database state is SHUTDOWN >>%log%
+    echo !date! !time! Check whether database state is SHUTDOWN >>%sts%
     findstr /m /i "shutdown" %err% >nul
     if errorlevel 1 goto db_online
     goto db_offline
@@ -619,10 +620,27 @@ if .%sid%.==.1. (
     @rem ------------------------------------------------------------------
     @rem c h e c k    i f    t e s t   h a s   b e e n    C A N C E L L E D:
     @rem ------------------------------------------------------------------
-    echo !date! !time! Check whether test has been stopped >>%log%
+    echo !date! !time! Check whether test has been stopped >>%sts%
+
+    @rem 30.05.2016, suggestion by Alexey Kovyazin: let's check first of all STDOUT log
+    @rem for the signal about test cancellation. This allow to skip raising EXCEPTION inside
+    @rem %tmpdir%\sql\tmp_random_run.sql script, see generation of EB code with raising
+    @rem exception ex_test_cancellation.
+
+    findstr /m /i "TEST_WAS_CANCELLED" %log% >nul
+    if not errorlevel 1 (
+        echo !time! Found sign of TEST CANCELLATION in STDOUT log, file %log% >>%sts%
+        goto test_canc
+    )
+
+    @rem Old way: check only ERROR log for message about test cancellation:
     findstr /m /i "EX_TEST_CANCEL" %err% >nul
-    if errorlevel 1 goto start
-    goto test_canc
+    if not errorlevel 1  (
+        echo !time! Found sign of TEST CANCELLATION in STDERR log, file %err% >>%sts%
+        goto test_canc
+    )
+
+    goto start
 
 :fb_unavail
     set msg=Firebird Server is unavailable now. Test has been cancelled.
