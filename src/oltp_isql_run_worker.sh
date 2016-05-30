@@ -195,20 +195,29 @@ do
     msg="$(date +'%H:%M:%S'). Server unavaliable, test has been cancelled."
     echo $msg
     echo $msg>>$sts
+    rm -f $tmpsidlog
     ###################################################
     # ....................  e x i t ...................
     ###################################################
     exit
   else
-    msg="$(date +'%H:%M:%S').OK, Firebird is active, test can be continued."
+    msg="$(date +'%H:%M:%S'). OK, Firebird is active, test can be continued."
     echo $msg>>$sts
   fi
   rm -f $tmpsidlog
 
-  if grep -i "ex_test_cancel" $err > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. STOPFILE has non-zero size, test has been cancelled."
-    echo $msg>>$sts
+  cancel_test=0
+  if grep -i "test_was_cancelled" $log > /dev/null ; then
+    msg="$(date +'%H:%M:%S'). Found sign of TEST CANCELLATION in STDOUT log, file $log."
+    cancel_test=1
+  elif grep -i "ex_test_cancel" $err > /dev/null ; then
+    msg="$(date +'%H:%M:%S'). Found sign of TEST CANCELLATION in STDERR log, file $err."
+    cancel_test=1
+  fi
+
+  if [ $cancel_test -eq 1 ]; then
     echo $msg
+    echo $msg>>$sts
 
     msg="Saving data about estimated performance for displaying later in final report."
     echo $msg>>$sts
