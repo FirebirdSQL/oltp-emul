@@ -5795,13 +5795,11 @@ create or alter procedure srv_get_report_name(
 as
     declare v_test_finish_state varchar(50);
     declare v_tab_name dm_dbobj;
-    declare v_idx_name dm_dbobj;
     declare v_min_idx_key varchar(255);
     declare v_max_idx_key varchar(255);
     declare v_test_time int;
     declare v_num_of_sessions int;
     declare v_dts_beg timestamp;
-    declare v_dts_end timestamp;
     declare k smallint;
     declare v_fb_major_vers varchar(10);
 begin
@@ -5839,12 +5837,12 @@ begin
     select
         'score_'||lpad( cast( coalesce(aux1,0) as int ), iif( coalesce(aux1,0) < 99999, 5, 18 ) , '0' )
         ,datediff(minute from p.dts_beg to p.dts_end)
-        ,p.dts_beg, p.dts_end
+        ,p.dts_beg
     from perf_log p
     where p.unit = 'perf_watch_interval'
     order by p.dts_beg desc
     rows 1
-    into overall_perf, v_test_time, v_dts_beg, v_dts_end;
+    into overall_perf, v_test_time, v_dts_beg;
 
     v_test_finish_state = null;
     if ( a_test_time_minutes = -1 ) then -- call AFTER test finish, when making final report
@@ -5881,7 +5879,8 @@ begin
         -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
         v_num_of_sessions= a_num_of_sessions;
 
-    load_att = lpad( coalesce(v_num_of_sessions, '0'), 3, '_') || '_att';
+    k=iif( coalesce(v_num_of_sessions, 0) <= 0, 1, iif(v_num_of_sessions<=999, 3, char_length(v_num_of_sessions) ) );
+    load_att = lpad( coalesce(v_num_of_sessions, '0'), k, '_') || '_att';
 
     k = position('.' in reverse(a_build));
     a_build = iif( k > 0, reverse(left(reverse(a_build), k - 1)), a_build );

@@ -5504,7 +5504,7 @@ end
 
 create or alter procedure srv_get_report_name(
      a_format varchar(20) default 'regular' -- 'regular' | 'benchmark'
-    ,a_build varchar(15) default '' -- WI-V3.0.0.32136 ==> '32136'
+    ,a_build varchar(50) default '' -- WI-V3.0.0.32136 or just '32136'
     ,a_num_of_sessions int default -1
     ,a_test_time_minutes int default -1
     ,a_prefix varchar(255) default ''
@@ -5524,13 +5524,11 @@ create or alter procedure srv_get_report_name(
 as
     declare v_test_finish_state varchar(50);
     declare v_tab_name dm_dbobj;
-    declare v_idx_name dm_dbobj;
     declare v_min_idx_key varchar(255);
     declare v_max_idx_key varchar(255);
     declare v_test_time int;
     declare v_num_of_sessions int;
     declare v_dts_beg timestamp;
-    declare v_dts_end timestamp;
     declare k smallint;
     declare v_fb_major_vers varchar(10);
 begin
@@ -5552,7 +5550,6 @@ begin
         )
     ) into v_fb_major_vers; -- '2.5.0' ==> '25'; '3.0.0' ==> '30'; '19.17.1' ==> '1917' :-)
 
-
     select p.fb_arch from sys_get_fb_arch p into fb_arch;
     fb_arch =
         iif( fb_arch containing 'superserver' or upper(fb_arch) starting with upper('ss'), 'ss'
@@ -5564,18 +5561,17 @@ begin
            )
         || v_fb_major_vers -- prev: iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
     ;
-
     fw_setting='fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off');
 
     select
         'score_'||lpad( cast( coalesce(aux1,0) as int ), iif( coalesce(aux1,0) < 99999, 5, 18 ) , '0' )
         ,datediff(minute from p.dts_beg to p.dts_end)
-        ,p.dts_beg, p.dts_end
+        ,p.dts_beg
     from perf_log p
     where p.unit = 'perf_watch_interval'
     order by p.dts_beg desc
     rows 1
-    into overall_perf, v_test_time, v_dts_beg, v_dts_end;
+    into overall_perf, v_test_time, v_dts_beg;
 
     v_test_finish_state = null;
     if ( a_test_time_minutes = -1 ) then -- call AFTER test finish, when making final report
@@ -5612,11 +5608,12 @@ begin
         -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
         v_num_of_sessions= a_num_of_sessions;
 
-    load_att = lpad( coalesce(v_num_of_sessions, '0'), 3, '_') || '_att';
+    -- 02.06.2016: adjust padding to the actual number of attachments that can be more than 1000:
+    k=iif( coalesce(v_num_of_sessions, 0) <= 0, 1, iif(v_num_of_sessions<=999, 3, char_length(v_num_of_sessions) ) );
+    load_att = lpad( coalesce(v_num_of_sessions, '0'), k, '_') || '_att';
 
     k = position('.' in reverse(a_build));
     a_build = iif( k > 0, reverse(left(reverse(a_build), k - 1)), a_build );
-
 
     if ( a_format = 'regular' ) then
         -- 20151102_2219_score_06578_build_32136_ss30__0h30m__10_att_fw_off.txt 
