@@ -159,6 +159,7 @@ if NOT .%fb%.==.25. (
 )
 
 set run_get_db_sts=%fbsvcrun% action_db_stats sts_data_pages sts_idx_pages sts_record_versions dbname %dbnm%
+set run_get_db_hdr=%fbsvcrun% action_db_stats sts_hdr_pages dbname %dbnm%
 set run_db_validat=%fbsvcrun% action_validate dbname %dbnm% val_lock_timeout 1 
 set run_fc_compare=fc.exe /n %fblog_start% %fblog_final%
 
@@ -562,24 +563,34 @@ if .%sid%.==.1. (
     @rem in the %err% file. If this number exceeds config parameter then
     @rem we TERMINATE further execution of test.
 
-    set crash_msg="SQLSTATE = 08006"
-    findstr /i /c:!crash_msg! %err% | find /i /c !crash_msg! >%tmp%
+    set crash_msg1="SQLSTATE = 08006"
+    set crash_msg2="SQLSTATE = 08003"
 
-    @rem set crash_msg="Elapsed time"
-    @rem findstr /i /c:!crash_msg! %log% | find /i /c !crash_msg! >%tmp%
+    findstr /i /c:!crash_msg1! /c:!crash_msg2! %err% | find /i /c "SQLSTATE" >%tmp%
+
+    @rem set crash_msg1="Elapsed time"
+    @rem findstr /i /c:!crash_msg1! %log% | find /i /c !crash_msg1! >%tmp%
 
     for /f "delims=" %%x in (%tmp%) do set /a crashes_cnt=%%x
     if !crashes_cnt! gtr 5 (
         (
           echo !time!. FB crashed during last run !crashes_cnt! times.
-          echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg!
+          echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg1! or !crash_msg2!
           echo Number of this messages exceeds configurable limit.
           echo Details see in file: %err%
           echo.
-        ) >>%sts%
+        ) >%tmp%
+        type %tmp%
+        type %tmp%>>%sts%
         goto fb_lot_of_crashes
     ) else (
-        echo !time!. No FB craches detected during last package was run.>>%sts%
+        if !crashes_cnt! equ 0 (
+            set msg=!time!. There were NO connection problems during last run. Test will be continued.
+        ) else (
+            set msg=!time!. Detected !crashes_cnt! problems with connection. It's less than configurable limit. Test will be continued.
+        )
+        echo !msg!
+        echo !msg!>>%sts%
     )
 
     @rem -------------------------------------------------------------
@@ -596,7 +607,7 @@ if .%sid%.==.1. (
         type %tmp%>>%log%
         type %tmp%>>%sts%
         del %tmp% 2>nul
-        goto fb_is_active
+        goto chk4shutdown
     ) else (
         echo Firebird is UNAVAILABLE.>>%log%
         type %tmp%>>%log%
@@ -605,12 +616,19 @@ if .%sid%.==.1. (
         goto fb_unavail
     )
 
-:fb_is_active
+:chk4shutdown
     @rem ------------------------------------------------------------------------------
     @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
     @rem ------------------------------------------------------------------------------
-    echo !date! !time! Check whether database state is SHUTDOWN >>%sts%
-    findstr /m /i "shutdown" %err% >nul
+    (
+      echo !date! !time! Check whether database state is shutdown.
+      echo Command: %run_get_db_hdr%
+    )>>%sts%
+
+    %run_get_db_hdr% | findstr /i /c:"Attributes" 1>%tmp% 2>&1
+    @rem Attributes              full shutdown
+
+    findstr /i /c:"shutdown" %tmp% >nul
     if errorlevel 1 goto db_online
     goto db_offline
 
@@ -640,6 +658,13 @@ if .%sid%.==.1. (
         goto test_canc
     )
 
+    echo Test can be continued. Now we make loop and run ISQL with next packet.>>%sts%
+
+    @rem ############################################
+    @REM ########                            ########
+    @rem ########   G O T O     S T A R T    ########
+    @REM ########                            ########
+    @rem ############################################
     goto start
 
 :fb_unavail
