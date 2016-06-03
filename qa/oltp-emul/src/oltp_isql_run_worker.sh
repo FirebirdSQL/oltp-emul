@@ -62,12 +62,10 @@ fi
 run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
 
 cat << EOF >>$sts
-
-echo $(date +'%H:%M:%S'). Batch running now: $0 - check start command:
---- beg of command for launch isql ---
+$(date +'%H:%M:%S'). Batch running now: $0 - check start command:
+--- begin ---
 $run_isql 1>>$log 2>>$err
---- end of command for launch isql ---
-
+--- end ---
 EOF
 
 [[ $sid = 1 ]] &&  echo This session *WILL* do performance report after test make selfstop.>>$sts
@@ -138,10 +136,17 @@ do
   fi
 
   [[ $packet -gt 1 ]] && echo ------------------------------------------
-  echo $(date +'%H:%M:%S'). SID=$sid. Start isql, packet No. $packet
-  echo Command: $run_isql
-  echo Redirection of STDOUT to: $log
-  echo Redirection of STDERR to: $err
+
+	cat <<- EOF >>$tmpsidlog
+		$(date +'%H:%M:%S'). SID=$sid. Starting packet $packet.
+		RUNCMD: $run_isql
+		STDLOG: $log
+		STDERR: $err
+	EOF
+
+  cat $tmpsidlog
+  cat $tmpsidlog>>$sts
+  rm -f $tmpsidlog
 
   ##############################################################
   ####################   r u n    i s q l   ####################
@@ -151,7 +156,7 @@ do
   echo $(date +'%H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
 
   if grep -E "database.*shutdown" $err > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). DATABASE SHUTDOWN DETECTED, test has been cancelled."
+    msg="$(date +'%H:%M:%S'). SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job."
     echo $msg
     echo $msg>>$sts
     ###################################################
@@ -164,11 +169,12 @@ do
   # count number of lines 'error reading / writing from/to connection'
   # in the %err% file. If this number exceeds config parameter then
   # we TERMINATE further execution of test.
-  
-  crashes_cnt=$(grep -i -c "SQLSTATE = 08006" $err)
+
+  crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
+  crashes_cnt=$(grep -i -c -e "$crash_pattern" $err)
   #crashes_cnt=$(grep -i -c "elapsed time" $log)
   if [ $crashes_cnt -gt 5 ] ; then
-    msg="$(date +'%H:%M:%S'). Number of times when connection was terminated: $crashes_cnt - exceeds limit. Test has been cancelled."
+    msg="$(date +'%H:%M:%S'). SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job."
     echo $msg
     echo $msg>>$sts
     ###################################################
@@ -176,7 +182,7 @@ do
     ###################################################
     exit
   else
-    msg="$(date +'%H:%M:%S'). No FB craches detected during last package was run."
+    msg="$(date +'%H:%M:%S'). SID=$sid. No FB craches detected during last package was run."
     echo $msg
     echo $msg>>$sts
   fi
@@ -187,31 +193,32 @@ do
   echo $msg
   echo $msg>>$sts
 
-  $run_fbs 1>$tmpsidlog 2>&1
+  $run_fbs 1>$tmpsidlog 2>$tmpsiderr
 
-  cat $tmpsidlog>>$sts
-  if grep -i "connection rejected" $tmpsidlog > /dev/null ; then
-    cat $tmpsidlog
-    msg="$(date +'%H:%M:%S'). Server unavaliable, test has been cancelled."
+  if [ -s $tmpsiderr ]; then
+    msg="$(date +'%H:%M:%S'). SID=$sid. Firebird is UNAVAILABLE, session has finished its job."
     echo $msg
     echo $msg>>$sts
-    rm -f $tmpsidlog
+    cat $tmpsiderr
+    cat $tmpsiderr>>$sts
+    rm -f $tmpsiderr
     ###################################################
     # ....................  e x i t ...................
     ###################################################
     exit
   else
-    msg="$(date +'%H:%M:%S'). OK, Firebird is active, test can be continued."
+    msg="$(date +'%H:%M:%S'). SID=$sid. Firebird is active, test can be continued."
     echo $msg>>$sts
+    cat $tmpsidlog>>$sts
   fi
   rm -f $tmpsidlog
 
   cancel_test=0
   if grep -i "test_was_cancelled" $log > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). Found sign of TEST CANCELLATION in STDOUT log, file $log."
+    msg="$(date +'%H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDOUT log, file $log."
     cancel_test=1
   elif grep -i "ex_test_cancel" $err > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). Found sign of TEST CANCELLATION in STDERR log, file $err."
+    msg="$(date +'%H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDERR log, file $err."
     cancel_test=1
   fi
 
@@ -219,7 +226,7 @@ do
     echo $msg
     echo $msg>>$sts
 
-    msg="Saving data about estimated performance for displaying later in final report."
+    msg="$(date +'%H:%M:%S'). SID=$sid. Saving data about estimated performance for displaying later in final report."
     echo $msg>>$sts
     echo $msg
 
@@ -238,7 +245,9 @@ do
     # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   I d   g r e a t e r   t h a n   "1".
     # -------------------------------------------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
-      echo Bye-bye from SID=$sid
+      msg="$(date +'%H:%M:%S'). Bye-bye from SID=$sid"
+      echo $msg
+      echo $msg>>$sts
       exit
     fi
 
@@ -682,25 +691,29 @@ do
 		echo Evaluate new name of final report.
 
 		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
-		$run_isql 1>$tmpsidlog 2>&1
-		# Wrong: one trailing space will be included into varable content:
-		# ----- do not --- og_with_params_in_name=`grep -v "^$" $tmpsidlog`
-
-		log_with_params_in_name=`grep -v "^$" $tmpsidlog | sed 's/[ \t]*$//'`
-        if [ -n "$ainfo" ]; then
-          # Suffix for adding at the end of report name: host location, hardware specific
-          # FB instance info etc (useful when analyze lot of logs).
-          # Make config parameter 'file_name_with_test_params\ commented if this is not needed.
-          log_with_params_in_name=${log_with_params_in_name}_$ainfo
-        fi
-		log_with_params_in_name=$tmpdir/$log_with_params_in_name.txt
+		$run_isql 1>$tmpsidlog 2>$tmpsiderr
 		
-        echo Report will be written into file: 
-        echo $log_with_params_in_name
-
-		rm -f $log_with_params_in_name $psql $tmpsidlog
-		mv $plog $log_with_params_in_name
-		plog=$log_with_params_in_name
+		# Wrong: one trailing space will be included into varable content:
+		# ----- do not --- log_with_params_in_name=`grep -v "^$" $tmpsidlog`
+		
+		if [ -s $tmpsiderr ]; then
+			echo ERROR occured while defining name of final report:
+			cat $tmpsiderr
+		else
+			log_with_params_in_name=`grep -v "^$" $tmpsidlog | sed 's/[ \t]*$//'`
+			if [ -n "$ainfo" ]; then
+			  # Suffix for adding at the end of report name: host location, hardware specific
+			  # FB instance info etc (useful when analyze lot of logs).
+			  # Make config parameter 'file_name_with_test_params\ commented if this is not needed.
+			  log_with_params_in_name=${log_with_params_in_name}_$ainfo
+			fi
+			log_with_params_in_name=$tmpdir/$log_with_params_in_name.txt
+			echo Report will be written into file: 
+			echo $log_with_params_in_name
+			rm -f $log_with_params_in_name $psql $tmpsidlog $tmpsiderr
+			mv $plog $log_with_params_in_name
+			plog=$log_with_params_in_name
+		fi
 	else
 		echo New report has been saved with the same name as old one thus overwriting it.
 		echo Change config parameter 'file_name_with_test_params' to 'regular' or 'benchmark'
@@ -726,6 +739,10 @@ do
     exit
 
   fi
+
+  msg="$(date +'%H:%M:%S'). SID=$sid. Finished packet $packet "
+  echo $msg
+  echo $msg>>$sts
 
   packet=$((packet+1))
 done
