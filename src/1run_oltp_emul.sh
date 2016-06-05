@@ -89,7 +89,7 @@ msg_no_build_result() {
 
 db_create() {
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
   local tmperr=$tmpdir/tmp_create_dbnm.err
   local tmpsql=$tmpdir/tmp_create_dbnm.sql
   local tmplog=$tmpdir/tmp_create_dbnm.log
@@ -169,7 +169,7 @@ db_create() {
   echo ---------------------------
   cat $tmplog
   echo ---------------------------
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 
   rm -f $tmperr $tmpsql $tmplog
@@ -179,7 +179,7 @@ db_create() {
 
 db_build() {
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
   
   local prf=tmp_build_$fb
   local bld=$tmpdir/$prf.sql
@@ -364,7 +364,7 @@ db_build() {
   fi
 
   echo Creation of database objects COMPLETED. See results in $log.
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 
   if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
@@ -386,12 +386,14 @@ db_build() {
 
 show_db_and_test_params() {
 
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+
+  log4all=$1
   local tmp_show_sql=$tmpdir/tmp_show.sql
   local tmp_show_log=$tmpdir/tmp_show.log
   local tmp_show_err=$tmpdir/tmp_show.err
 
-  echo Database parameters, workload level map and current test settings: > $tmp_show_log
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Database parameters, workload level map and current test settings: > $tmp_show_log
   
   # [[ $create_with_split_heavy_tabs == 0 ]] && inject_compound_ordr=",rdb\$get_context('USER_SESSION', 'BUILD_WITH_QD_COMPOUND_ORDR') build_with_qd_compound_ordr"
   # NB: use quoted "EOF" in heredoc clause in order to avoid specifying backslash leftside of any special characters, like $:
@@ -422,7 +424,9 @@ show_db_and_test_params() {
             ,iif(m.mon\$forced_writes=0,'OFF','ON') as forced_writes
             ,m.mon\$sweep_interval as sweep_int
             ,m.mon\$page_buffers as page_buffers
-            , m.mon\$page_size as page_size
+            ,m.mon\$page_size as page_size
+            ,m.mon\$creation_date as creation_timestamp
+            ,current_timestamp
          from mon\$database m;
          set list off;
 
@@ -452,6 +456,7 @@ show_db_and_test_params() {
     echo Error log: $tmp_show_err
     echo ------------------------------------------------------------------
     cat $tmp_show_err
+    cat $tmp_show_err>>$log4all
     echo ------------------------------------------------------------------
     echo
     echo Script is now terminated.
@@ -463,7 +468,7 @@ show_db_and_test_params() {
   cat $tmp_show_log
   cat $tmp_show_log>>$log4all
   rm -f $tmp_show_log
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
 
 }
 
@@ -471,7 +476,7 @@ show_db_and_test_params() {
 
 check_stoptest() {
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
   # check that file 'stoptest.txt' is EMPTY
   local pfx=tmp_check_stoptest
   local tmpchk=$tmpdir/$pfx.sql
@@ -537,7 +542,7 @@ check_stoptest() {
     fi
     rm -f $tmpchk $tmpclg $tmperr
   fi
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 }
 
@@ -545,7 +550,7 @@ check_stoptest() {
 
 upd_init_docs() {
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
   echo Check is the database needs to be filled up with necessary number of documents
 
   local pfx=tmp_get_init_docs
@@ -610,7 +615,7 @@ upd_init_docs() {
       init_docs=0
     fi
   fi
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   rm -f $tmpchk $tmpclg $tmperr
   echo
 }
@@ -618,7 +623,7 @@ upd_init_docs() {
 # --------------------------  p r e p a r e:   set linger, change FW to OFF ------------------
 prepare_before_adding_init_data() {
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
 
   local pfx=tmp_before_adding_init_data
   local tmpsql=$tmpdir/$pfx.sql
@@ -688,7 +693,7 @@ prepare_before_adding_init_data() {
   echo Result:
   grep -v "^$" $tmplog
   
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
   rm -f $tmpsql $tmplog $tmperr
 
@@ -698,7 +703,7 @@ prepare_before_adding_init_data() {
 
 gen_working_sql() {
  echo
- echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+ echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
  local mode=$1 # 'init_pop' xor 'run_test'
  local sql=$2
  local lim=$3 
@@ -1261,7 +1266,7 @@ gen_working_sql() {
 
 
  done # i=1..$lim
- echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+ echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
  echo
 
 
@@ -1273,7 +1278,7 @@ gen_working_sql() {
 add_init_docs() {
   # $tmpsql $tmplog $srv_frq
   echo
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: start.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
   local tmpsql=$1
   local tmplog=$2
   local srv_frq=$3
@@ -1315,17 +1320,17 @@ add_init_docs() {
 			commit;
 		EOF
 
-      echo -ne "$(date +'%H:%M:%S'), start service SPs... "
+      echo -ne "$(date +'%Y.%m.%d %H:%M:%S'), start service SPs... "
       # --------------- perform service: srv_make*_total, recalc index statistics -------------
       cat $tmpchk>>$tmplog
       run_isql="$fbc/isql $dbconn -i $tmpchk -c $init_buff -n -m -o $tmplog $dbauth"
 
       $run_isql
 
-      echo -e "$(date +'%H:%M:%S'), finish service SPs."
+      echo -e "$(date +'%Y.%m.%d %H:%M:%S'), finish service SPs."
     fi
 
-    echo -ne "$(date +'%H:%M:%S'), packet $k start... "
+    echo -ne "$(date +'%Y.%m.%d %H:%M:%S'), packet $k start... "
 
     # Common application unit: create several documents
     # using .sql which was made in func gen_working_sql
@@ -1371,14 +1376,14 @@ add_init_docs() {
       fi
     done<$tmpclg
 
-    echo -e "$(date +'%H:%M:%S'), packet $k finish: docs created: >>>$new_docs<<<, limit: $init_docs"
+    echo -e "$(date +'%Y.%m.%d %H:%M:%S'), packet $k finish: docs created: >>>$new_docs<<<, limit: $init_docs"
     [[ $new_docs -gt $init_docs ]] && break
     k=$(( k+1 ))
 
   done
   rm -f $tmpsql $tmplog $tmpchk $tmpclg
   
-  echo $(date +'%H:%M:%S'). Routine $FUNCNAME: finish.
+  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 } # end of add_init_docs()
 
@@ -1536,9 +1541,9 @@ gen_temp_sh_for_stop()
 	    # It is highly rtecommended to use this script for that goal rather than brute kill
 	    # ISQL sessions or use Firebird monitoring tables.
 	    # --------------------------------------------------------------------------------
-	    echo \$(date +'%H:%M:%S'). Running command to stop all working ISQL sessions:
+	    echo \$(date +'%Y.%m.%d %H:%M:%S'). Running command to stop all working ISQL sessions:
 	    echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $fbc/isql $dbconn $dbauth -q -n -nod
-	    echo \$(date +'%H:%M:%S') Done.
+	    echo \$(date +'%Y.%m.%d %H:%M:%S') Done.
 	EOF
 	chmod +x $tmpsh4stop
 	echo In order to premature stop all working ISQL sessions run following script:
@@ -1843,12 +1848,8 @@ rm -f $log4all
 
 this_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 cat <<- EOF > $log4all
-	Created by: $this_sh
-	At host:    $file_name_this_host_info
+	$(date +'%Y.%m.%d %H:%M:%S'). Created by: $this_sh, at host: $file_name_this_host_info
 EOF
-
-# ...................... s h o w    D B   a n d    t e s t    p a r a m s  ............
-show_db_and_test_params
 
 # get number of currently existed documents and update value of $init_docs if need:
 export existing_docs=0
@@ -1861,8 +1862,9 @@ export fw_mode=
 export fw_current=
 export fw_can_upd=
 if [ $init_docs -gt 0 ]; then
-  echo Initial data population untill total number
-  echo of created docs will be not less than \> $(( existing_docs +  init_docs )) \<
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). Start initial data population until total number of documents will be not less than $(( existing_docs +  init_docs ))."
+  echo $msg
+  echo $msg>>$log4all
   echo
   echo Please wait. . .
   echo
@@ -1872,7 +1874,6 @@ if [ $init_docs -gt 0 ]; then
   # 3. alter sequence g_init_pop restart with 0;
   ####################
   prepare_before_adding_init_data
-  # old: init_docs_set_fw_off -- remove it later
   ####################
 
   # 3. generate temp .sql script for initial filling:
@@ -1890,7 +1891,9 @@ if [ $init_docs -gt 0 ]; then
   add_init_docs $tmpsql $tmplog $srv_frq
   ######################################
 
-  echo Setting attribute Forced Writes to value from config.
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). Setting FW to the config parameter 'create_with_fw' value: $create_with_fw"
+  echo $msg
+  echo $msg>>$log4all
   if [[ $is_embed == 0 ]]; then
     fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
   else
@@ -1899,9 +1902,21 @@ if [ $init_docs -gt 0 ]; then
   run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
   echo Command:
   echo $run_fbs
-  $run_fbs
+  echo $run_fbs>>$log4all
+  $run_fbs 1>$tmp$clg 2>&1
 
-  echo $(date +'%y%m%d_%H%M%S') FINISH initial data population.
+  msg="Check attributes line from DB header info:"
+  echo $msg
+  echo $msg>>$log4all
+  run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
+  $run_fbs | grep -i attributes 1>>$tmpclg 2>&1
+  cat $tmpclg
+  cat $tmpclg>>$log4all
+  rm -f $tmpclg
+
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). FINISH initial data population."
+  echo $msg
+  echo $msg>>$log4all
   echo
   if [[ $wait_for_copy = 1 && $can_stop = 1 ]]; then
     echo "### NOTE ###"
@@ -1914,6 +1929,10 @@ if [ $init_docs -gt 0 ]; then
   fi
 
 fi # $init_docs -gt 0
+
+
+# ...................... s h o w    D B   a n d    t e s t    p a r a m s  ............
+show_db_and_test_params $log4all
 
 ##############################################################
 #               w o r k i n g     p h a s e
@@ -1975,6 +1994,11 @@ echo -e '#######################'
 echo Launch $winq isqls. . .
 echo -e '#######################'
 echo
+
+msg="$(date +'%Y.%m.%d %H:%M:%S'). Now wait for all ISQL sessions will finish their job. After this, ISQL session #1 will continue writing final report here."
+echo $msg
+echo $msg>>$log4all
+echo>>$log4all
 
 for i in `seq $winq`
 do
