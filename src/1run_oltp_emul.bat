@@ -166,8 +166,7 @@ for %%v in (%varlist%) do (
 if .%err_setenv%.==.1. goto no_env
 
 (
-  echo Created by: %~f0
-  echo At host:    %file_name_this_host_info%
+  echo !date! !time!. Created by: %~f0, at host: %file_name_this_host_info%
 ) >>%log4all%
 
 
@@ -558,8 +557,6 @@ if  defined use_external_to_stop (
   echo SKIP checking for non-empty external file.
 )     
 
-call :show_db_and_test_params !tmpdir! !fbc! !dbconn! "!dbauth!" %is_embed% %log4all%
-
 set existing_docs=-1
 set engine=unknown_engine
 set log_tab=unknown_table
@@ -574,22 +571,51 @@ set initd_bak=%init_docs%
 set /a required_docs = init_docs - %existing_docs%
 
 if %required_docs% geq 0 (
-    if .%existing_docs%.==.0. (
-      echo Database has NO documents.
-    ) else (
-      echo There are only %existing_docs% documents in database. Required minimum is: %initd_bak%. 
-    )
-    echo We have to create yet ^>^>^>%required_docs%^<^<^< ones before launch working ISQL sessions.
+    (
+        if .%existing_docs%.==.0. (
+          echo Database has NO documents.
+        ) else (
+          echo There are only %existing_docs% documents in database. Required minimum is: %initd_bak%. 
+        )
+        echo !date! !time!. Start initial data population until total number of documents will be not less than %required_docs%.
+    )>%tmpclg%
+    type %tmpclg%
+    type %tmpclg% >>%log4all%
 
     @rem ############## I N I T    D A T A    P O P.   ####################
 
     call :run_init_pop !tmpdir! !fbc! !dbconn! "!dbauth!" %existing_docs% %required_docs% %engine% %log_tab%
 
+    echo !date! !time!. Finish initial data population.>%tmpclg%
+    type %tmpclg%
+    type %tmpclg% >>%log4all%
+
+    if .%wait_for_copy%.==.1. if .%can_stop%.==.1. (
+        @echo.
+        @echo ### NOTE ###
+        @echo.
+        @echo It's a good time to make COPY of test database in order
+        @echo to start all following runs from the same state.
+        @echo.
+        @echo 
+        @echo Press any key to begin WARM-UP and TEST mode. . .
+        @pause>nul
+        echo !date! !time!. Here we go...
+    )
+
 ) else (
-    echo Database has all necessary number of documents that should be initially populated.
-    echo Existing ^>= %existing_docs%, required minimum = %initd_bak%. We can launch working ISQL sessions.
+    (
+        echo Database has all necessary number of documents that should be initially populated.
+        echo Existing ^>= %existing_docs%, required minimum = %initd_bak%. We can launch working ISQL sessions.
+    )>%tmpclg%
+    type %tmpclg%
+    type %tmpclg% >>%log4all%
 )
+del %tmpclg% 2>nul
 echo.
+
+call :show_db_and_test_params !tmpdir! !fbc! !dbconn! "!dbauth!" %is_embed% %log4all%
+
 
 @rem -----------------------   w o r k i n g    p h a s e   -----------------------------
 
@@ -2502,7 +2528,7 @@ goto:eof
     del %tmplog% 2>nul
     del %tmperr% 2>nul
 
-    echo Firebird and database parameters, main test settings: > %tmplog%
+    echo !date! !time!. Firebird and database parameters, main test settings: > %tmplog%
     
     (
           echo set list on;
@@ -2535,14 +2561,24 @@ goto:eof
           echo       ,m.mon$sweep_interval as sweep_int
           echo       ,m.mon$page_buffers as page_buffers
           echo       ,m.mon$page_size as page_size
+          echo       ,m.mon$creation_date as creation_date
+          echo       ,current_timestamp
           echo from mon$database m;
 
           echo set list off;
+          echo set width working_mode 12;
           echo set width setting_name 40;
           echo set width setting_value 20;
-          echo select trim(z.setting_name ^) as setting_name , z.setting_value
-          echo from z_current_test_settings z
-          echo where z.stype in('init', 'main'^); -- , 'inf2'
+          echo select * from z_settings_pivot;
+          echo select z.setting_name, z.setting_value from z_current_test_settings z;
+
+          echo set width tab_name 13;
+          echo set width idx_name 31;
+          echo set width idx_key 45;
+          echo set heading off;
+          echo select 'Index(es^) for heavy-loaded table(s^):' as " " from rdb$database;
+          echo set heading on;
+          echo select * from z_qd_indices_ddl;
 
     ) >>%tmpsql%
     
@@ -3037,20 +3073,6 @@ goto:eof
         @echo.
         set msg=Job has been done from %t0% to %time%. Count rows in doc_list: ^>^>^>!act_docs!^<^<^<.
         echo !msg! & echo !msg! >>%log4tmp%
-    
-        @rem if .%wait_if_not_exists%.==.1. 
-        if .%wait_for_copy%.==.1. if .%can_stop%.==.1. (
-            @echo.
-            @echo ### NOTE ###
-            @echo.
-            @echo It's a good time to make COPY of test database in order
-            @echo to start all following runs from the same state.
-            @echo.
-            @echo 
-            @echo Press any key to begin WARM-UP and TEST mode. . .
-            @pause>nul
-            echo !date! !time!. Here we go...
-        )
     
     )
     endlocal

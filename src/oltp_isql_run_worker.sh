@@ -62,7 +62,7 @@ fi
 run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
 
 cat << EOF >>$sts
-$(date +'%H:%M:%S'). Batch running now: $0 - check start command:
+$(date +'%Y.%m.%d %H:%M:%S'). Batch running now: $0 - check start command:
 --- begin ---
 $run_isql 1>>$log 2>>$err
 --- end ---
@@ -81,7 +81,7 @@ if [ $sid -eq 1 ]; then
   [[ $fb -eq 25 ]] && get_log_switch=action_get_ib_log || get_log_switch=action_get_fb_log
 
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
-  msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test."
   echo
   echo $msg
   echo $msg >>$rpt
@@ -93,13 +93,13 @@ if [ $sid -eq 1 ]; then
 fi
 
 echo
-echo $(date +'%H:%M:%S'). Intro separate ISQL session, sid=$sid.
+echo $(date +'%Y.%m.%d %H:%M:%S'). Intro separate ISQL session, sid=$sid.
 if [ $winq -gt 1 ]; then
   echo Take initial random pause. . .
   #echo TEMPLY DISABLED, UNCOMMENT LATER.
   sleep $[ ( $RANDOM % 8 )  + 2 ]s
 fi
-echo $(date +'%H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
+echo $(date +'%Y.%m.%d %H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
 
 packet=1
 while :
@@ -110,7 +110,7 @@ do
       # Before removing log we have to save in database data about performance
       # that we have evaluated on-the-fly in this session after each call
       # of business operation:
-      msg="$(date +'%H:%M:%S'). Preserving data about estimated performance for displaying later in final report."
+      msg="$(date +'%Y.%m.%d %H:%M:%S'). Preserving data about estimated performance for displaying later in final report."
       echo $msg>>$sts
       echo $msg
 
@@ -135,10 +135,8 @@ do
     fi
   fi
 
-  [[ $packet -gt 1 ]] && echo ------------------------------------------
-
 	cat <<- EOF >>$tmpsidlog
-		$(date +'%H:%M:%S'). SID=$sid. Starting packet $packet.
+		$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Starting packet $packet.
 		RUNCMD: $run_isql
 		STDLOG: $log
 		STDERR: $err
@@ -153,10 +151,10 @@ do
   ##############################################################
   $run_isql 1>>$log 2>>$err
 
-  echo $(date +'%H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
+  echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
 
   if grep -E "database.*shutdown" $err > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job."
     echo $msg
     echo $msg>>$sts
     ###################################################
@@ -174,7 +172,7 @@ do
   crashes_cnt=$(grep -i -c -e "$crash_pattern" $err)
   #crashes_cnt=$(grep -i -c "elapsed time" $log)
   if [ $crashes_cnt -gt 5 ] ; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job."
     echo $msg
     echo $msg>>$sts
     ###################################################
@@ -182,13 +180,13 @@ do
     ###################################################
     exit
   else
-    msg="$(date +'%H:%M:%S'). SID=$sid. No FB craches detected during last package was run."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. No FB craches detected during last package was run."
     echo $msg
     echo $msg>>$sts
   fi
 
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
-  msg="$(date +'%H:%M:%S'). SID=$sid. Check that FB is still alive: attempt to get server version."
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Check that FB is still alive: attempt to get server version."
   echo
   echo $msg
   echo $msg>>$sts
@@ -196,7 +194,7 @@ do
   $run_fbs 1>$tmpsidlog 2>$tmpsiderr
 
   if [ -s $tmpsiderr ]; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. Firebird is UNAVAILABLE, session has finished its job."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Firebird is UNAVAILABLE, session has finished its job."
     echo $msg
     echo $msg>>$sts
     cat $tmpsiderr
@@ -207,7 +205,7 @@ do
     ###################################################
     exit
   else
-    msg="$(date +'%H:%M:%S'). SID=$sid. Firebird is active, test can be continued."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Firebird is active, test can be continued."
     echo $msg>>$sts
     cat $tmpsidlog>>$sts
   fi
@@ -215,10 +213,10 @@ do
 
   cancel_test=0
   if grep -i "test_was_cancelled" $log > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDOUT log, file $log."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDOUT log, file $log."
     cancel_test=1
   elif grep -i "ex_test_cancel" $err > /dev/null ; then
-    msg="$(date +'%H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDERR log, file $err."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDERR log, file $err."
     cancel_test=1
   fi
 
@@ -226,7 +224,7 @@ do
     echo $msg
     echo $msg>>$sts
 
-    msg="$(date +'%H:%M:%S'). SID=$sid. Saving data about estimated performance for displaying later in final report."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Saving data about estimated performance for displaying later in final report."
     echo $msg>>$sts
     echo $msg
 
@@ -245,13 +243,13 @@ do
     # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   I d   g r e a t e r   t h a n   "1".
     # -------------------------------------------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
-      msg="$(date +'%H:%M:%S'). Bye-bye from SID=$sid"
+      msg="$(date +'%Y.%m.%d %H:%M:%S'). Bye-bye from SID=$sid"
       echo $msg
       echo $msg>>$sts
       exit
     fi
 
-    msg="$(date +'%H:%M:%S'). SID=$sid. Start final performance analysys."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Start final performance analysys."
     echo $msg >>$sts
     psql=$prf.performance_report.tmp
 
@@ -279,11 +277,11 @@ do
 		order by p.dts_beg desc
 		rows 1;
 	EOF
-    echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - START
+    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Output test finish state - START
 
     $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
     echo>>$plog
-    echo $(date +'%H:%M:%S'). SID=$sid. Output test finish state - FINISH
+    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Output test finish state - FINISH
     rm -f $psql
 
 
@@ -546,14 +544,14 @@ do
 			Command: $run_fbs
 		EOF
 		msg="SID=$sid. Gather database statistics"
-		echo $(date +'%H:%M:%S'). $msg - START.
+		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - START.
 
 		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last action was:
 		log_elapsed_time $s1, $plog
 		
-		echo $(date +'%H:%M:%S'). $msg - FINISH.
+		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
     else
 		cat <<- EOF >>$plog
 			
@@ -572,14 +570,14 @@ do
 			Command: $run_fbs
 		EOF
 		msg="SID=$sid. Database online validation"
-		echo $(date +'%H:%M:%S'). $msg - START.
+		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - START.
 
 		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last action was:
 		log_elapsed_time $s1, $plog
 
-		echo $(date +'%H:%M:%S'). $msg - FINISH.
+		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
     else
 		cat <<- EOF >>$plog
 			
@@ -589,7 +587,7 @@ do
     fi
 
     run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
-    msg="$(date +'%H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
     echo $msg
 
 	cat <<- EOF >>$plog
@@ -606,7 +604,7 @@ do
 	
     ls -l $fblog_end 1>>$plog 2>&1
 
-    msg="$(date +'%H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
     echo $msg
 
 	cat <<- EOF >>$plog
@@ -619,13 +617,13 @@ do
     echo --- end of diff output --- >> $plog
     rm -f $fblog_beg $fblog_end
   
-    msg="$(date +'%H:%M:%S'). Done."
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). Done."
     echo $msg>>$sts
 
 	cat <<- EOF >>$plog
 		
 		$msg
-		$(date +'%H:%M:%S'). SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
+		$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
 	EOF
 
     # 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
@@ -726,7 +724,7 @@ do
 	
     cat <<- EOF
 		------------------------------------------------------------
-		$(date +'%H:%M:%S'). Bye-bye from SID=1. Test has been FINISHED.
+		$(date +'%Y.%m.%d %H:%M:%S'). Bye-bye from SID=1. Test has been FINISHED.
 		------------------------------------------------------------
 		
 		Final report see in: 
@@ -740,7 +738,7 @@ do
 
   fi
 
-  msg="$(date +'%H:%M:%S'). SID=$sid. Finished packet $packet "
+  msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Finished packet $packet "
   echo $msg
   echo $msg>>$sts
 
