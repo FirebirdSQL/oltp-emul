@@ -1903,7 +1903,7 @@ if [ $init_docs -gt 0 ]; then
   echo Command:
   echo $run_fbs
   echo $run_fbs>>$log4all
-  $run_fbs 1>$tmp$clg 2>&1
+  $run_fbs 1>$tmpclg 2>&1
 
   msg="Check attributes line from DB header info:"
   echo $msg
