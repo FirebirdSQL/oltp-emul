@@ -10,13 +10,13 @@ set list off;
 commit;
 set term ^;
 execute block as
-declare trg_name type of column rdb$triggers.rdb$trigger_name;
-declare tab_name type of column rdb$relations.rdb$relation_name;
-declare stt varchar(80);
-declare n int;
+    declare trg_name varchar(255);
+    declare tab_name varchar(255);
+    declare stt varchar(255);
+    declare n int;
 begin
     for
-        select rt.rdb$trigger_name
+        select trim(rt.rdb$trigger_name)
         from rdb$triggers rt
         join rdb$relations rr on rt.rdb$relation_name = rr.rdb$relation_name
         where
@@ -34,7 +34,7 @@ begin
     --------------------------------------------------------
 
     for
-        select t from
+        select trim(t) from
         (
             select 'perf_log' t from rdb$database union all
             select 'mon_log' t from rdb$database union all
@@ -86,7 +86,7 @@ begin
 
     --------------------------------------------------------
     for
-        select m.mon$variable_value
+        select trim(m.mon$variable_value)
         from mon$context_variables m
         where
             m.mon$transaction_id=current_transaction
@@ -119,7 +119,7 @@ delete from settings;
 -- Definitions for workload modes; list of avaliable working_modes see below:
 set term ^;
 execute block as
-declare v_insert_settings_statement varchar(512);
+    declare v_insert_settings_statement varchar(512);
 begin
     for
         with recursive
