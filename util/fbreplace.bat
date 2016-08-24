@@ -114,6 +114,7 @@ if errorlevel 1 (
      echo Number of files related to FB snapshot: %%c
   )
 )
+
 @echo off
 
 set urlbak=%url%
@@ -185,8 +186,6 @@ if errorlevel 1 (
   echo Integrity test passed OK.
 )
 
-@rem echo uuu &exit
-
 (
   echo #################################################################################################
   echo Download PDB files. One may need to send them together with FB process dump to FB developer team.
@@ -242,6 +241,7 @@ echo !msg!>>%log%
 set run_cmd=7za x -y -o%SNAPSHOT_DIR% -mmt %zip%
 
 echo !run_cmd!
+echo See log in: %log%
 echo !run_cmd! >>%log%
 
 !run_cmd! 1>>%tmp% 2>&1
@@ -262,6 +262,11 @@ for /d %%s in ( %FB_SERVICES% ) do (
   echo.>>%log%
   sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
   if errorlevel 1 (
+
+    @rem 22.08.2016. FB service is RUNNING now. We have to obtain its version in order to be sure
+    @rem that one may to get it later, after unpacking and replacing FB files:
+    @rem --- todo later. ---
+
     set msg=Stopping service FirebirdServer%%s
     echo !msg!
     echo.>>%log%
@@ -270,10 +275,16 @@ for /d %%s in ( %FB_SERVICES% ) do (
     echo !cmd_run!
     echo !cmd_run!>>%log%
     sc stop FirebirdServer%%s 1>>%log% 2>&1
-    echo Wait a few seconds. . .
-    ping -n 3 127.0.0.1 1>nul
+    @echo.
+    echo !date! !time! Wait a few seconds. . .
+    @echo !date! !time!. Wait a few seconds >>%log%
+
+    ping -n 6 127.0.0.1 1>nul
+
     :: became broken 10.06.2015 (instant reply instead of wait), the reason not found: ping -n 1 -w 2000 1.1.1.1 1>nul 2>&1
-    echo Check that service is really stopped:>>%log%
+    echo !date! !time! Check that service is really stopped:
+    @echo !date! !time! Check that service is really stopped:>>%log%
+
     set cmd_run=sc query FirebirdServer%%s
     echo !cmd_run!
     echo !cmd_run!>>%log%
@@ -283,6 +294,12 @@ for /d %%s in ( %FB_SERVICES% ) do (
       set msg=CAN NOT STOP SERVICE! Job terminated.
       echo !msg!
       echo !msg!>>%log%
+      echo Removing directory tree %SNAPSHOT_DIR% >>%log%
+      rd /q /s %SNAPSHOT_DIR%
+      echo Removing %zip% >>%log%
+      del %zip% 2>&1 1>>%log%
+      echo Removing %pdb% >>%log%
+      del %pdb% 2>&1 1>>%log%
       exit
     ) else (
       set msg=Service FirebirdServer%%s has been successfully stopped.
@@ -501,6 +518,7 @@ for /d %%s in ( %FB_SERVICES% ) do (
         set secsuff=!fbv:~0,1!
         set secname=security!secsuff!.fdb
         set cmd_run=!fp!\gsec -user sysdba -pass 1 -add sysdba -pw masterke -database !fp!\!secname!
+        @rem set cmd_run=echo create user SYSDBA password 'masterkey'; show users; set list on; select * from sec$users; | isql -user sysdba .\security3.fdb
         echo !time! Trying to add SYSDBA into security database: !cmd_run!
         echo !cmd_run!
 
@@ -609,7 +627,7 @@ for /d %%s in ( %FB_SERVICES% ) do (
     set fp=%%~dpk
     set fp=!fp:~0,-1!
 
-    set cmd_run=!fp!\fbsvcmgr localhost:service_mgr user SYSDBA password masterke info_server_version
+    set cmd_run=!fp!\fbsvcmgr localhost/%port%:service_mgr user SYSDBA password masterke info_server_version
     set msg=Trying to obtain server version for service %%s
     echo !msg!
     echo !msg!>>%log%
