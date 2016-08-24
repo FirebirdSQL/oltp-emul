@@ -49,9 +49,14 @@ for /d %%s in ( %FB_SERVICES% ) do (
     echo !cmd_run!
     echo !cmd_run!>>%log%
     sc stop FirebirdServer%%s 1>>%log% 2>&1
+    @echo.
     echo !date! !time!. Wait a few seconds. . .
-    ping -n 3 127.0.0.1 1>nul
+    echo !date! !time!. Wait a few seconds >>%log%
+
+    ping -n 6 127.0.0.1 1>nul
+
     :: became broken 10.06.2015 (instant reply instead of wait), the reason not found: ping -n 1 -w 2000 1.1.1.1 1>nul 2>&1
+    echo !date! !time!. Check that service is really stopped:
     echo !date! !time!. Check that service is really stopped:>>%log%
     set cmd_run=sc query FirebirdServer%%s
     echo !cmd_run!
