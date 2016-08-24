@@ -30,11 +30,14 @@ end
 set term ;^
 commit;
 
+set list on;
 set term ^;
-execute block as
+execute block returns(engine_version varchar(30)) as
 begin
-    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.' ) then
+    engine_version = rdb$get_context('SYSTEM','ENGINE_VERSION');
+    if (  engine_version starting with '2.' ) then
     begin
+        suspend;
         exception ex_not_suitable_fb_version;
     end
 
@@ -55,6 +58,7 @@ end
 ^
 set term ;^
 commit;
+set list off;
 
 -- ############################################################################
 -- #########################    C L E A N I N G   #############################
@@ -2672,6 +2676,14 @@ begin
             order by dts_beg + 0 desc -- !! 24.09.2014, speed !! (otherwise dozen fetches!)
             rows 1
             into v_dts_beg, v_dts_end;
+
+            -- 30.05.2016. Investigation of affect when bulk of connections CANCEL their own job
+            -- and quit .sql at the same time. Here we want them to make detach at DIFFERENT moments.
+            -- First ISQL window will probably have minimal connection_id and we assign to it MAXIMAL
+            -- time of detach because this session must create final report (we want it will start
+            -- this report generation after all other sessions will be closed).
+            -- commented 24.08.2016 (did not help): v_dts_end = dateadd( mod(2147483647 - current_connection, 600) second to v_dts_end);
+
             rdb$set_context('USER_SESSION','PERF_WATCH_BEG', v_dts_beg);
             rdb$set_context('USER_SESSION','PERF_WATCH_END', coalesce(v_dts_end, dateadd(3 hour to current_timestamp) ) );
         end
