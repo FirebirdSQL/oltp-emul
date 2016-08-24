@@ -30,11 +30,14 @@ end
 set term ;^
 commit;
 
+set list on;
 set term ^;
-execute block as
+execute block returns(engine_version varchar(30)) as
 begin
-    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' ) then
+    engine_version = rdb$get_context('SYSTEM','ENGINE_VERSION');
+    if (  engine_version NOT starting with '2.5' ) then
     begin
+        suspend;
         exception ex_not_suitable_fb_version;
     end
 
@@ -55,6 +58,7 @@ end
 ^
 set term ;^
 commit;
+set list off;
 
 -- ############################################################################
 -- #########################    C L E A N I N G   #############################
