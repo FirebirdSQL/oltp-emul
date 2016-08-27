@@ -2707,15 +2707,24 @@ goto:eof
     echo !msg!
     echo !msg! >>%log%
     echo !msg! >>%sts%
+    (
+      echo -- Debug. Uncomment this if some problem occur and see then %log%
+      echo -- set echo on;
+    ) > %rpt%
+
     set /a k=0
     (
       @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
       for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
-        echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
-        set /a k=!k!+1
+        if not .%%c.==.. if not .%%b.==.. (
+            echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
+            set /a k=!k!+1
+        ) else (
+            echo -- PARSING ERROR. Statement can not be executed: %%a %%b %%c
+        )
       )
       echo commit;
-    ) > %rpt%
+    ) >> %rpt%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
@@ -2724,6 +2733,7 @@ goto:eof
 
     echo !msg! >>%log%
     echo !msg! >>%sts%
+    findstr /i /c:"parsing error" %rpt% >>%sts%
 
     %run_repo% 1>>%log% 2>&1
 
@@ -2731,6 +2741,7 @@ goto:eof
     echo !msg!
     echo !msg! >>%log%
     echo !msg! >>%sts%
+
     del %rpt% 2>nul
 goto:eof
 
