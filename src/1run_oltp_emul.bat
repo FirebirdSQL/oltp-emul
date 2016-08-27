@@ -1573,7 +1573,10 @@ goto :end_of_test
                 ) else (
                     echo     from rdb$database
                 )
-                echo ^) p;
+                echo ^) p
+                echo where -- 27.08.2016, otherwise output can contain "null" for 'est_overall_at_minute_since_beg' field
+                echo     rdb$get_context('USER_SESSION','SELECTED_UNIT'^) is distinct from 'TEST_WAS_CANCELLED'
+                echo ;
                 echo set list off;
             )>>%sql%
         )
