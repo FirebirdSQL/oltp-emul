@@ -7517,6 +7517,13 @@ begin
                 ||', qd.id='||v_cq_id;
             v_rows = v_rows + 1; -- total ATTEMPTS to make delete/update in QDistr
 
+            if ( mod(v_rows, 100) = 0 ) then
+               -- Check that test can continue his work (request to stop it not yet issued).
+               -- Otherwise raises ex`ception to stop test. 
+               -- Added 11.09.2016 during run 30 sessions on HQBird 2.5.7, Windows 8.1
+               execute procedure sp_check_to_stop_work;
+
+
             -- ### A.C.H.T.U.N.G ###
             -- Make increment of `v_gen_inc_iter_**` ALWAYS BEFORE any lock-conflict statements
             -- (otherwise duplicates will appear in ID because of suppressing lock-conflict ex`c.)
