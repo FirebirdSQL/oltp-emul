@@ -339,3 +339,11 @@ file_name_this_host_info = no_host_info
 # Sample of its usage: curl.exe -F "name=%1" -F "file=@%2" http://some_external_site_as_storage
 
 #upload_report = 0
+
+# Total number of downloaded snapshots for storing in the folder !tmpdir!\snapshots_archive.
+# Batch scenario will keep in this folder only newest snapshots and remove old ones.
+# This setting is useful for regression investigations: you will not need to rebuild FB from sources,
+# just replace last tested FB snapshot with some of old ones. 
+# If this parameter is undefined or has value of ZERO then snapshots will NOT be stored on disk.
+
+max_snapshots_to_store=0
