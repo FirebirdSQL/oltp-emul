@@ -115,8 +115,6 @@ if errorlevel 1 (
   )
 )
 
-@echo off
-
 set urlbak=%url%
 
 for /f "tokens=4 delims=^>^<" %%a in ('findstr /i /c:"Firebird" %lst% ^| findstr /i /c:"%ptn4fbs%"') do (
@@ -142,6 +140,13 @@ if .%urlbak%.==.!url!. (
   echo #######  Download Firebird .7z-snapshot #######
   echo ###############################################
 ) >>%log%
+
+@rem Extract last token from full URL and obtain only name+extension of FB snapshot:
+echo url=!url!
+set snapfile=!url!
+echo Extract downloaded snapshot name and extension>>%log%
+call :get_snap_file_name !url! snapfile
+echo Result: !snapfile!>>%log%
 
 set run_cmd=wget.exe --tries=2 -o %tmp% --output-document=%zip% !url!
 
@@ -184,6 +189,43 @@ if errorlevel 1 (
   goto end
 ) else (
   echo Integrity test passed OK.
+)
+
+@rem 18-sep-2016. Save snapshot to be able futher search of regressions:
+set snapstore=!tmpdir!\snapshots_archive
+
+@rem 'max_snapshots_to_store' - from config
+if "%max_snapshots_to_store%"=="" (
+   set /a max_snapshots_to_store=0
+)
+if not "%max_snapshots_to_store%"=="0" (
+  echo Save FB snapshot for possible regression searches.>>%log%
+  if not exist !snapstore! md !snapstore! 2>>%log%
+  set run_cmd=copy %zip% !snapstore!\!snapfile!
+  echo !run_cmd!>>%log%
+  !run_cmd! 2>&1 1>>%log%
+  dir /-c !snapstore!\!snapfile! | findstr !snapfile! 2>&1 >>%log%
+
+  (
+    @echo Remove old snapshots from folder !tmpdir!\snapshots_archive
+    @echo Parsing result of 'dir /a-d /o-d !snapstore!' command, remove all lines starting from !max_snapshots_to_store!+1:
+    @echo To change number of stored snapshots goto config and update value of 'max_snapshots_to_store' parameter.
+  )>>%log%
+  set /a i=1
+  for /f "tokens=1-4" %%a in ('dir !snapstore! /-c /a-d /o-d ^| findstr /i /c:"firebird"') do (
+    if !i! LEQ %max_snapshots_to_store% ( 
+      echo !i! of %max_snapshots_to_store% %%d - keep>>%log%
+    ) else (
+      echo !i! of %max_snapshots_to_store% %%d - remove>>%log%
+      echo del !snapstore!\%%d 2>&1 1>>%log%
+    )
+    set /a i=!i!+1
+  )
+  if !i! EQU 1 echo Nothing to remove: no items in 'dir /a-d /o-d !snapstore!' result with more than !max_snapshots_to_store! lines.>>%log%
+  echo Current content of folder !snapstore!:>>%log%
+  dir /-c /a-d /o-d !snapstore! | findstr /i /c:"firebird" >>%log%
+) else (
+  echo Config parameter 'max_snapshots_to_store' is not defined or equal to zero. Snapshots are not preserved.>>%log%
 )
 
 (
@@ -712,6 +754,15 @@ echo.
 echo Check log in the file: %log%
 echo.
 goto end
+
+:get_snap_file_name
+    setlocal
+    set result=%~nx1
+    set result=!result: =*!
+    set result=!result:"=|!
+    endlocal&set "%~2=%result%"
+goto:eof
+
 
 :getFileDTS
   @rem http://www.dostips.com/DtTutoFunctions.php
