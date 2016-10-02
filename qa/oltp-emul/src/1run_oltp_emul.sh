@@ -84,6 +84,40 @@ msg_no_build_result() {
   exit 1
 }
 
+chk4crash() {
+    # Check for presense indications of FB crash in ERROR log of just completed ISQL.
+    # Sample of use:
+    # $run_isql 1>... 2>$tmperr
+    # chk4crash "$run_isql" "$tmperr" "$log4all"
+
+    local run_isql=$1
+    local tmperr=$2
+    local log4all=$3
+
+    local crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
+    local crashes_cnt
+    local msg
+
+    crashes_cnt=$(grep -i -c -e "$crash_pattern" $tmperr)
+    #echo tmperr=$tmperr
+    #echo crashes_cnt=$crashes_cnt
+    if [ $crashes_cnt -gt 0 ] ; then
+      msg="$(date +'%Y.%m.%d %H:%M:%S'). Connection problem found $crashes_cnt times, pattern = $crash_pattern."
+      echo $msg
+      echo $msg>>$log4all
+      echo Command: $run_isql
+      echo Command: $run_isql>>$log4all
+      echo ---------------------------------------------
+      cat $tmperr
+      echo ---------------------------------------------
+      cat $tmperr>>$log4all
+      echo Script is now terminated.
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      exit 1
+    fi
+}
 
 # -------------------------------  d b _ c r e a t e -----------------------------------
 
@@ -1282,8 +1316,14 @@ add_init_docs() {
   local tmpsql=$1
   local tmplog=$2
   local srv_frq=$3
+  local log4all=$4
+
   local run_isql
   t0=$(date +'%y%m%d_%H%M%S')
+
+  local crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
+  local crashes_cnt
+
   echo
   echo Begin of initial data population.
   echo Recalc index statistcs: at the start of every $srv_frq packet.
@@ -1296,6 +1336,7 @@ add_init_docs() {
   local prf=tmp_chk_docs_count
   local tmpchk=$tmpdir/$prf.sql
   local tmpclg=$tmpdir/$prf.log
+  local tmperr=$tmpdir/$prf.err
   while :
   do
 
@@ -1323,9 +1364,10 @@ add_init_docs() {
       echo -ne "$(date +'%Y.%m.%d %H:%M:%S'), start service SPs... "
       # --------------- perform service: srv_make*_total, recalc index statistics -------------
       cat $tmpchk>>$tmplog
-      run_isql="$fbc/isql $dbconn -i $tmpchk -c $init_buff -n -m -o $tmplog $dbauth"
+      run_isql="$fbc/isql $dbconn -i $tmpchk -c $init_buff -n $dbauth"
 
-      $run_isql
+      $run_isql 1>$tmplog 2>$tmperr
+      chk4crash "$run_isql" "$tmperr" "$log4all"
 
       echo -e "$(date +'%Y.%m.%d %H:%M:%S'), finish service SPs."
     fi
@@ -1335,9 +1377,10 @@ add_init_docs() {
     # Common application unit: create several documents
     # using .sql which was made in func gen_working_sql
     ###################################################
-    run_isql="$fbc/isql $dbconn -i $tmpsql -c $init_buff -m -m2 -o $tmplog $dbauth"
+    run_isql="$fbc/isql $dbconn -i $tmpsql -c $init_buff -n $dbauth"
 
-    $run_isql
+    $run_isql 1>$tmplog 2>$tmperr
+    chk4crash "$run_isql" "$tmperr" "$log4all"
 
     # result: one or more (in case of complex operations like sp_add_invoice_to_stock)
     # documents has been created; if some error occured, sequence g_init_pop has been
@@ -1352,14 +1395,8 @@ add_init_docs() {
 
     run_isql="$fbc/isql $dbconn -pag 0 -i $tmpchk -n $dbauth"
 
-    #echo Obtain current number of documents. Command to be run:
-    #echo $run_isql
-    #echo Script $tmpchk:
-    #echo --------------------------------------------
-    #cat $tmpchk
-    #echo --------------------------------------------
-
-    $run_isql 1>$tmpclg 2>&1
+    $run_isql 1>$tmpclg 2>$tmperr
+    chk4crash "$run_isql" "$tmperr" "$log4all"
 
     # result: file $tmpclg contains ONE row like this: new_docs=12345
     # now we can APPLY this row as it was SET command in batch and
@@ -1381,8 +1418,8 @@ add_init_docs() {
     k=$(( k+1 ))
 
   done
-  rm -f $tmpsql $tmplog $tmpchk $tmpclg
-  
+  rm -f $tmpsql $tmplog $tmpchk $tmpclg $tmperr
+
   echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
   echo
 } # end of add_init_docs()
@@ -1887,9 +1924,9 @@ if [ $init_docs -gt 0 ]; then
   # 4. Run just generated SQL: add new documents until their count less than $init_docs parameter:
   export srv_frq=10 # frequency of service procedures call (srv_make_invnt_saldo, srv_make_money_saldo, srv_recalc_idx_stat)
 
-  ######################################
-  add_init_docs $tmpsql $tmplog $srv_frq
-  ######################################
+  ###############################################
+  add_init_docs $tmpsql $tmplog $srv_frq $log4all
+  ###############################################
 
   msg="$(date +'%Y.%m.%d %H:%M:%S'). Setting FW to the config parameter 'create_with_fw' value: $create_with_fw"
   echo $msg
