@@ -180,7 +180,7 @@ echo Changing path: put %fbc% into HEAD of list.
 @rem #############################
 set build_was_cancelled=0
 
-call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled
+call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled %can_stop% %log4tmp%
 
 @rem Result: build_was_cancelled = 1 ==> previous building process was cancelled (found "SQLSTATE = HY008" in .err).
 
@@ -3254,50 +3254,75 @@ goto:eof
     echo.
     setlocal
 
-    @rem call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled
+    @rem call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled %can_stop% %log4tmp%
 
     set tmpdir=%1
     set fb=%2
-    set tmperr=%tmpdir%\%~n0_%fb%.err
-    call :repl_with_bound_quotes %tmperr% tmperr
 
     set msg=Previous launch of script that builds database
     set txt=###################################################################
+    @rem build_was_cancelled = parameter #3, to be changed HERE:
     set build_was_cancelled=0
+
+    set can_stop=%4
+    set log4prep=%5
+
+    set tmplog=%tmpdir%\%~n0_%fb%.tmp
+    set tmperr=%tmpdir%\%~n0_%fb%.err
+    call :repl_with_bound_quotes %tmperr% tmperr
+
 
     for /f "usebackq tokens=*" %%a in ('%tmperr%') do set size=%%~za
     if .!size!.==.. set size=0
     if !size! gtr 0 (
         findstr /i /c:"SQLSTATE = HY008" /c:"^C" %tmperr% 1>nul
         if not errorlevel 1 (
-            echo %txt%
-            echo %msg% was INTERRUPTED.
-            echo %txt%
-            echo.
-            echo Content of %tmperr%:
-            echo ++++++++++++++++++++
-            type %tmperr%
-            echo ++++++++++++++++++++
-            echo.
-            echo Database need to be recreated now.
+            (
+                echo %txt%
+                echo %msg% was INTERRUPTED.
+                echo %txt%
+                echo.
+                echo Content of %tmperr%:
+                echo ++++++++++++++++++++
+                type %tmperr%
+                echo ++++++++++++++++++++
+                echo.
+                echo Database need to be recreated now.
+            ) > %tmplog%
+            type %tmplog%
+            type %tmplog% >>%log4prep%
+            del %tmplog%
         ) else (
-            echo.
-            echo %txt%
-            echo %msg% finished with ERROR.
-            echo %txt%
-            echo.
-            echo Error log: %tmperr%
-            echo Its content:
-            echo ------------
-            findstr /r /v /c:"^[ 	]" /c:"^$" %tmperr%
-            echo ------------
-            echo Remove this file before restarting test.
-            echo.
+            (
+                echo.
+                echo %txt%
+                echo %msg% finished with ERROR.
+                echo %txt%
+                echo.
+                echo Error log: %tmperr%
+                echo Its content:
+                echo ------------
+                findstr /r /v /c:"^[ 	]" /c:"^$" %tmperr%
+                echo ------------
+                echo Remove this file before restarting test.
+                echo.
+            ) > %tmplog%
+            type %tmplog%
+            type %tmplog% >>%log4prep%
+            del %tmplog%
             if .%can_stop%.==.1. (
                 echo Press any key to FINISH this batch. . .
                 pause>nul
+                goto final
+            ) else (
+                (
+                    echo Batch %~f0 currently is working in non-interactive mode,
+                    echo file %tmperr% is preserved for possible further analysis.
+                ) > %tmplog%
+                type %tmplog%
+                type %tmplog% >>%log4prep%
+                del %tmplog%
             )
-            goto final
         )
     ) else (
         echo RESULT: no errors found that could rest from previous building database objects.
