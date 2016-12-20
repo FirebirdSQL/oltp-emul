@@ -39,9 +39,10 @@ if .%fbv%.==.25. (
 )
 
 set lst=%~n0.lst
-set tmp=%~n0.tmp
+set tmp=%~dpn0.tmp
 set zip=%~n0.fb-snapshot-%fbv%.7z
 set pdb=%~n0.fb-snapshot-%fbv%.pdb.7z
+
 set ptn4fbs=_x64.7z
 set ptn4pdb=_x64_pdb.7z
 
@@ -369,13 +370,77 @@ call :getFileDTS gen_vbs
 call :getFileDTS get_dts %log% archsuff
 call :getFileDTS del_tmp
 
+set failed_to_kill=1
+
 for /d %%i in ( %FB_SERVICES% ) do (
   del %~n0.err 2>nul
 
   for /f "tokens=3" %%k in ('REG.EXE query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\FirebirdServer%%i ^| findstr /i /c:"ImagePath"') do (
     set fn=%%k
     set fp=%%~dpk
+
+    @rem --- Added 20.12.2016 ---
+    @rem Check for processes 'firebird.exe' ('fb_inet_server.exe' for 2.5) that can remain running 
+    @rem after finished QA-tests-run daily batch for Classic mode, and kill them (they keep 'fbclient.dll' opened)
+    set fb_process=firebird.exe
     if .%fbv%.==.25. (
+        set fb_process=fb_inet_server.exe
+    )
+    set msg="Check for 'orphan' !fb_process! that can remain after last QA test in Classic mode."
+    call :sho !msg! %log%
+
+    wmic process where "name='!fb_process!'" get ProcessID, ExecutablePath | more | findstr /i /c:!fp! 2>&1 1>%tmp%
+    if not errorlevel 1 (
+        for /f "tokens=1-2 delims= " %%a in ('findstr /i /c:!fp! %tmp%') do (
+            set msg="Found running FB process, possibly remained after QA tests finish."
+            call :sho !msg! %log%
+
+            set msg="%%a, pid=%%b - will try to kill it."
+            call :sho !msg! %log%
+
+            set run_cmd=taskkill /pid %%b /t /f
+            call :sho "Command: !run_cmd!" %log%
+            !run_cmd! 2>&1 1>>%tmp%
+        )
+        set msg="Result of taskkill:"
+        call :sho !msg! %log%
+        type %tmp%
+        (
+            echo ------------------ start of list ---------------
+            type %tmp%
+            echo ------------------ end of list -----------------
+        ) >>%log%
+
+        set msg="Check that no more FB processes from !fp! home are running:"
+        call :sho !msg! %log%
+        (
+            echo ------------------ start of list ---------------
+            echo ### NO ROWS SHOULD BE HERE WITH !fb_process! ###
+            wmic process where "name='!fb_process!'" get ProcessID, ExecutablePath | more | findstr /i /c:!fp!
+            if not errorlevel 1 (
+                set failed_to_kill=1
+            ) else (
+                set failed_to_kill=0
+            )
+            echo ------------------ end of list -----------------
+        ) 2>&1 1>%tmp%
+        type %tmp%
+        type %tmp%>>%log%
+    ) else (
+        set msg="No running processes with name !fb_process! from home !fp! detected."
+        call :sho !msg! %log%
+        set failed_to_kill=0
+    )
+
+    if .!failed_to_kill!.==.1. (
+        set msg="Could NOT kill 'orphan' !fb_process! that remains after QA test in Classic mode. Batch terminated."
+        call :sho !msg! %log%
+        exit
+    )
+    @rem --- 20.12.2016 end of block for killing FB 'orphan' processes which could remain after QA run in Classic mode ---
+
+    if .%fbv%.==.25. (
+        @rem E:\FB25.TMPINSTANCE\bin ==> E:\FB25.TMPINSTANCE
         for %%m in ("!fp:~0,-1!") do set fp=%%~dpm
     )
     @rem Remove trailing backslash:
@@ -809,6 +874,19 @@ goto:eof
     set Params=%*
     for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
 goto:eof
+
+:sho
+    setlocal
+    set msg=%1
+    set log=%2
+    set tmp=!%1:"=!
+    set result=0
+    if not "!tmp!"=="!tmp: =!" set result=1
+    if .!result!.==.1. set msg=!msg:"=!
+    set txt=!date! !time! !msg!
+    @echo !txt!
+    @echo !txt!>>%log%
+endlocal & goto:eof
 
 :no_vers
     echo Syntax: %~n0.bat ^<firebird_version^>
