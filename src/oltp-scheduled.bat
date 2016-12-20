@@ -22,66 +22,74 @@ echo Result of parsing config: err_setenv=!err_setenv!
 set log=%tmpdir%\%~n0.log
 del %log% 2>nul
 
-cd ..\util
+if .%replace_instance%.==.1. (
+    cd ..\util
 
-@rem ###############################################
-@rem ###                                         ###
-@rem ###   D O W N L O A D   &   R E P L A C E   ###
-@rem ###                                         ###
-@rem ###############################################
+    @rem ###############################################
+    @rem ###                                         ###
+    @rem ###   D O W N L O A D   &   R E P L A C E   ###
+    @rem ###                                         ###
+    @rem ###############################################
 
-call fbreplace.bat %fbv% %log%
+    call fbreplace.bat %fbv% %log%
 
-cd /d %~dp0
+    cd /d %~dp0
 
-set FB_SERVICES=fb%fbv%_tmp
+    set FB_SERVICES=fb%fbv%_tmp
 
-for /d %%s in ( %FB_SERVICES% ) do (
-  echo %%s
-  echo.>>%log%
-  sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
-  if errorlevel 1 (
-    set msg=!date! !time!. Stopping service FirebirdServer%%s
-    echo !msg!
-    echo.>>%log%
-    echo !msg!>>%log%
-    set cmd_run=sc stop FirebirdServer%%s
-    echo !cmd_run!
-    echo !cmd_run!>>%log%
-    sc stop FirebirdServer%%s 1>>%log% 2>&1
-    @echo.
-    echo !date! !time!. Wait a few seconds. . .
-    echo !date! !time!. Wait a few seconds >>%log%
-
-    ping -n 6 127.0.0.1 1>nul
-
-    :: became broken 10.06.2015 (instant reply instead of wait), the reason not found: ping -n 1 -w 2000 1.1.1.1 1>nul 2>&1
-    echo !date! !time!. Check that service is really stopped:
-    echo !date! !time!. Check that service is really stopped:>>%log%
-    set cmd_run=sc query FirebirdServer%%s
-    echo !cmd_run!
-    echo !cmd_run!>>%log%
-    sc query FirebirdServer%%s>>%log%
-    sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
-    if errorlevel 1 (
-      set msg=!date! !time!. CAN NOT STOP SERVICE! Job terminated.
-      echo !msg!
-      echo !msg!>>%log%
-      exit
-    ) else (
-      set msg=!date! !time!. Service FirebirdServer%%s has been successfully stopped.
-      echo !msg!
+    for /d %%s in ( %FB_SERVICES% ) do (
+      echo %%s
       echo.>>%log%
-      echo !msg!>>%log%
+      sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
+      if errorlevel 1 (
+        set msg=!date! !time!. Stopping service FirebirdServer%%s
+        echo !msg!
+        echo.>>%log%
+        echo !msg!>>%log%
+        set cmd_run=sc stop FirebirdServer%%s
+        echo !cmd_run!
+        echo !cmd_run!>>%log%
+        sc stop FirebirdServer%%s 1>>%log% 2>&1
+        @echo.
+        echo !date! !time!. Wait a few seconds. . .
+        echo !date! !time!. Wait a few seconds >>%log%
+
+        ping -n 6 127.0.0.1 1>nul
+
+        :: became broken 10.06.2015 (instant reply instead of wait), the reason not found: ping -n 1 -w 2000 1.1.1.1 1>nul 2>&1
+        echo !date! !time!. Check that service is really stopped:
+        echo !date! !time!. Check that service is really stopped:>>%log%
+        set cmd_run=sc query FirebirdServer%%s
+        echo !cmd_run!
+        echo !cmd_run!>>%log%
+        sc query FirebirdServer%%s>>%log%
+        sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
+        if errorlevel 1 (
+          set msg=!date! !time!. CAN NOT STOP SERVICE! Job terminated.
+          echo !msg!
+          echo !msg!>>%log%
+          exit
+        ) else (
+          set msg=!date! !time!. Service FirebirdServer%%s has been successfully stopped.
+          echo !msg!
+          echo.>>%log%
+          echo !msg!>>%log%
+        )
+      ) else (
+        set msg=!date! !time!. Service already has been stopped.
+        echo !msg!
+        echo !msg!>>%log%
+      )
+      sc query FirebirdServer%%s>>%log%
     )
-  ) else (
-    set msg=!date! !time!. Service already has been stopped.
-    echo !msg!
-    echo !msg!>>%log%
-  )
-  sc query FirebirdServer%%s>>%log%
+
+) else (
+    echo SKIP replacement of FB instance - see config parameter 'replace_instance'>>%log%
 )
+
 @rem -------------------------------------
+@rem echo debug exit
+@rem exit
 
 echo !date! !time!. Start copy from etalon test database. 1>>%log%
 @echo on
@@ -91,6 +99,7 @@ echo !date! !time!. Start copy from etalon test database. 1>>%log%
 set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw__ON.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
 
 echo !cmd_run!
+
 echo !cmd_run!>>%log%
 cmd /c !cmd_run! 1>>%log% 2>&1
 
@@ -98,33 +107,39 @@ cmd /c !cmd_run! 1>>%log% 2>&1
 echo !date! !time!. Finish copy from etalon test database. 1>>%log%
 dir D:\OLTP-EMUL\oltp%fbv%-small.fdb | findstr /i /c:"oltp%fbv%-small.fdb" 1>>%log% 2>&1
 
-@rem -------------------------------------
+if .%replace_instance%.==.1. (
 
-for /d %%s in ( %FB_SERVICES% ) do (
-  set msg=!date! !time!. Starting service FirebirdServer%%s
-  echo !msg!
-  echo.>>%log%
-  echo !msg!>>%log%
-  
-  echo !date! !time!. Check point BEFORE starting instance: %%s>>%log%
-  
-  sc start FirebirdServer%%s 1>>%log% 2>&1
+    @rem -------------------------------------
 
-  echo !date! !time!. Check point AFTER starting  instance: %%s>>%log%
+    for /d %%s in ( %FB_SERVICES% ) do (
+      set msg=!date! !time!. Starting service FirebirdServer%%s
+      echo !msg!
+      echo.>>%log%
+      echo !msg!>>%log%
+      
+      echo !date! !time!. Check point BEFORE starting instance: %%s>>%log%
+      
+      sc start FirebirdServer%%s 1>>%log% 2>&1
 
-  ping -n 1 -w 800 1.1.1.1 1>nul 2>&1
-  echo !date! !time!. After pause:>>%log%
+      echo !date! !time!. Check point AFTER starting  instance: %%s>>%log%
 
-  sc query FirebirdServer%%s 1>>%log% 2>&1
-  sc query FirebirdServer%%s | findstr /i /c:"RUNNING" 1>nul 2>&1
-  if errorlevel 1 (
-    set msg=!date! !time!. ### FAILED TO EXECUTE ### start service command.
-  ) else (
-    set msg=!date! !time!. Service has been successfully started.
-  )
-  echo !msg!
-  echo !msg!>>%log%
+      ping -n 1 -w 800 1.1.1.1 1>nul 2>&1
+      echo !date! !time!. After pause:>>%log%
 
+      sc query FirebirdServer%%s 1>>%log% 2>&1
+      sc query FirebirdServer%%s | findstr /i /c:"RUNNING" 1>nul 2>&1
+      if errorlevel 1 (
+        set msg=!date! !time!. ### FAILED TO EXECUTE ### start service command.
+      ) else (
+        set msg=!date! !time!. Service has been successfully started.
+      )
+      echo !msg!
+      echo !msg!>>%log%
+
+    )
+
+) else (
+    echo SKIP stop and starting FB instance - see config parameter 'replace_instance'>>%log%
 )
 
 if NOT .%fbv%.==.25. (
