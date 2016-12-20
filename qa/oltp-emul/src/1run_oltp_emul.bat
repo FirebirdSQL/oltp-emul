@@ -1790,7 +1790,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=Internal routine: try_create_db.
+    set msg=!time! Internal routine: try_create_db.
     echo %msg% & echo %msg% >>%log4tmp%
 
     echo.
@@ -1987,7 +1987,7 @@ goto:eof
     setlocal
     
     echo.
-    set msg=Internal routine: make_db_objects.
+    set msg=!time! Internal routine: make_db_objects.
     echo %msg% & echo %msg% >>%log4tmp%
     echo.
 
@@ -2403,7 +2403,7 @@ goto:eof
 
     if .%chk_mode%.==.init_chk. (
         echo.
-        set msg=Internal routine: chk_stop_test.
+        set msg=!time! Internal routine: chk_stop_test.
         echo !msg! 
         echo !msg! >>%log4tmp%
         echo.
@@ -2501,7 +2501,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=Internal routine: show_db_and_test_params.
+    set msg=!time! Internal routine: show_db_and_test_params.
     echo !msg! 
     echo !msg! >>%log4tmp%
     echo.
@@ -2624,7 +2624,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=Internal routine: count_existing_docs.
+    set msg=!time! Internal routine: count_existing_docs.
     echo !msg! 
     echo !msg! >>%log4tmp%
     echo.
@@ -2724,7 +2724,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=Internal routine: run_init_pop.
+    set msg=!time! Internal routine: run_init_pop.
     echo !msg! 
     echo !msg! >>%log4tmp%
     echo.
@@ -3085,7 +3085,7 @@ goto:eof
 :change_db_attr
     setlocal
     echo.
-    set msg=Internal routine: change_db_attr.
+    set msg=!time! Internal routine: change_db_attr.
     echo !msg! 
     echo !msg! >>%log4tmp%
     echo.
@@ -3250,7 +3250,7 @@ goto:eof
 
 :check_for_prev_build_err
     echo.
-    echo Internal routine: check_for_prev_build_err.
+    echo !time! Internal routine: check_for_prev_build_err.
     echo.
     setlocal
 
@@ -3336,7 +3336,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=Internal routine: show_time_limits.
+    set msg=!time! Internal routine: show_time_limits.
     echo !msg! 
     echo !msg! >>%log4tmp%
     echo.
@@ -3561,7 +3561,7 @@ goto:eof
 
 :getfblst
     echo.
-    set msg=Internal routine: getfblst.
+    set msg=!time! Internal routine: getfblst.
 
     @rem call :getfblst %fb% fbc
     @rem                 ^    ^-------- this will be defined here: path to FB binaries on local machine.
