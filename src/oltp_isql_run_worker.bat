@@ -304,9 +304,7 @@ if .%sid%.==.1. (
     echo !msg!>>%log4all%
 
     echo %time%. Run: %run_get_fb_log% 1^>%fblog_start% 2^>%err%  >>%log4tmp%
-
     %run_get_fb_log% 1>%fblog_start% 2>%err%
-
     (
         echo %time%. Got:
         for /f "delims=" %%a in ('find /v /c "" %fblog_start%') do echo STDOUT: %%a (number of rows in extracted log^)
