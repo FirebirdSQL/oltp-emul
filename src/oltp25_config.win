@@ -347,3 +347,5 @@ file_name_this_host_info = no_host_info
 # If this parameter is undefined or has value of ZERO then snapshots will NOT be stored on disk.
 
 max_snapshots_to_store=0
+
+replace_instance = 1
