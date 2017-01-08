@@ -261,25 +261,12 @@ insert into settings(working_mode, mcode, svalue, description)
 insert into settings(working_mode, mcode, svalue, description)
               values(  'COMMON'
                       ,'HALT_TEST_ON_ERRORS'
-                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.'
+                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.5'
+                            ,',CK,'
                             ,',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
-                            ,',CK,'  -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
                           )
                       ,'Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode))'
                     );
-
--- LOG_PK_VIOLATION:
--- = '0' ==> REMOVE primary keys from tables doc_data, qdistr, qstorned, pdistr & pstorned
--- in order to get max possible performance (but only if HALT_TEST_ON_ERRORS does NOT
--- containing ',PK,');
--- = '1' ==> do NOT remove PK from these tables despite of these constraints actually
--- are NOT needed (they were added in early stage of test implementation).
--- Logging of PK violations see in sp SRV_LOG_DUPS_QD_QS
--- update settings set svalue='0' where mcode='LOG_PK_VIOLATION';
--- update settings set svalue='1' where mcode='LOG_PK_VIOLATION';
--- Removing PK from these tables see at the end of **THIS** script.
-insert into settings(working_mode, mcode,                      svalue,  init_on)
-              values('COMMON',     'LOG_PK_VIOLATION',   '0',     'db_prepare');
 
 -- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
 -- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
@@ -1339,8 +1326,9 @@ commit;
 -- REMOVE unneeded indices on field 'ID' for some tables if setting 'C_MINIMAL_PK_CREATION' = '1'
 -- Prevent PK for: qdistr,qstorned,pdistr,pstorned - only if setting
 -- 'HALT_TEST_ON_ERRORS' containing 'PK'
+set list on;
 set term ^;
-execute block as
+execute block returns(add_info varchar(255)) as
     declare v_tab_name dm_dbobj;
     declare v_idx_name dm_dbobj;
     declare v_ctr_type dm_dbobj;
@@ -1348,19 +1336,17 @@ execute block as
     declare v_run_ddl varchar(128);
     declare v_rel_list varchar(255);
     declare v_halt_on_err_list dm_setting_value = ',,';
-    declare v_log_pk_violation dm_setting_value = '1';
 begin
-    select s.svalue from settings s where s.mcode='HALT_TEST_ON_ERRORS'
+    select upper(s.svalue) from settings s where s.mcode='HALT_TEST_ON_ERRORS'
     into v_halt_on_err_list; -- ',CK,'; ',CK,PK,'
 
-    select s.svalue from settings s where s.mcode='LOG_PK_VIOLATION'
-    into v_log_pk_violation; -- '1' or '0'
-
-    if ( v_log_pk_violation = '1' or v_halt_on_err_list containing ',PK,'
-       ) then
-      --#####
+    if ( v_halt_on_err_list containing upper(',PK,') ) then
+    begin
+        add_info = 'Setting ''HALT_TEST_ON_ERRORS'' contains ''PK'', we have to preserve PK/UK in tables even if they are unneeded.';
+        --#####
         exit; -- PRESERVE PKs!
-      --#####
+        --#####
+    end
 
     -- PK violation can occur only in these tables.
     -- If we have decided do not watch for PK violations than corresp. constraints
@@ -1393,12 +1379,15 @@ begin
                 'drop index '||trim(v_idx_name)
             );
         execute statement(v_run_ddl) with autonomous transaction;
+        add_info = 'DROP unneeded primary/unique constraint from table '||trim(v_tab_name);
+        suspend;
     end
 
 end
 ^
 set term ;^
 commit;
+set list off;
 
 -- moved into 1build_oltp_emul.bat: execute procedure init_autogen_qdistr_tables; -- 29.08.2015, branch: create_with_split_heavy_tabs
 
