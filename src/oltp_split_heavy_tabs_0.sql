@@ -325,7 +325,7 @@ Z_GET_DEPENDEND_DOCS
             begin
                        v_add_comment = 1;
                        v_line_repl = v_lf
-                               || 'declare "!ACHTUNG_README_1!" VARCHAR(255) = ''### DO NOT EDIT: this source if result of auto post-handling. ### '';' || v_lf
+                               || 'declare "!ACHTUNG_README_1!" VARCHAR(255) = ''### DO NOT EDIT: this source is result of auto post-handling. ### '';' || v_lf
                                || 'declare "!ACHTUNG_README_2!" VARCHAR(255) = ''### References to TABLES "QDistr", "QStorned" have been restored instead of views.'';' || v_lf || v_lf 
                                || v_line_repl;
             end

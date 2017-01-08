@@ -2257,7 +2257,7 @@ goto:eof
 
     (
         echo %time%. Got:
-        for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" %tmplog%') do echo STDOUT: %%a
+        for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" /c:"add_info" %tmplog%') do echo STDOUT: %%a
         for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
     ) 1>>%log4tmp% 2>&1
 
