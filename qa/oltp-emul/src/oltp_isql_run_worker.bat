@@ -2154,8 +2154,12 @@ if .%sid%.==.1. (
                     findstr /i /c:"success" !upload_log! >nul
                     if not errorlevel 1 (
                       echo Final HTML report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                      del !final_htm!
-                      del !final_txt!
+                      if /i .%remove_isql_logs%.==.never. (
+                          echo Reports are preserved on disk, see config setting 'remove_isql_logs' >>!upload_log!
+                      else (
+                          del !final_htm!
+                          del !final_txt!
+                      )
                     ) 
                 )
               )
@@ -2172,7 +2176,11 @@ if .%sid%.==.1. (
                     findstr /i /c:"success" !upload_log! >nul
                     if not errorlevel 1 (
                       echo Final TEXT report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                      del !final_txt!
+                      if /i .%remove_isql_logs%.==.never. (
+                          echo Report is preserved on disk, see config setting 'remove_isql_logs' >>!upload_log!
+                      else (
+                          del !final_txt!
+                      )
                     ) 
                 )
             )
