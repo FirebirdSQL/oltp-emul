@@ -143,6 +143,7 @@ set varlist=%varlist%,wait_for_copy,warm_time,test_time,idle_time,remove_isql_lo
 set varlist=%varlist%,create_with_split_heavy_tabs,create_with_separate_qdistr_idx
 set varlist=%varlist%,create_with_compound_columns_order,create_with_debug_objects
 set varlist=%varlist%,working_mode,wait_if_not_exists,file_name_this_host_info
+set varlist=%varlist%,used_in_replication
 
 if .%is_embed%.==.0. (
     set varlist=%varlist%,usr,pwd,host,port
@@ -492,9 +493,32 @@ if errorlevel 1 (
              echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
              echo         end
              echo     end
+
+             echo     begin
+             echo         -- Update in table SETTINGS value of config parameter `used_in_replication`.
+             echo         -- ::: NB ::: When test is launched from several hosts this DML can fail
+             echo         -- with update conflict or "deadlock" exception, so we have to suppress it:
+             echo         update settings set svalue = upper('%used_in_replication%'^)
+             echo         where working_mode=upper('init'^) and mcode=upper('used_in_replication'^);
+             echo         if (row_count = 0^) then
+             echo             exception ex_record_not_found
+             if NOT .%fb%.==.25. (
+             echo             using ('settings', 'working_mode=''INIT'' and mcode=''USED_IN_REPLICATION'''^)
+             )
+             echo         ;
+             echo     when any do 
+             echo         begin
+             echo            if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ^) ^) then exception;
+             echo         end
+             echo     end
+
              echo end ^^
              echo set term ;^^
              echo commit;
+             echo.
+             echo -- Update DDL of tables according to current setting of 'used_in_replication' config parameter:
+             echo in "%~dp0oltp_replication_DDL.sql";
+
         )>%tmpsql%
         
         set run_isql=%fbc%\isql
@@ -502,7 +526,7 @@ if errorlevel 1 (
         
         set run_isql=!run_isql! %dbconn% %dbauth% -i %tmpsql% -q -n -nod
         echo %time%. Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  >>%log4tmp%
-        
+
         %run_isql% 1>%tmpclg% 2>%tmperr%
         
         (
@@ -2160,6 +2184,12 @@ goto:eof
             echo                   ^);
         @rem -- )
 
+        @rem 11.01.2017
+        echo -- Update `settings` table with value of config parameter `used_in_replication`.
+        echo update settings set svalue = upper('%used_in_replication%'^)
+        echo where working_mode=upper('init'^) and mcode=upper('used_in_replication'^);
+
+
         echo commit;
 
         @rem Value of %tmpdir% can be enclosed, so we have to 'inject' name of temporary file
@@ -2227,6 +2257,13 @@ goto:eof
             echo commit;
         )
         echo.
+        
+        @rem 11.01.2016
+        echo out;
+
+        echo -- Update DDL of tables according to current setting of 'used_in_replication' config parameter:
+        echo in "%~dp0oltp_replication_DDL.sql";
+        echo.
         echo -- Finish building process: insert custom data to lookup tables:
         echo in "%~dp0oltp_data_filling.sql";
 
@@ -2239,6 +2276,7 @@ goto:eof
     echo +++++++++++++++++++++++++++++++
     type %tmpsql%
     echo +++++++++++++++++++++++++++++++
+
 
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem :::    B u i l d     D a t a b a s e   -   c r e a t e    i t s    o b j e c t s    ::::
@@ -2260,6 +2298,7 @@ goto:eof
         for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" /c:"add_info" %tmplog%') do echo STDOUT: %%a
         for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
     ) 1>>%log4tmp% 2>&1
+
 
     @rem operation was cancelled in 2.5: SQLSTATE = HY008 or `^C`
     @rem operation was cancelled in 3.0: SQLSTATE = HY008

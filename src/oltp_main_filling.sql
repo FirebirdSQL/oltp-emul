@@ -213,6 +213,11 @@ insert into settings(working_mode, mcode,           svalue)
 -- MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
 -- HEAVY_01
 
+-- ::: NB ::: This record is created here only as 'stub'.
+-- Value of this variable will be replaced with config parameter 'used_in_replication'
+--  by 1run_oltp_emul.bat (.sh) every time test is launched.
+insert into settings(working_mode, mcode,                 svalue)
+              values('INIT',       'USED_IN_REPLICATION', '0');
 
 -- List of units for which we want to gather info from mon$table_stats.
 -- Leave this INSERT statement with svalue = ',,'. 
@@ -1398,8 +1403,7 @@ set list off;
 commit;
 -- #############################################################################
 -- End of script oltp_main_filling.sql; next to be run: 
--- (common for both FB 2.5 and 3.0)
--- 1) if config parameter 'create_with_split_heavy_tabs' = 1 then oltp_autogen_ddl.sql 
--- 2) else oltp_data_filling.sql
+-- oltp_split_heavy_tabs_<N>.sql, 
+-- where <N> = value of config parameter 'create_with_split_heavy_tabs' (0 or 1)
 -- #############################################################################
 

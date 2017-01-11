@@ -22,7 +22,7 @@
 # If FB binaries are in directory like "C:\Program files (x86)\Firebird 2.5\bin" 
 # then make copy of this folder to something like C:\fb25\bin etc.
 
-fbc  = C:\MIX\firebird\fb25\bin
+fbc  = C:\fb\25sc\bin
 
 # Alias or full path and file name of database.
 # If you want this database be created by test itself, specify it as
@@ -33,13 +33,14 @@ fbc  = C:\MIX\firebird\fb25\bin
 #
 # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
 
-dbnm = C:\MIX\firebird\OLTPTEST\oltp25.fdb
+#dbnm = C:\FBTESTING\OLTP-EMUL\testdb\oltp25.fdb
+dbnm = C:\FBTESTING\OLTP-EMUL\testdb\oltp25_main.fdb 
 
 # Parameters for remote connection and authentication.
 # Will be ignored by command scenario if FB runs in embedded mode.
 
 host = localhost
-port = 3255
+port = 4257
 usr =  SYSDBA
 pwd =  masterke
 
@@ -71,12 +72,12 @@ working_mode = small_03
 # will finish and before all following operations will be measured:
 # Recommended value: at least 30 for SATA, 10 for SSD storage.
 
-warm_time = 30
+warm_time = 0
 
 # Limit (in minutes) to measure operations before test autostop itself:
 # Recommended value: at least 60
 
-test_time = 60
+test_time = 30
 
 # Number of seconds between transactions for pause in each working session
 # Default: 0 - no pauses, subsequent Tx starts immediatelly after commit.
@@ -129,7 +130,7 @@ is_embed = 0
 
 # Recommended value: if_no_severe_errors
 
-remove_isql_logs = if_no_severe_errors
+remove_isql_logs = never
 
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -196,7 +197,7 @@ init_buff = 32768
 # Valid options for create_with_fw are sync | async
 # Value of create_with_sweep should be not less than zero.
 
-create_with_fw = sync
+create_with_fw = async
 
 create_with_sweep = 20000
 
@@ -214,7 +215,7 @@ wait_if_not_exists = 0
 # be added there at the end-point of building process. If this record is found, test will use 
 # existing database and following parameters will be IGNORED.
 
-wait_after_create = 0
+wait_after_create = 1
 
 # Number of documents, total of all types, for initial data population.
 # Command scenario will compare number of existing document with this
@@ -223,7 +224,7 @@ wait_after_create = 0
 # 1. For benchmark purposes - at least 30000.
 # 2. For regular running on scheduled basis - at least 1000.
 
-init_docs = 101
+init_docs = 3000
 
 # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
 # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
@@ -231,7 +232,7 @@ init_docs = 101
 # this database to 'origin' state. This can save time because of avoiding need
 # to create <init_docs> again:
 
-wait_for_copy = 0
+wait_for_copy = 1
 
 # Do we want to create some DEBUG objects (tables, views and procedures)
 # in order to:
@@ -256,7 +257,7 @@ create_with_debug_objects = 1
 # 1 = USE several tables with the same structure in order to split heavy workload on them.
 # Recommended value: nope (choose yourself and compare).
 
-create_with_split_heavy_tabs = 0
+create_with_split_heavy_tabs = 1
 
 # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
 # compound index or two separate indices.
@@ -320,7 +321,7 @@ file_name_with_test_params = regular
 # CHANGE this value to some useful info about host location, 
 # hardware specifics, FB instance etc.
 
-file_name_this_host_info = no_host_info
+file_name_this_host_info = pc_cpu_3ghz_ram_6gb
 
 # When this setting is defined batch will send final report to required e-mail using console
 # client POSTIE.EXE with arguments that are defined here plus add auto generated subject and 
@@ -349,3 +350,16 @@ file_name_this_host_info = no_host_info
 max_snapshots_to_store=0
 
 replace_instance = 1
+
+# Used in `oltp-scheduled.bat`: name of etalon DB which serves as source 
+# for copy to work DB before every new test start:
+etalon_dbnm = E:\OLTP-EMUL\oltp25-docs_100000-fw__ON.fdb
+
+# If you plan this database work in replication process, one need to add PK constraints 
+# to all persistent tables that can be changed during test work.
+# Assign value of following parameter to 1 in order all necessary changes be added to tables DDL
+# (primary keys and triggers for some of tables).
+# Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
+# This parameter can be changed 'on the fly': database recreation is NOT required, but in case
+# when database has valuable size, changes will be applied not instantly.
+used_in_replication = 1
