@@ -1017,7 +1017,7 @@ commit;
 
 -- Log for performance and errors (filled via autonom. tx if exc`eptions occur)
 recreate table perf_log(
-   id dm_idb -- value from sequence where record has been added into GTT tmp$perf_log
+   id dm_idb not null -- value from sequence where record has been added into GTT tmp$perf_log; not null -- added 11.01.2017, for possible replication (PK constraint is required)
   --,id2 bigint -- value from sequence where record has been written from tmp$perf_log into fixed table perf_log (need for debug)
   ,unit dm_unit -- name of executed SP
   ,exc_unit char(1) -- was THIS unit the place where exception raised ? yes ==> '#'
@@ -3901,6 +3901,7 @@ as
     declare v_gen_inc_last_nt dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_nt)
     declare v_this dm_dbobj = 'sp_kill_qstorno_ret_qs2qd';
     declare v_call dm_unit; -- do NOT use `dm_dbobj`! This caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
+    declare v_halt_on_pk_viol smallint;
     declare v_info dm_info;
     declare v_suffix dm_info;
     declare i int  = 0;
@@ -3993,6 +3994,10 @@ begin
     select result from fn_mcode_for_oper(:a_old_optype) into v_doc_pref;
     select result from fn_oper_retail_realization into v_oper_retail_realization;
 
+    -- move evaluation outside from cursor loop:
+    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,', 1, 0);
+
+
     select r.rcv_optype_id
     from rules_for_qdistr r
     where
@@ -4073,7 +4078,7 @@ begin
 
             v_suffix = ', id=' || :v_id || ', doc_id=' || :v_doc_id;
 
-            if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+            if ( v_halt_on_pk_viol = 1 ) then
             begin
                 -- debug info for logging in srv_log_dups_qd_qs if PK
                 -- violation will occur on INSERT INTO QDISTR statement
@@ -4100,7 +4105,7 @@ begin
             else
                 delete from v_qstorno_name_for_del where current of c_ret_qs2qd_by_snd;
 
-            if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+            if ( v_halt_on_pk_viol = 1 ) then
             begin
                 rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_OK_DEL_QSTORNO_ID', v_id);
                 execute procedure sp_add_perf_log(0, v_call, null, 'deleted OK');
@@ -4146,7 +4151,7 @@ begin
                 ,:v_rcv_retail
             );
 
-            if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+            if ( v_halt_on_pk_viol = 1 ) then
             begin
                 rdb$set_context('USER_TRANSACTION','DBG_RETQS2QD_OK_INS_QDISTR_ID', v_id);
                 execute procedure sp_add_perf_log(0, v_call, null, 'inserted OK');
@@ -6527,7 +6532,7 @@ commit;
 create or alter view z_current_test_settings as
 select s.mcode as setting_name, s.svalue as setting_value, 'init' as stype
 from settings s
-where s.working_mode='INIT' and s.mcode='WORKING_MODE'
+where s.working_mode='INIT' and s.mcode in ('WORKING_MODE', 'USED_IN_REPLICATION')
 
 UNION ALL
 
@@ -7396,6 +7401,7 @@ as
     declare v_next_rcv_op type of dm_idb;
     declare v_this dm_dbobj = 'sp_make_qty_storno';
     declare v_call dm_unit; -- do NOT use `dm_dbobj`! This caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
+    declare v_halt_on_pk_viol smallint;
     declare v_info dm_info;
     declare v_rows int = 0;
     declare v_lock int = 0;
@@ -7529,6 +7535,9 @@ begin
     where r.snd_optype_id = :a_optype_id
     into v_next_rcv_op;
 
+    -- move evaluation outside from cursor loop:
+    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,', 1, 0);
+
     v_call = v_this;
     -- doc_list.id must be defined PRELIMINARY, before cursor that handles with qdistr:
     v_dh_new_id = gen_id(g_common, 1);
@@ -7657,7 +7666,7 @@ begin
                 -- fetch old fields data (which is to be moved into QStorned) into declared vars:
                 if ( v_storno_sub = 1 ) then
                     begin
-                        if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                        if ( v_halt_on_pk_viol = 1) then
                         begin
                             v_call = v_this || ':try_del_qdsub1';
                             execute procedure sp_add_perf_log(1, v_call, null, v_info); -- 10.02.2015
@@ -7666,7 +7675,7 @@ begin
     
                         delete from v_qdistr_source_1 q where current of c_make_amount_distr_1; --- lock_conflict can occur here
     
-                        if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                        if ( v_halt_on_pk_viol = 1) then
                         begin
                             rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_DEL_QD_ID', v_cq_id);
                             execute procedure sp_add_perf_log(0, v_call, null, 'c_make_amount_distr_1: deleted OK');
@@ -7674,8 +7683,7 @@ begin
                     end --  v_storno_sub = 1
                 else
                     begin
-    
-                        if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                        if ( v_halt_on_pk_viol = 1) then
                         begin
                             v_call = v_this || ':try_del_qdsub2';
                             execute procedure sp_add_perf_log(1, v_call, null, v_info);
@@ -7685,7 +7693,7 @@ begin
                         -- When config parameter 'create_with_split_heavy_tabs' is 1 then 'v_qdistr_source_2' should be changed to 'XQD_*'
                         delete from v_qdistr_source_2 q where current of c_make_amount_distr_2; --- lock_conflict can occur here
     
-                        if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                        if ( v_halt_on_pk_viol = 1) then
                         begin
                             rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB2_OK_DEL_QD_ID', v_cq_id);
                             execute procedure sp_add_perf_log(0, v_call, null, 'c_make_amount_distr_2: deleted ok');
@@ -7698,7 +7706,7 @@ begin
                     -- iter=1: v_id = 12345 - (100-1); iter=2: 12345 - (100-2); ...
                     v_id = v_gen_inc_last_qd - ( c_gen_inc_step_qd - v_gen_inc_iter_qd );
     
-                    if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                    if ( v_halt_on_pk_viol = 1) then
                     begin
                         -- debug info for logging in srv_log_dups_qd_qs if PK
                         -- violation will occur on INSERT INTO QSTORNED statement
@@ -7732,7 +7740,7 @@ begin
                         :v_cq_snd_retail
                     );
     
-                    if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                    if ( v_halt_on_pk_viol = 1) then
                     begin
                         rdb$set_context('USER_TRANSACTION','DBG_MAKE_STSUB1_OK_INS_QD_ID', v_id);
                         execute procedure sp_add_perf_log(0, v_call, null, 'v_qdistr_target_1: inserted OK');
@@ -7744,7 +7752,7 @@ begin
                 v_inserting_table = 'qstorned';
                 v_id =  v_cq_id;
     
-                if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                if ( v_halt_on_pk_viol = 1) then
                 begin
                     -- debug info for logging in srv_log_dups_qd_qs if PK
                     -- violation will occur on INSERT INTO QSTORNED statement
@@ -7794,7 +7802,7 @@ begin
                     );
     
     
-                if ( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,' ) then
+                if ( v_halt_on_pk_viol = 1) then
                 begin
                     rdb$set_context('USER_TRANSACTION','DBG_MAKE_QSTORN_OK_INS_QS_ID', v_id);
                     execute procedure sp_add_perf_log(0, v_call, null, 'inserted OK');

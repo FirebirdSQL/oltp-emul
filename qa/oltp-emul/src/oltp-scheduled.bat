@@ -16,11 +16,13 @@ set addi_args=%3
 set err_setenv=0
 call :readcfg oltp%fbv%_config.win !err_setenv!
 
-@rem call :readcfg oltp%fbv%_config.win
-echo Result of parsing config: err_setenv=!err_setenv!
-
+set msg=Result of parsing config: err_setenv=!err_setenv!
 set log=%tmpdir%\%~n0.log
+set tmp=%tmpdir%\%~n0.tmp
 del %log% 2>nul
+del %tmp% 2>nul
+
+call :sho "!msg!" !log!
 
 if .%replace_instance%.==.1. (
     cd ..\util
@@ -42,110 +44,140 @@ if .%replace_instance%.==.1. (
       echo.>>%log%
       sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
       if errorlevel 1 (
-        set msg=!date! !time!. Stopping service FirebirdServer%%s
-        echo !msg!
-        echo.>>%log%
-        echo !msg!>>%log%
+        set msg=Stopping service FirebirdServer%%s
+        call :sho "!msg!" !log!
+
         set cmd_run=sc stop FirebirdServer%%s
-        echo !cmd_run!
-        echo !cmd_run!>>%log%
-        sc stop FirebirdServer%%s 1>>%log% 2>&1
-        @echo.
-        echo !date! !time!. Wait a few seconds. . .
-        echo !date! !time!. Wait a few seconds >>%log%
+        call :sho "!cmd_run!" !log!
+
+        @rem sc stop FirebirdServer%%s 1>>%log% 2>&1
+        cmd /c !cmd_run! 1>>%log% 2>&1
+
+        set msg=Wait a few seconds
+        call :sho "!msg!" !log!
 
         ping -n 6 127.0.0.1 1>nul
 
         :: became broken 10.06.2015 (instant reply instead of wait), the reason not found: ping -n 1 -w 2000 1.1.1.1 1>nul 2>&1
-        echo !date! !time!. Check that service is really stopped:
-        echo !date! !time!. Check that service is really stopped:>>%log%
+        set msg=Check that service is really stopped
+        call :sho "!msg!" !log!
+
         set cmd_run=sc query FirebirdServer%%s
-        echo !cmd_run!
-        echo !cmd_run!>>%log%
-        sc query FirebirdServer%%s>>%log%
-        sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
+        call :sho "!cmd_run!" !log!
+
+        @rem sc query FirebirdServer%%s>>%log%
+        @rem sc query FirebirdServer%%s | findstr /i /c:"STOPPED" 1>nul 2>&1
+
+        cmd /c !cmd_run! 1>>%log% 2>&1
+        cmd /c !cmd_run! | findstr /i /c:"STOPPED" 1>nul 2>&1
         if errorlevel 1 (
-          set msg=!date! !time!. CAN NOT STOP SERVICE! Job terminated.
-          echo !msg!
-          echo !msg!>>%log%
-          exit
+            set msg=CAN NOT STOP SERVICE. Job terminated.
+            call :sho "!msg!" !log!
+            goto final
         ) else (
-          set msg=!date! !time!. Service FirebirdServer%%s has been successfully stopped.
-          echo !msg!
-          echo.>>%log%
-          echo !msg!>>%log%
+            set msg=SUCCESS: service FirebirdServer%%s has been stopped.
+            call :sho "!msg!" !log!
         )
       ) else (
-        set msg=!date! !time!. Service already has been stopped.
-        echo !msg!
-        echo !msg!>>%log%
+          set msg=Service already has been stopped.
+          call :sho "!msg!" !log!
       )
-      sc query FirebirdServer%%s>>%log%
+      sc query FirebirdServer%%s 1>>%log% 2>&1
     )
 
 ) else (
-    echo SKIP replacement of FB instance - see config parameter 'replace_instance'>>%log%
+    set msg=SKIP replacement of FB instance - see config parameter 'replace_instance'
+    call :sho "!msg!" !log!
 )
 
 @rem -------------------------------------
-@rem echo debug exit
-@rem exit
 
-echo !date! !time!. Start copy from etalon test database. 1>>%log%
-@echo on
-@rem 50 Gb: copy E:\OLTP-EMUL\oltp30_050gb.fdb D:\OLTP-EMUL\oltp30_050gb.fdb
-@rem 101 Gb: copy E:\OLTP-EMUL\oltp30_100gb.fdb D:\OLTP-EMUL\oltp30_100gb.fdb
+del !dbnm! 2>nul
+if exist !dbnm! (
+  set msg="Can NOT delete file !dbnm! which is to be copy of etalon DB. Job terminated."
+  call :sho "!msg!" !log!
+  goto final
+)
 
-set cmd_run=copy E:\OLTP-EMUL\oltp%fbv%-docs_50000-fw__ON.fdb D:\OLTP-EMUL\oltp%fbv%-small.fdb
+set msg=Start copy from etalon test database.
+call :sho "!msg!" !log!
 
-echo !cmd_run!
-
-echo !cmd_run!>>%log%
+set cmd_run=copy /v /y /b !etalon_dbnm! !dbnm!
+call :sho "!cmd_run!" !log!
 cmd /c !cmd_run! 1>>%log% 2>&1
 
-@echo off
-echo !date! !time!. Finish copy from etalon test database. 1>>%log%
-dir D:\OLTP-EMUL\oltp%fbv%-small.fdb | findstr /i /c:"oltp%fbv%-small.fdb" 1>>%log% 2>&1
+set msg=Finish copy from etalon test database.
+call :sho "!msg!" !log!
+
+for /f "usebackq" %%a in ('!dbnm!') do (
+  echo Name of copy: %%~nxa, size of copy: %%~za 1>>%log%
+)
 
 if .%replace_instance%.==.1. (
 
     @rem -------------------------------------
 
     for /d %%s in ( %FB_SERVICES% ) do (
-      set msg=!date! !time!. Starting service FirebirdServer%%s
-      echo !msg!
-      echo.>>%log%
-      echo !msg!>>%log%
-      
-      echo !date! !time!. Check point BEFORE starting instance: %%s>>%log%
-      
-      sc start FirebirdServer%%s 1>>%log% 2>&1
 
-      echo !date! !time!. Check point AFTER starting  instance: %%s>>%log%
-
-      ping -n 1 -w 800 1.1.1.1 1>nul 2>&1
-      echo !date! !time!. After pause:>>%log%
-
-      sc query FirebirdServer%%s 1>>%log% 2>&1
-      sc query FirebirdServer%%s | findstr /i /c:"RUNNING" 1>nul 2>&1
+      set cmd_run=sc query FirebirdServer%%s
+      call :sho "!cmd_run!" !log!
+      cmd /c !cmd_run! 1>>%log% 2>&1
+      cmd /c !cmd_run! | findstr /i /c:"RUNNING" 1>nul 2>&1
       if errorlevel 1 (
-        set msg=!date! !time!. ### FAILED TO EXECUTE ### start service command.
-      ) else (
-        set msg=!date! !time!. Service has been successfully started.
-      )
-      echo !msg!
-      echo !msg!>>%log%
 
+          set msg=Starting service FirebirdServer%%s
+          call :sho "!msg!" !log!
+          
+          set cmd_run=sc start FirebirdServer%%s 
+          call :sho "!cmd_run!" !log!
+
+          cmd /c !cmd_run! 1>>%log% 2>&1
+
+          set msg=Check point AFTER starting FirebirdServer%%s
+          call :sho "!msg!" !log!
+
+          set msg=Make small delay while  command 'sc start' is launched.
+          call :sho "!msg!" !log!
+          
+          ping -n 1 -w 800 1.1.1.1 1>nul 2>&1
+
+          set msg=Check state of service after delay:
+          call :sho "!msg!" !log!
+
+          set cmd_run=sc query FirebirdServer%%s
+          call :sho "!cmd_run!" !log!
+          cmd /c !cmd_run! 1>>%log% 2>&1
+          cmd /c !cmd_run! | findstr /i /c:"RUNNING" 1>nul 2>&1
+          if errorlevel 1 (
+            set msg=### FAILED TO START SERVICE ###. Job terminated.
+            call :sho "!msg!" !log!
+            goto final
+          ) else (
+            set msg=SUCCESS. Service has been started.
+            call :sho "!msg!" !log!
+          )
+       ) else (
+           set msg=Service FirebirdServer%%s already is RUNNING. Starting command can be SKIPPED.
+           call :sho "!msg!" !log!
+       )
     )
 
 ) else (
-    echo SKIP stop and starting FB instance - see config parameter 'replace_instance'>>%log%
+    set msg=SKIP stop and starting FB instance - see config parameter 'replace_instance'
+    call :sho "!msg!" !log!
 )
 
 if NOT .%fbv%.==.25. (
-    echo !date! !time!. Applying 'gfix -icu' for adjust database with existing ICU version... 1>>%log%
-    %fbc%\gfix.exe -icu %host%/%port%:%dbnm% -user %usr% -password %pwd% 1>>%log% 2>&1
-    echo !date! !time!. Done.
+    set msg=Applying 'gfix -icu' for adjust database with existing ICU version.
+    call :sho "!msg!" !log!
+
+    set cmd_run=%fbc%\gfix.exe -icu %host%/%port%:%dbnm% -user %usr% -password %pwd%
+    call :sho "!cmd_run!" !log!
+
+    cmd /c !cmd_run! 1>>%log% 2>&1
+
+    set msg=Done.
+    call :sho "!msg!" !log!
 )
 
 (
@@ -165,7 +197,7 @@ if NOT .%fbv%.==.25. (
 
 E:\OLTP-EMUL\src\1run_oltp_emul.bat %fbv% %isql_sessions_count% %addi_args%
 
-goto end
+goto final
 
 :readcfg
     set cfg=%1
@@ -208,6 +240,23 @@ goto:eof
     for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
 goto:eof
 
+:sho
+    setlocal
+    set msg=%1
+    set log=%2
+    set tmp=!%1:"=!
+    set result=0
+    if not "!tmp!"=="!tmp: =!" set result=1
+    if .!result!.==.1. set msg=!msg:"=!
+    set txt=!date! !time! !msg!
+    @echo !txt!
+    @echo !txt!>>%log%
+endlocal & goto:eof
+
+:haltHelper
+()
+exit /b
+
 :no_vers
     echo Syntax: %~n0.bat ^<firebird_version^> [ ^<number_of_ISQL_sessions^> ]
     echo Where:  ^<firebird_version^> = 25 ^| 30 ^| 40 - mandatory argument
@@ -215,4 +264,5 @@ goto:eof
     echo Press any key. . .
     pause >nul
 
-:end
+:final
+    call :haltHelper 2> nul

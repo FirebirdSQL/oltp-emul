@@ -392,7 +392,7 @@ from rdb$database
 ;
 commit;
 
--- #############################################################################
--- End of script oltp_split_heavy_tabs_0.sql; next to be run:  oltp_data_filling.sql
--- (common for both FB 2.5 and 3.0)
--- #############################################################################
+-- ##########################################################
+-- End of script oltp_split_heavy_tabs_0.sql; next to be run: 
+-- oltp_replication_DDL.sql (common for both FB 2.5 and 3.0)
+-- ##########################################################
