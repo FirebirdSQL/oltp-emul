@@ -386,6 +386,13 @@ for /d %%i in ( %FB_SERVICES% ) do (
     if .%fbv%.==.25. (
         set fb_process=fb_inet_server.exe
     )
+    set msg="Check wmic info for CPU and memory"
+    call :sho !msg! %log%
+    (
+        wmic cpu get Name | more 
+        wmic memphysical get MaxCapacity  | more 
+    ) 2>&1 1>>%log%
+
     set msg="Check for 'orphan' !fb_process! that can remain after last QA test in Classic mode."
     call :sho !msg! %log%
 
@@ -556,46 +563,56 @@ for /d %%i in ( %FB_SERVICES% ) do (
 @rem pause
 
       if .!skip!.==.1. (
-        if exist !tp! (
-          @rem Before replace firebird.conf and databases.conf we have to backup them.
-          @rem After copying all files (and before starting services) these files (`firebird.conf`
-          @rem and `databases.conf`) need to be renamed back.
+          if exist !tp!.previous (
+              (
+                  echo.
+                  echo ##### SKIP ##### from creating backup of file !tp!: etalon copy !tp!.previous already exists
+                  dir !tp!.previous | findstr /i /c:".previous"
+                  echo Check content of !tp!.previous:
+                  echo ----------- beg of file !tp!.previous ----------
+                  type !tp!.previous
+                  echo ----------- end of file !tp!.previous ----------
+                  echo.
+              ) 2>&1 1>>%log%
+          ) else (
+              @rem Before replace firebird.conf and databases.conf we have to backup them.
+              @rem After copying all files and before starting services these files: `firebird.conf`
+              @rem and `databases.conf` - need to be renamed back.
 
-          set cmd_run=copy !tp! !tp!.previous
+              set cmd_run=copy !tp! !tp!.previous
+              
+              set msg=### CREATING BACKUP ### %%a
+              call :sho "!msg!" %log%
+              call :sho "!cmd_run!" %log%
+              
+              cmd /c !cmd_run! 1>>%log% 2>&1
+         )
+
+         set copy_cmd=copy !sn! !tp!
+         call :sho "!copy_cmd!" %log%
+
+         cmd /c !copy_cmd! 1>>%log% 2>&1
           
-          set msg=### CREATING BACKUP ### %%a
-          echo !msg!>>%log%
-          echo !time! !cmd_run!>>%log%
-
-          cmd /c !cmd_run! 1>>%log% 2>&1
-        )
-        set copy_cmd=copy !sn! !tp!
-        @rem echo !time! !copy_cmd!
-        echo !time! !copy_cmd!>>%log%
-
-        cmd /c !copy_cmd! 1>>%log% 2>&1
 
       ) else (
-        del %~n0.err 2>nul
-        if exist !tp! (
-          set cmd_del=del !tp!
-          echo !time! !cmd_del! 1>>%log%
+          del %~n0.err 2>nul
+          if exist !tp! (
+              set cmd_del=del !tp!
+              call :sho "!cmd_del!" %log%
 
-          cmd /c !cmd_del! 2>%~n0.err
-        )
-        for /f "usebackq" %%A in ('%~n0.err') do set errsize=%%~zA
-        if .!errsize!.==.. set errsize=0
-        if !errsize! gtr 0 (
-          set msg=### FAILED TO EXECUTE ### !cmd_del! - replacement could be incompleted.
-          type %~n0.err>>%log%
-          echo !msg!
-          echo !msg!>>%log%
-        ) else (
-          set copy_cmd=copy !sn! !tp!
-          @rem echo !time! !copy_cmd!
-          echo !time! !copy_cmd!>>%log%
-          cmd /c !copy_cmd! 1>>%log% 2>&1
-        )
+              cmd /c !cmd_del! 2>%~n0.err
+          )
+          for /f "usebackq" %%A in ('%~n0.err') do set errsize=%%~zA
+          if .!errsize!.==.. set errsize=0
+          if !errsize! gtr 0 (
+              set msg=### FAILED TO EXECUTE ### !cmd_del! - replacement could be incompleted.
+              type %~n0.err>>%log%
+              call :sho "!msg!" %log%
+          ) else (
+              set copy_cmd=copy !sn! !tp!
+              call :sho "!copy_cmd!" %log%
+              cmd /c !copy_cmd! 1>>%log% 2>&1
+          )
       )
     )
   )
@@ -624,25 +641,31 @@ for /d %%s in ( %FB_SERVICES% ) do (
     if NOT .%fbv%.==.25. (
         set secsuff=!fbv:~0,1!
         set secname=security!secsuff!.fdb
-        set cmd_run=!fp!\gsec -user sysdba -pass 1 -add sysdba -pw masterke -database !fp!\!secname!
+        set cmd_run=!fp!\gsec -user sysdba -pass 1 -add sysdba -pw masterkey -database !fp!\!secname!
         @rem set cmd_run=echo create user SYSDBA password 'masterkey'; show users; set list on; select * from sec$users; | isql -user sysdba .\security3.fdb
-        echo !time! Trying to add SYSDBA into security database: !cmd_run!
-        echo !cmd_run!
 
-        echo !cmd_run!>>%log%
+        set msg=Trying to add SYSDBA into security database.
+        call :sho "!msg!" %log%
+        call :sho "!cmd_run!" %log%
 
-        echo !time! Check record: point BEFORE using gsec for add SYSDBA, instance: %%s>>%log%
+        set msg=Point BEFORE initializing security database, instance: %%s>>%log%
+        call :sho "!msg!" %log%
+        
+        @rem ############################################################################
+        @rem #####  I N I T I A L I Z I N G     S E C U R I T Y    D A T A B A S E  #####
+        @rem ############################################################################
         cmd /c !cmd_run! 1>%~n0.tmp  2>%~n0.err
-        echo !time! Check record: point AFTER using gsec for add SYSDBA, instance: %%s>>%log%
+
+        set msg=Point AFTER initializing security database, instance: %%s>>%log%
+        call :sho "!msg!" %log%
 
         for /f "usebackq" %%A in ('%~n0.err') do set errsize=%%~zA
         if .!errsize!.==.. set errsize=0
         if !errsize! gtr 0 (
-          set msg=### FAILED TO EXECUTE ### !cmd_run!.
-          echo !msg!
-          echo !msg!>>%log%
-          type %~n0.err
-          type %~n0.err>>%log%
+            set msg=### FAILED TO EXECUTE ### !cmd_run!.
+            call :sho "!msg!" %log%
+            type %~n0.err
+            type %~n0.err>>%log%
         )
         type %~n0.tmp
         type %~n0.tmp>>%log%
@@ -650,22 +673,21 @@ for /d %%s in ( %FB_SERVICES% ) do (
         del %~n0.tmp 2>nul
 
         set cmd_run=!fp!\gsec -display -database !fp!\!secname! -user sysdba -pass masterke
-        echo !time! Trying to display SYSDBA info:
-        echo !cmd_run!
-        echo !cmd_run!>>%log%
-        
-        echo !time! Check record: point BEFORE using gsec for display SYSDBA, instance: %%s>>%log%
+        call :sho "Trying to display: !cmd_run!" %log%
+
+        @rem ##########################################
+        @rem #####  D I S P L A Y    S Y S D B A  #####
+        @rem ##########################################
         cmd /c !cmd_run! 1>%~n0.tmp 2>%~n0.err
-        echo !time! Check record: point AFTER using gsec for display SYSDBA, instance: %%s>>%log%
 
         for /f "usebackq" %%A in ('%~n0.err') do set errsize=%%~zA
         if .!errsize!.==.. set errsize=0
         if !errsize! gtr 0 (
-          set msg=### FAILED TO EXECUTE ### !cmd_run!.
-          echo !msg!
-          echo !msg!>>%log%
-          type %~n0.err
-          type %~n0.err>>%log%
+            set msg=### FAILED TO EXECUTE ### !cmd_run!.
+            echo !msg!
+            echo !msg!>>%log%
+            type %~n0.err
+            type %~n0.err>>%log%
         )
 
         type %~n0.tmp
@@ -675,16 +697,27 @@ for /d %%s in ( %FB_SERVICES% ) do (
     )
     @rem end of "if fbv NOT == 25"
 
-    set msg=Restore files that was backed up before copying:
-    echo !msg!
-    echo !msg!>>%log%
+    set msg=### RESTORE ### files that was backed up before copying:
+    call :sho "!msg!" %log%
 
     set cmd_run=copy !fp!\firebird.conf.previous !fp!\firebird.conf
-    echo !time! !cmd_run!>>%log%
-    cmd /c !cmd_run! 1>>%log%
+    call :sho "!cmd_run!" %log%
 
-    set cmd_run=copy !fp!\databases.conf.previous !fp!\databases.conf
-    echo !time! !cmd_run!>>%log%
+    cmd /c !cmd_run! 1>>%log% 2>&1
+    (
+        echo Check content:
+        echo ----------- beg of file !fp!\firebird.conf ----------
+        type !fp!\firebird.conf
+        echo ----------- end of file !fp!\firebird.conf ----------
+    ) >>%log%
+
+    if NOT .%fbv%.==.25. (
+        set cmd_run=copy !fp!\databases.conf.previous !fp!\databases.conf
+    ) else (
+        set cmd_run=copy !fp!\aliases.conf.previous !fp!\aliases.conf
+    )
+    call :sho "!cmd_run!" %log%
+
     cmd /c !cmd_run! 1>>%log%
   )
 )
@@ -695,20 +728,20 @@ for /d %%s in ( %FB_SERVICES% ) do (
   echo #############################################################################################################
 ) >>%log%
 
+
 for /d %%s in ( %FB_SERVICES% ) do (
   set msg=Starting service FirebirdServer%%s
-  echo !msg!
-  echo.>>%log%
-  echo !msg!>>%log%
-  
-  echo !time! Check record: point BEFORE starting instance: %%s>>%log%
-  
+  call :sho "!msg!" %log%
+ 
   sc start FirebirdServer%%s 1>>%log% 2>&1
 
-  echo !time! Check record: point AFTER starting  instance: %%s>>%log%
+  set msg=Check point AFTER attempt to start instance %%s
+  call :sho "!msg!" %log%
 
   ping -n 1 -w 800 1.1.1.1 1>nul 2>&1
-  echo After pause:>>%log%
+
+  set msg=Check state FirebirdServer%%s service after pause.
+  call :sho "!msg!" %log%
 
   sc query FirebirdServer%%s 1>>%log% 2>&1
   sc query FirebirdServer%%s | findstr /i /c:"RUNNING" 1>nul 2>&1
@@ -717,8 +750,7 @@ for /d %%s in ( %FB_SERVICES% ) do (
   ) else (
     set msg=Service has been successfully started.
   )
-  echo !msg!
-  echo !msg!>>%log%
+  call :sho "!msg!" %log%
 
 )
 
@@ -736,27 +768,32 @@ for /d %%s in ( %FB_SERVICES% ) do (
 
     set cmd_run=!fp!\fbsvcmgr localhost/%port%:service_mgr user SYSDBA password masterke info_server_version
     set msg=Trying to obtain server version for service %%s
-    echo !msg!
-    echo !msg!>>%log%
-    echo !cmd_run!>>%log%
+
+    call :sho "!msg!" %log%
+    call :sho "Command: !cmd_run!" %log%
 
     echo !time! Check record: point BEFORE get server version, instance: %%s>>%log%
+
     cmd /c !cmd_run! 1>%~n0.tmp 2>%~n0.err
-    echo !time! Check record: point AFTER get server version, instance: %%s>>%log%
+
+    set msg=Check point AFTER get server version, instance: %%s>>%log%
+    call :sho "!msg!" %log%
 
     for /f "usebackq" %%A in ('%~n0.err') do set errsize=%%~zA
     if .!errsize!.==.. set errsize=0
     if !errsize! gtr 0 (
       set msg=### FAILED TO EXECUTE ### !cmd_run!.
-      echo !msg!
-      echo !msg!>>%log%
+      call :sho "!msg!" %log%
       type %~n0.err
       type %~n0.err>>%log%
     )
+
     type %~n0.tmp
-    echo.>>%log%
-    type %~n0.tmp>>%log%
-    echo.>>%log%
+    (
+      echo.
+      type %~n0.tmp
+      echo.
+    ) >>%log%
 
     if .%fbv%.==.25. (
         set fp=%%~dpk
@@ -778,21 +815,21 @@ for /d %%s in ( %FB_SERVICES% ) do (
 
 findstr /i /c:"FAILED TO EXECUTE" %log% 1>%~n0.err 2>nul
 if errorlevel 1 (
-  echo.
-  echo No faults occured during replacement files.
-  @echo Now we can remove temp files.
+    echo.
+    set msg=No faults occured during replacement files. Now we can remove temp files.
+    call :sho "!msg!" %log%
 
-  set cmd_del=del !archname!
-  echo !time! !cmd_del! 1>>%log%
-  cmd /c !cmd_del! 1>>%log% 2>&1
+    set cmd_del=del !archname!
+    call :sho "!cmd_del!" %log%
+    cmd /c !cmd_del! 1>>%log% 2>&1
 
-  set cmd_del=del %zip%
-  echo !time! !cmd_del! 1>>%log%
-  cmd /c !cmd_del! 1>>%log% 2>&1
+    set cmd_del=del %zip%
+    call :sho "!cmd_del!" %log%
+    cmd /c !cmd_del! 1>>%log% 2>&1
 
-  set cmd_del=rd /s /q %SNAPSHOT_DIR%
-  echo !time! !cmd_del! 1>>%log% 2>&1
-  cmd /c !cmd_del! 1>>%log% 2>&1
+    set cmd_del=rd /s /q %SNAPSHOT_DIR%
+    call :sho "!cmd_del!" %log%
+    cmd /c !cmd_del! 1>>%log% 2>&1
 
 ) else (
   (
