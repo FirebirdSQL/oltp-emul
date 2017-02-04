@@ -1967,6 +1967,7 @@ if .%sid%.==.1. (
     echo !msg! >> %tmp_file%
     type %tmp_file% >> %log4all%
 
+
     if .%make_html%.==.1. (
         echo !htm_sect! ^<a name="finalpart"^> Final processing ISQL logs in %tmpdir% ^</a^> !htm_secc!>>%htm_file%
         call :add_html_text tmp_file htm_file
@@ -1981,8 +1982,13 @@ if .%sid%.==.1. (
           echo from (
           echo select iif( exists( select *
           echo                     from perf_log p
-          echo                     where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
-          echo                         p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349 ^)
+          echo                     where 
+          echo                         -- NOTES.
+          echo                         -- 1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
+          echo                         -- 2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
+          echo                         --    Auto removing of .err files which did contain "string truncation" error was the main reason
+          echo                         --    why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
+          echo                         p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349, 335544321 ^)
           echo                         and p.dts_beg ^> (
           echo                             select x.dts_beg
           echo                             from perf_log x
@@ -2014,13 +2020,14 @@ if .%sid%.==.1. (
         type %rpt% >>%log4all%
         set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
     )
+    @rem log4all = %tmpdir%\oltp40.report.txt
 
     if .%remove_isql_logs%.==.if_no_severe_errors. (
 
       %run_repo% 1>%tmp_file% 2>&1
       
       type %tmp_file% >> %log4all%
-
+      @rem ERRORS_CHECKING_RESULT          NO_SEVERE_ERRORS_FOUND ==> we can DELETE temp logs.
       if .%make_html%.==.1. (
             (
               echo select iif(x.severe_errors_occured = 1, '$css$error$', '$css$success$'^) ^|^| x.errors_checking_result as errors_checking_result
@@ -2040,9 +2047,39 @@ if .%sid%.==.1. (
           echo ISQL logs are removed because no severe errors occured during test. > %tmp_file%
           type %tmp_file% >> %log4all%
           call :add_html_text tmp_file htm_file
-          del %log_ptn%
+          if exist %log_ptn% (
+              (
+                  echo Following temporary files are to be DELETED:
+                  @rem dir /-c %log_ptn%
+                  dir /b %log_ptn%
+              )>>%log4all%
+    
+              @rem log_ptn = e:\temp\logs.oltp40\oltp40_*.*
+              @rem #######################################################
+              @rem ###     D E L E T I N G    T E M P.    F I L E S    ###
+              @rem #######################################################
+              del %log_ptn% 2>&1 1>>%log4all%
+          )
+
+          (
+              echo.
+              if exist %log_ptn% (
+                  echo Some files with pattern %log_ptn% COULD NOT be deleted.
+                  dir /-c %log_ptn%
+              ) else (
+                  echo All files with pattern %log_ptn% have beed DELETED.
+              )
+              echo.
+          ) >>%log4all%
+
+      ) else (
+        (
+            echo Required string was not found in file %tmp_file%, 
+            echo temp. files with pattern %log_ptn% are PRESERVED.
+        )>>%log4all%
       )
     )
+
     del %tmpdir%\1run_oltp_emul.err 2>nul
     del %tmpdir%\getFileTimeStamp.* 2>nul
     del %tmpdir%\tmp_longsleep.* 2>nul
@@ -2055,6 +2092,7 @@ if .%sid%.==.1. (
     ) > %tmp_file%
 
     type %tmp_file% >>%log4all%
+    @rem log4all = %tmpdir%\oltp40.report.txt
 
     if .%make_html%.==.1. (
       call :add_html_text tmp_file htm_file
@@ -2092,7 +2130,13 @@ if .%sid%.==.1. (
     @rem -- where <host_info> = content of config parameter %file_name_this_host_info% // 09-mar-2016
 
     if not .%fname%.==.. (
+        
+        @rem ######################################################################################
+        @rem ### c r e a t i n g       O L T P _ E M U  L _ U P L O A D _ R E S U L T S . L O G ###
+        @rem ######################################################################################
         set upload_log=!tmpdir!\oltp_emul_upload_results.log
+        del !upload_log! 2>nul
+
         for /f %%a in (!tmp_file!) do (
             set name_for_saving=!tmpdir!\%%a
             set final_txt=!name_for_saving!
@@ -2102,86 +2146,121 @@ if .%sid%.==.1. (
             set final_txt=!final_txt!.txt
             call :repl_with_bound_quotes !final_txt! final_txt
 
-            copy %log4all% !final_txt! >nul
-            if exist !final_txt! del %log4all% 2>nul
-    
+            copy %log4all% !final_txt!
+
+            @rem ###########################################
+            @rem DELETE log4all = %tmpdir%\oltp40.report.txt
+            @rem ###########################################
+            if exist !final_txt! del %log4all%
+
             if .%make_html%.==.1. (
-              set final_htm=!name_for_saving!
-              if not .%file_name_this_host_info%.==.. (
-                set final_htm=!final_htm!_%file_name_this_host_info%
-              )
-              set final_htm=!final_htm!.html
-              call :repl_with_bound_quotes !final_htm! final_htm
-
-              for %%i in ("!final_htm!") do set report_name=%%~ni
-              del !final_htm! 2>nul
-
-              @rem HTML report: add DOCTYPE as 1st line and <title>...</title? tag for conveniency:
-              set /a k=1
-              for /f "delims=" %%a in (!htm_file!) do (
-                if .!k!.==.1. (
-                  echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
-                ) 
-                set "line=%%a"
-                echo !line!>>!final_htm!
-                if .!line!.==.^<head^>. (
-                    echo ^<title^>!report_name!^</title^> >>!final_htm!
+                set final_htm=!name_for_saving!
+                if not .%file_name_this_host_info%.==.. (
+                    set final_htm=!final_htm!_%file_name_this_host_info%
                 )
-                set /a k=!k!+1
-              )
+                set final_htm=!final_htm!.html
+                call :repl_with_bound_quotes !final_htm! final_htm
 
-              @rem old: copy %htm_file% !final_htm! >nul
+                for %%i in ("!final_htm!") do set report_name=%%~ni
+                del !final_htm! 2>nul
 
-              if exist !final_htm! (
-                del %htm_file% 2>nul
-                @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
-                @rem When this parameter = 1 then we have to upload report and remove it from
-                @rem local drive if upload finished OK.
-                if .%upload_report%.==.1. (
-                    echo !date! !time!. Upload results in HTML format...
-                    for %%n in ("!final_htm!") do set report_name=%%~nxn
-
-                    (
-                        echo # This log was created by %~dp0%~nx0
-                        echo # Command: call ..\util\upload.bat !report_name! !final_htm!
-                        echo.
-                    ) >!upload_log!
-
-                    call ..\util\upload.bat !report_name! !final_htm! 1>>!upload_log! 2>&1
-
-                    echo !date! !time!. Done, check !upload_log!:
-                    type !upload_log! 
-                    findstr /i /c:"success" !upload_log! >nul
-                    if not errorlevel 1 (
-                      echo Final HTML report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                      if /i .%remove_isql_logs%.==.never. (
-                          echo Reports are preserved on disk, see config setting 'remove_isql_logs' >>!upload_log!
-                      else (
-                          del !final_htm!
-                          del !final_txt!
-                      )
+                @rem HTML report: add DOCTYPE as 1st line and <title>...</title? tag for conveniency:
+                set /a k=1
+                for /f "delims=" %%a in (!htm_file!) do (
+                    if .!k!.==.1. (
+                      echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
                     ) 
+                    set "line=%%a"
+                    echo !line!>>!final_htm!
+                    if .!line!.==.^<head^>. (
+                        echo ^<title^>!report_name!^</title^> >>!final_htm!
+                    )
+                    set /a k=!k!+1
                 )
-              )
+
+                @rem old: copy %htm_file% !final_htm! >nul
+
+                if exist !final_htm! (
+                    del %htm_file% 2>nul
+                    @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
+                    @rem When this parameter = 1 then we have to upload report and remove it from
+                    @rem local drive if upload finished OK.
+                    if .%upload_report%.==.1. (
+                        echo !date! !time!. Upload results in HTML format...
+                        for %%n in ("!final_htm!") do set report_name=%%~nxn
+
+                        (
+                            echo !date! !time!. This log was created by %~dp0%~nx0
+                            echo Command: call ..\util\upload.bat ^<arg1^> ^<arg2^>
+                            echo where:
+                            echo    arg1 = !report_name! 
+                            echo    arg2 = !final_htm!
+                            echo.
+                        ) >>!upload_log!
+
+                        call ..\util\upload.bat !report_name! !final_htm! 1>!tmp_file! 2>&1
+
+                        (
+                            echo !date! !time!. Done, check log !tmp_file!:
+                            type !tmp_file! 
+                        ) >>!upload_log!
+
+                        findstr /b /r /i /c:"100.*success" !upload_log! >nul
+                        if not errorlevel 1 (
+                            (
+                                echo Found message about SUCCESSFUL result of uploading HTML report.
+                                if /i .%remove_isql_logs%.==.never. (
+                                    echo Reports are preserved on disk, see config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                ) else (
+                                    echo Reports are DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                    del !final_htm!
+                                    del !final_txt!
+                                )
+                            ) > !tmp_file!
+                        ) else (
+                            (
+                                echo Upload of HTML report FAILED. Reports are preserved on disk. 
+                            ) > !tmp_file!
+                        )
+                        type !tmp_file!
+                        type !tmp_file! >>!upload_log!
+                        del !tmp_file!
+                    )
+                    @rem if .%upload_report%.==.1.
+                )
+                @rem if exist !final_htm! 
+
             ) else (
                 @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
                 @rem When this parameter = 1 then we have to upload report and remove it from
                 @rem local drive if upload finished OK.
                 if .%upload_report%.==.1. (
+
                     echo !date! !time!. Upload results in TEXT format...
+
                     for %%n in ("!final_txt!") do set report_name=%%~nxn
                     call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
-                    echo !date! !time!. Done, check !upload_log!:
-                    type !upload_log! 
-                    findstr /i /c:"success" !upload_log! >nul
+
+                    findstr /b /r /i /c:"100.*success" !upload_log! >nul
                     if not errorlevel 1 (
-                      echo Final TEXT report has been uploaded by: ..\util\upload.bat !report_name! !final_htm! >>!upload_log!
-                      if /i .%remove_isql_logs%.==.never. (
-                          echo Report is preserved on disk, see config setting 'remove_isql_logs' >>!upload_log!
-                      else (
-                          del !final_txt!
-                      )
-                    ) 
+                        (
+                            echo Found message about SUCCESSFUL result of uploading TEXT report.
+                            if /i .%remove_isql_logs%.==.never. (
+                                echo Report is preserved on disk, see config parameter 'remove_isql_logs' = %remove_isql_logs%
+                            ) else (
+                                echo Report is DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                del !final_txt!
+                            )
+                        ) > !tmp_file!
+                    ) else (
+                        (
+                            echo Upload of TEXT report FAILED. Report are preserved on disk. 
+                        ) > !tmp_file!
+                    )
+                    type !tmp_file!
+                    type !tmp_file! >>!upload_log!
+                    del !tmp_file!
+
                 )
             )
         )
