@@ -364,4 +364,4 @@ etalon_dbnm = E:\OLTP-EMUL\oltp30-docs_100000-fw__ON.fdb
 # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
 # This parameter can be changed 'on the fly': database recreation is NOT required, but in case
 # when database has valuable size, changes will be applied not instantly.
-used_in_replication = 1
+used_in_replication = 0
