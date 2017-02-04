@@ -2205,7 +2205,11 @@ if .%sid%.==.1. (
                             type !tmp_file! 
                         ) >>!upload_log!
 
-                        findstr /b /r /i /c:"100.*success" !upload_log! >nul
+                        @rem DOES NOT WORK: findstr /b /r /i /c:"100.*success" !upload_log!
+                        @rem Switch /B will NOT show line if it starts from char_13 only
+                        @rem rather than char_13 + char_10 // 05.02.2017
+
+                        findstr /i /c:success !upload_log! | findstr /c:100 >nul
                         if not errorlevel 1 (
                             (
                                 echo Found message about SUCCESSFUL result of uploading HTML report.
@@ -2240,8 +2244,12 @@ if .%sid%.==.1. (
 
                     for %%n in ("!final_txt!") do set report_name=%%~nxn
                     call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
+                   
+                    @rem DOES NOT WORK: findstr /b /r /i /c:"100.*success" !upload_log!
+                    @rem Switch /B will NOT show line if it starts from char_13 only
+                    @rem rather than char_13 + char_10 // 05.02.2017
 
-                    findstr /b /r /i /c:"100.*success" !upload_log! >nul
+                    findstr /i /c:success !upload_log! | findstr /c:100 >nul
                     if not errorlevel 1 (
                         (
                             echo Found message about SUCCESSFUL result of uploading TEXT report.
