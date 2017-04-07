@@ -341,6 +341,15 @@ db_build() {
 			end
 	EOF
 
+	cat <<- EOF >>$bld
+		end
+		^
+		set term ^;
+		commit;
+		-- Finish building process: insert custom data to lookup tables:
+		in "$shdir/oltp_data_filling.sql";
+	EOF
+
 	if [ -n "$use_external_to_stop" ]; then
 		cat <<- EOF >>$bld
 			-- External table for quick force running attaches to stop themselves by OUTSIDE command.
@@ -356,15 +365,6 @@ db_build() {
 			commit;
 		EOF
 	fi
-
-	cat <<- EOF >>$bld
-		end
-		^
-		set term ^;
-		commit;
-		-- Finish building process: insert custom data to lookup tables:
-		in "$shdir/oltp_data_filling.sql";
-	EOF
 
   echo Content of building SQL script:
   echo -------------------------------
