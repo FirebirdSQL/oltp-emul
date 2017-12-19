@@ -135,6 +135,12 @@ begin
     v_lf = ascii_char(10);
     for 
         select s from tmp_v_tabs_wo_pkid_and_constr
+        where exists(
+                select * from rdb$relations r
+                    where r.rdb$relation_name = upper( s )
+                        and coalesce(r.rdb$system_flag, 0) = 0
+                    )
+
         into v_table_to_be_changed
     do begin
         v_table_to_be_changed = trim(v_table_to_be_changed);
