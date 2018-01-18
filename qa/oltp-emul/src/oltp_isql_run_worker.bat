@@ -2212,14 +2212,17 @@ if .%sid%.==.1. (
                         findstr /i /c:success !upload_log! | findstr /c:100 >nul
                         if not errorlevel 1 (
                             (
-                                echo Found message about SUCCESSFUL result of uploading HTML report.
+                                echo Found message about SUCCESSFUL result of uploading HTML report. Files:
+                                echo !name_for_saving!*
                                 if /i .%remove_isql_logs%.==.never. (
-                                    echo Reports are preserved on disk, see config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                    echo|set /p=-- are PRESERVED on disk, 
                                 ) else (
-                                    echo Reports are DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                    echo|set /p=-- are DETELED from disk, 
                                     del !final_htm!
                                     del !final_txt!
                                 )
+                                echo see config parameter 'remove_isql_logs' = %remove_isql_logs%
+
                             ) > !tmp_file!
                         ) else (
                             (
@@ -2235,6 +2238,8 @@ if .%sid%.==.1. (
                 @rem if exist !final_htm! 
 
             ) else (
+                @rem .%make_html% ==> 0
+
                 @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
                 @rem When this parameter = 1 then we have to upload report and remove it from
                 @rem local drive if upload finished OK.
@@ -2245,7 +2250,7 @@ if .%sid%.==.1. (
                     for %%n in ("!final_txt!") do set report_name=%%~nxn
                     call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
                    
-                    @rem DOES NOT WORK: findstr /b /r /i /c:"100.*success" !upload_log!
+                    @rem did not work: findstr /b /r /i /c:"100.*success" !upload_log!
                     @rem Switch /B will NOT show line if it starts from char_13 only
                     @rem rather than char_13 + char_10 // 05.02.2017
 
@@ -2256,7 +2261,8 @@ if .%sid%.==.1. (
                             if /i .%remove_isql_logs%.==.never. (
                                 echo Report is preserved on disk, see config parameter 'remove_isql_logs' = %remove_isql_logs%
                             ) else (
-                                echo Report is DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                echo Reports are DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
+                                del !final_htm!
                                 del !final_txt!
                             )
                         ) > !tmp_file!
@@ -2270,11 +2276,17 @@ if .%sid%.==.1. (
                     del !tmp_file!
 
                 )
+                @rem if .%upload_report%.==.1.
             )
+            @rem .%make_html%.==.1 .xor .0.
         )
+        @rem for /f %%a in (!tmp_file!) do ...
+
     ) else (
+        @rem  .%fname%.==..
         set name_for_saving=%log4all%
     )
+    @rem if .%fname% is-defined xor not-defined
 
     if not .!postie_send_args!.==.. (
           set mail_sending_log=!tmpdir!\oltp_emul_mail_send.log
@@ -2309,7 +2321,11 @@ if .%sid%.==.1. (
   goto end
 
 :end
-
+  @rem ###########################################################################
+  @rem ###                                                                     ###
+  @rem ###                             E N D                                   ###
+  @rem ###                                                                     ###
+  @rem ###########################################################################
   goto fin
 
 :wait4all
