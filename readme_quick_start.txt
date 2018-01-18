@@ -29,19 +29,23 @@ In case of any questions feel free to contact: p519446@yandex.ru
 
 2. Change to 'src' folder and find test configuration file that appropriates to the version
    of Firebird and OS:
-   -----------------------------------------------------------------
-   ! Major version of ! Operating System where ! Name of OLTP-EMUL !
-   ! Firebird server  ! ISQL sessions will run ! test config file  !
-   !------------------!------------------------!-------------------!
-   !       2.5        !        Windows         ! oltp25_config.win !
-   !       2.5        !        Linux           ! oltp25_config.nix !
-   !       3.0        !        Windows         ! oltp30_config.win !
-   !       3.0        !        Linux           ! oltp30_config.nix !
-   !       4.0        !        Windows         ! oltp40_config.win !
-   !       4.0        !        Linux           ! oltp40_config.nix !
-   -----------------------------------------------------------------
+   -------------------------------------------------------------------------
+   ! Major version of ! Operating System where ! Name of OLTP-EMUL         !
+   ! Firebird server  ! ISQL sessions will run ! test config file          !
+   !------------------!------------------------!---------------------------!
+   !       2.5        !        Windows         ! oltp25_config.win.default !
+   !       2.5        !        Linux           ! oltp25_config.nix.default !
+   !       3.0        !        Windows         ! oltp30_config.win.default !
+   !       3.0        !        Linux           ! oltp30_config.nix.default !
+   !       4.0        !        Windows         ! oltp40_config.win.default !
+   !       4.0        !        Linux           ! oltp40_config.nix.default !
+   -------------------------------------------------------------------------
 
-3. Open selected configuration file and change settings to be suitable for you.
+3. Make copy of this file so that its extension will be without ".default", e.g.:
+   copy .\oltp30_config.win.default .\oltp30_config.win
+   cp ./oltp30_config.nix.default ./oltp30_config.nix
+
+   Open just created copy of configuration file and change settings to be suitable for you.
    Pay attention on following settings:
    * 'fbc' - path to isql executable and client library on the host where you will launch ISQL sessions
    * 'dbnm' - path and name of database file on server host. Batch scenario (1run_oltp_emul.bat/.sh) can 
