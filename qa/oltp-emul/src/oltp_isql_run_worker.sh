@@ -1,5 +1,14 @@
 #!/bin/bash
 
+sho() {
+  local msg=$1
+  local log=$2
+  local dts=$(date +'%d.%m.%y %H:%M:%S')
+  echo $dts. $msg
+  echo $dts. $msg>>$log
+}
+
+
 log_elapsed_time() {
     local s1=$s1
     local plog=$2
@@ -25,20 +34,6 @@ ainfo=$8 #file_name_this_host_info
 
 #echo build=$build
 
-#echo -e Config file \>$cfg\< parsing result:
-shopt -s extglob
-# not work: grep -e "^[  ]*[a-z]" ./oltp_config.30 | \
-while IFS='=' read lhs rhs
-do
-  if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
-    # | sed -e 's/^[ \t]*//'
-    lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
-    rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
-    declare $lhs=$rhs
-    #echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
-  fi
-done<$cfg
-
 prf=$prf-$(echo `printf "%03d" $sid`)
 # log where current acitvity of this ISQL will be:
 log=$prf.log
@@ -52,6 +47,37 @@ sts=$prf.running_state.txt
 rm -f $log $err $sts
 >$log
 >$err
+
+#echo -e Config file \>$cfg\< parsing result:
+echo ..................+++++++++++++++++..............
+echo log=$log
+sho "Config file $cfg parsing result:" $log
+
+shopt -s extglob
+# not work: grep -e "^[  ]*[a-z]" ./oltp_config.30 | \
+while IFS='=' read lhs rhs
+do
+  if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
+    # | sed -e 's/^[ \t]*//'
+    #echo Init in line: lsh=$lhs, rhs=$rhs
+
+    lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
+    rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
+    #echo Try to declare lhs=rhs: lsh=$lhs, rhs=$rhs
+    declare $lhs=$rhs
+    if [ $? -eq 0 ]; then
+        #msg="$(echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###"))"
+        #msg="$(echo -e param=$lhs, val=$rhs $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###"))"
+        sho "param=$lhs, val=$rhs" $log
+    else
+        sho "-------------------- SOMETHING WRONG IN YOUR CONFIG FILE ------------------" $log
+        exit
+    fi
+  fi
+#done<$cfg
+done < <( sed -e 's/^[ \t]*//' $cfg | grep "^[^#;]" )
+
+
 if [ $is_embed = 1 ]; then
   dbauth=
   dbconn=$dbnm
@@ -93,13 +119,15 @@ if [ $sid -eq 1 ]; then
 fi
 
 echo
-echo $(date +'%Y.%m.%d %H:%M:%S'). Intro separate ISQL session, sid=$sid.
+#echo $(date +'%Y.%m.%d %H:%M:%S'). 
+sho "Intro separate ISQL session, sid=$sid." $log
 if [ $winq -gt 1 ]; then
-  echo Take initial random pause. . .
+  sho "Take initial random pause. . ." $log
   #echo TEMPLY DISABLED, UNCOMMENT LATER.
   sleep $[ ( $RANDOM % 8 )  + 2 ]s
 fi
-echo $(date +'%Y.%m.%d %H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
+#echo $(date +'%Y.%m.%d %H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
+sho "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire." $log
 
 packet=1
 while :
