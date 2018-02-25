@@ -2303,7 +2303,7 @@ create or alter procedure sp_add_perf_log (
 
     declare v_exc_info dm_info;
     declare v_stack dm_stack;
-    declare v_ip varchar(15);
+    declare v_ip dm_ip;
     declare v_dts_beg timestamp;
     declare v_dts_end timestamp;
     declare v_aux1 double precision;
