@@ -9,7 +9,7 @@
 
 Last version can be found here:
 
-svn checkout svn://svn.code.sf.net/p/firebird/code/qa/oltp-emul/ .
+git clone https://github.com/FirebirdSQL/oltp-emul .
 
 ===============================================================================
 
@@ -18,7 +18,7 @@ Please READ all this file carefully before making any attempt to run test.
 
 In case of any questions feel free to contact: p519446@yandex.ru
 
-(C) Pavel Zotov, Moscow, Russia. 2014-2016.
+(C) Pavel Zotov, Moscow, Russia. 2014-2019.
 
 ===============================================================================
 
