@@ -2,6 +2,10 @@
 -- Begin of script oltp30_SP.sql (application units)
 -- #################################################
 -- ::: nb ::: Required FB version: 3.0 and above
+
+-- Pattern for search queries to [v_]qdistr using regexp (in IBE):
+-- (from|((left(( ){1,}outer( ){1,})|full(( ){1,}outer( ){1,})|inner)( ){0,1}){0,1}join)( ){1,}(v_){0,1}qdistr
+
 set bail on;
 set autoddl off;
 set list on;
@@ -61,6 +65,7 @@ end
 
 ^ -- srv_increment_tx_bops_counter
 
+
 create or alter procedure sp_fill_shopping_cart(
     a_optype_id dm_idb,
     a_rows2add int default null, 
@@ -90,6 +95,27 @@ as
     declare v_find_using_desc_index dm_sign;
     declare v_this dm_dbobj = 'sp_fill_shopping_cart';
     declare v_info dm_info = '';
+
+    declare c_take_random_ware cursor for (
+        select p.id_selected
+        from
+                sp_get_random_id (
+                    :v_source_for_random_id,
+                    :v_source_for_min_id,
+                    :v_source_for_max_id,
+                    :v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
+                    :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
+                    :v_find_using_desc_index, -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
+                    :v_doc_rows
+                ) p
+    );
+
+    declare c_take_predictable_ware cursor for (
+        select w.id as id_selected
+        from wares w
+        order by w.id
+    );
+
 begin
     -- Fills "shopping cart" table with wares ID for futher handling.
     -- If context var 'ENABLE_FILL_PHRASES' = 1 then does it via SIMILAR TO
@@ -99,16 +125,29 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    v_ctx_max_rows = iif( a_optype_id in ( fn_oper_order_for_supplier(), fn_oper_invoice_get() ),
-                          'C_SUPPLIER_DOC_MAX_ROWS',
-                          'C_CUSTOMER_DOC_MAX_ROWS'
-                        );
-    v_ctx_max_qty = iif( a_optype_id in ( fn_oper_order_for_supplier(), fn_oper_invoice_get() ),
-                          'C_SUPPLIER_DOC_MAX_QTY',
-                          'C_CUSTOMER_DOC_MAX_QTY'
-                        );
+    if ( fn_make_predictable_workload() = 1 ) then
+        begin
+            v_ctx_max_rows = 'C_SUPPLIER_DOC_MAX_ROWS';
+            v_ctx_max_qty = 'C_SUPPLIER_DOC_MAX_QTY';
+        end
+    else
+        begin
+            v_ctx_max_rows = iif( a_optype_id in ( fn_oper_order_for_supplier(), fn_oper_invoice_get() ),
+                                  'C_SUPPLIER_DOC_MAX_ROWS',
+                                  'C_CUSTOMER_DOC_MAX_ROWS'
+                                );
+            v_ctx_max_qty = iif( a_optype_id in ( fn_oper_order_for_supplier(), fn_oper_invoice_get() ),
+                                  'C_SUPPLIER_DOC_MAX_QTY',
+                                  'C_CUSTOMER_DOC_MAX_QTY'
+                                );
+        end
 
-    v_doc_rows =  coalesce( a_rows2add, fn_get_random_quantity( v_ctx_max_rows ) ) ;
+    v_doc_rows = coalesce( a_rows2add,
+                           iif( fn_make_predictable_workload() = 1,
+                                 cast( maxvalue(1, cast( rdb$get_context( 'USER_SESSION', v_ctx_max_rows ) as int) / 2.) as int ),
+                                 fn_get_random_quantity( v_ctx_max_rows )
+                              )
+                         );
 
     v_source_for_random_id =
         decode( a_optype_id,
@@ -181,29 +220,34 @@ begin
     row_cnt = 0;
     qty_sum = 0;
 
-    for
-        select p.id_selected
-        from
-                sp_get_random_id(
-                    :v_source_for_random_id,
-                    :v_source_for_min_id,
-                    :v_source_for_max_id,
-                    :v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
-                    :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
-                    :v_find_using_desc_index, -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
-                    :v_doc_rows
-                ) p
-         into v_ware_id
-    do
+
+    if ( fn_make_predictable_workload() = 1 ) then
+        open c_take_predictable_ware;
+    else
+        open c_take_random_ware;
+
+    while (1=1) do
     begin
-        v_qty = coalesce(a_maxq4row, fn_get_random_quantity( v_ctx_max_qty ));
+        if ( fn_make_predictable_workload() = 1 ) then
+            fetch c_take_predictable_ware into v_ware_id;
+        else
+            fetch c_take_random_ware into v_ware_id;
+        if (row_count = 0) then leave;
+
+        v_qty = coalesce(a_maxq4row,
+                            iif( fn_make_predictable_workload() = 1,
+                                 cast( maxvalue(1, cast( rdb$get_context( 'USER_SESSION', v_ctx_max_qty ) as int) / 2.) as dm_qty ),
+                                 fn_get_random_quantity( v_ctx_max_qty )
+                               )
+                        );
+
         if ( a_optype_id = fn_oper_order_by_customer() ) then
         begin
             -- Define cost of ware being added in customer order,
             -- in purchasing and retailing prices (allow them to vary):
             select
-                 round( w.price_purchase + rand() * 300, -2) * :v_qty
-                ,round( w.price_retail + rand() * 300, -2) * :v_qty
+                 round( w.price_purchase + iif( fn_make_predictable_workload() = 1, 150, rand() * 300), -2) * :v_qty
+                ,round( w.price_retail + iif( fn_make_predictable_workload() = 1, 150, rand() * 300), -2) * :v_qty
             from wares w
             where w.id = :v_ware_id
             into v_cost_purchase, v_cost_retail;
@@ -234,6 +278,9 @@ begin
             );
             row_cnt = row_cnt + 1; -- out arg, will be used in getting batch IDs for doc_data (reduce lock-contention of GEN page)
             qty_sum = qty_sum + ceiling( v_qty ); -- out arg, will be passed to s`p_multiply_rows_for_pdistr, s`p_make_qty_storno
+
+            if (row_cnt = v_doc_rows) then
+                leave;
         
         when any
             do begin
@@ -247,100 +294,12 @@ begin
         end -- v_ware_id not null
     end
 
---    while ( v_doc_rows > 0 ) do begin
---
---        v_qty = coalesce(a_maxq4row, fn_get_random_quantity( v_ctx_max_qty ));
---
---        if ( a_optype_id = fn_oper_order_by_customer() ) then
---            begin
---                if ( rdb$get_context('USER_SESSION','ENABLE_FILL_PHRASES')='1' -- enable check performance of similar_to
---                     and
---                     exists( select * from phrases )
---                   ) then
---                    begin
---                        -- For checking performance of SIMILAR TO:
---                        -- search using preliminary generated patterns
---                        -- (generation of them see in oltp_fill_data.sql):
---                        select p.pattern from phrases p
---                        where p.id = (select sp_get_random_id('phrases',null,null, :v_raise_exc_on_nofind) from rdb$database)
---                        into v_pattern;
---                        v_stt = 'select id from wares where '||v_pattern||' rows 1';
---                        execute statement(v_stt) into v_ware_id;
---                        if ( v_ware_id is null ) then
---                          exception ex_record_not_found using ('wares', v_pattern);
---                    end
---                else
---                    v_ware_id =
---                    sp_get_random_id(
---                        v_source_for_random_id,
---                        null,
---                        null,
---                        :v_raise_exc_on_nofind
---                    ); -- <<< take random ware from price list
---
---                -- Define cost of ware being added in customer order,
---                -- in purchasing and retailing prices (allow them to vary):
---                select
---                     round( w.price_purchase + rand() * 300, -2) * :v_qty
---                    ,round( w.price_retail + rand() * 300, -2) * :v_qty
---                from wares w
---                where w.id = :v_ware_id
---                into v_cost_purchase, v_cost_retail;
---            end
---        else -- a_optype_id <> fn_oper_order_by_customer()
---            begin
---                v_ware_id =
---                sp_get_random_id(
---                    v_source_for_random_id,
---                    v_source_for_min_id,
---                    v_source_for_max_id,
---                    v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
---                    v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
---                    v_find_using_desc_index -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
---                );
---            end
---
---        if ( v_ware_id is not null ) then
---        begin
---            -- All the views v_r`andom_finx_xxx have checking clause like
---            -- "where NOT exists(select * from tmp$shopping_cart c where ...)"
---            -- so we can immediatelly do INSERT rather than update+check row_count=0
---            insert into tmp$shopping_cart(
---                id,
---                snd_optype_id,
---                rcv_optype_id,
---                qty,
---                storno_sub,
---                cost_purchase,
---                cost_retail
---            )
---            values (
---                :v_ware_id,
---                :v_snd_optype_id,
---                :a_optype_id,
---                :v_qty,
---                :v_storno_sub,
---                :v_cost_purchase,
---                :v_cost_retail
---            );
---            row_cnt = row_cnt + 1; -- out arg, will be used in getting batch IDs for doc_data (reduce lock-contention of GEN page)
---            qty_sum = qty_sum + ceiling( v_qty ); -- out arg, will be passed to s`p_multiply_rows_for_pdistr, s`p_make_qty_storno
---
---        when any
---            do begin
---                if ( fn_is_uniqueness_trouble(gdscode) ) then
---                    update tmp$shopping_cart t
---                    set t.dup_cnt = t.dup_cnt+1 -- 4debug only
---                    where t.id = :v_ware_id;
---                else
---                    exception; -- anonimous but in WHEN block
---            end
---        end -- v_ware_id not null
---        v_doc_rows = v_doc_rows -1;
---
---    end -- while ( v_doc_rows > 0 ) 
+    if ( fn_make_predictable_workload() = 1 ) then
+        close c_take_predictable_ware;
+    else
+        close c_take_random_ware;
 
-    if ( not exists(select * from tmp$shopping_cart) ) then
+    if ( row_cnt = 0 ) then 
         exception ex_no_rows_in_shopping_cart using( v_source_for_random_id ); -- 'shopping_cart is empty, check source ''@1'''
 
     -- add to performance log timestamp about start/finish this unit
@@ -378,6 +337,7 @@ create or alter procedure sp_client_order(
 )
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     agent_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -570,11 +530,11 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                 ||',v.qty_clo ,v.qty_clr ,v.qty_ord'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+        v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                 ||',null      ,null      ,null'
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
@@ -582,7 +542,8 @@ begin
     for
         execute statement(v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -622,6 +583,7 @@ create or alter procedure sp_cancel_client_order(
 )
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     agent_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -699,11 +661,11 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                 ||',v.qty_clo ,v.qty_clr ,v.qty_ord'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+        v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                 ||',null      ,null      ,null'
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
@@ -711,7 +673,8 @@ begin
     for
         execute statement(v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -753,6 +716,7 @@ create or alter procedure sp_supplier_order(
 )
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     agent_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -826,11 +790,11 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-       v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+       v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                ||' ,v.qty_clo ,v.qty_ord'
                ||' from v_doc_detailed v where v.doc_id = :x';
     else
-       v_stt = 'select h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+       v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                ||' ,null     ,null'
                ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
@@ -838,7 +802,8 @@ begin
     for
         execute statement(v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -879,6 +844,7 @@ create or alter procedure sp_supplier_invoice (
 )
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     agent_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -952,11 +918,11 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-       v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+       v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                ||' ,v.qty_clo ,v.qty_ord ,v.qty_sup'
                ||' from v_doc_detailed v where v.doc_id = :x';
     else
-       v_stt = 'select h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+       v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                ||' ,null     ,null       ,null'
                ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
@@ -964,7 +930,8 @@ begin
     for
         execute statement(v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -1005,6 +972,7 @@ create or alter procedure sp_cancel_supplier_invoice(
 )
 returns(
     doc_list_id type of dm_idb, -- id of created invoice
+    worker_id type of dm_ids,
     agent_id type of dm_idb, -- id of supplier
     doc_data_id type of dm_idb, -- id of created records in doc_data
     ware_id type of dm_idb, -- id of wares that we will get from supplier
@@ -1075,8 +1043,25 @@ begin
 
     -- save data which is to be deleted (NB! this action became MANDATORY for
     -- checking in srv_find_qd_qs_mism, do NOT delete it!):
-    insert into tmp$result_set( doc_id, agent_id, doc_data_id, ware_id, qty, cost_purchase, cost_retail)
-    select :doc_list_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail
+    insert into tmp$result_set( 
+        doc_id, 
+        worker_id, 
+        agent_id, 
+        doc_data_id, 
+        ware_id, 
+        qty, 
+        cost_purchase, 
+        cost_retail
+    )
+    select 
+        :doc_list_id, 
+        h.worker_id, 
+        h.agent_id, 
+        d.id,
+        d.ware_id, 
+        d.qty, 
+        d.cost_purchase, 
+        d.cost_retail
     from doc_data d
     join doc_list h on d.doc_id = h.id
     where d.doc_id = :doc_list_id; -- invoice which is to be removed now
@@ -1095,7 +1080,7 @@ begin
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.doc_id,r.agent_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
+    v_stt = 'select r.doc_id, r.worker_id, r.agent_id, r.doc_data_id, r.ware_id, r.qty, r.cost_purchase, r.cost_retail';
 
     if ( v_ibe = 1 ) then
        v_stt = v_stt || ' ,n.qty_clo ,n.qty_ord ,n.qty_sup';
@@ -1115,6 +1100,7 @@ begin
         execute statement (v_stt) ( x := :doc_list_id )
     into
         doc_list_id
+        ,worker_id
         ,agent_id
         ,doc_data_id
         ,ware_id
@@ -1189,6 +1175,7 @@ begin
              q.ware_id = d.ware_id
              and q.snd_optype_id = :v_oper_order_by_customer
              and q.rcv_optype_id = :v_oper_retail_reserve
+             and q.worker_id is not distinct from fn_this_worker_seq_no()
              and q.snd_id = d.id --- :: NB :: full match on index range scan must be here!
         where
             d.doc_id = :a_client_order_id
@@ -1250,6 +1237,7 @@ create or alter procedure sp_customer_reserve(
     dbg integer default 0)
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     client_order_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -1398,11 +1386,11 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.base_doc_id, v.doc_data_id, v.ware_id, v.qty,v.cost_purchase, v.cost_retail'
+        v_stt = 'select v.worker_id, v.base_doc_id, v.doc_data_id, v.ware_id, v.qty,v.cost_purchase, v.cost_retail'
                 ||',v.qty_ord ,v.qty_avl ,v.qty_res'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.base_doc_id, d.id, d.ware_id, d.qty,d.cost_purchase, d.cost_retail'
+        v_stt = 'select h.worker_id, h.base_doc_id, d.id, d.ware_id, d.qty,d.cost_purchase, d.cost_retail'
                 ||',null      ,null      ,null     '
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
@@ -1410,7 +1398,8 @@ begin
     for
         execute statement (v_stt) ( x := :doc_list_id )
     into
-         client_order_id
+         worker_id
+        ,client_order_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -1450,6 +1439,7 @@ create or alter procedure sp_cancel_customer_reserve(
 )
 returns (
     doc_list_id type of dm_idb, -- id of new created reserve doc
+    worker_id type of dm_ids,
     client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
     doc_data_id type of dm_idb, -- id of created records in doc_data
     ware_id type of dm_idb, -- id of wares that we resevre for customer
@@ -1516,12 +1506,13 @@ begin
         execute procedure sp_lock_selected_doc( doc_list_id, 'v_cancel_customer_reserve', a_selected_doc_id);
 
     select
-        h.base_doc_id
+        h.base_doc_id, h.worker_id
     from doc_list h
     where
         h.id = :doc_list_id
     into
-        v_linked_client_order; -- not null ==> this reserve was filled with wares from client order
+        v_linked_client_order, worker_id
+    ; -- not null ==> this reserve was filled with wares from client order
 
     -- 17.07.2014: add cond for indexed scan to minimize fetches when multiple
     -- calls of this SP from sp_cancel_adding_invoice:
@@ -1531,6 +1522,7 @@ begin
     -- checking in srv_find_qd_qs_mism, do NOT delete it!):
     insert into tmp$result_set(
         doc_id,
+        worker_id,
         base_doc_id,
         doc_data_id,
         ware_id,
@@ -1540,6 +1532,7 @@ begin
     )
     select
         :doc_list_id,
+        :worker_id,
         :v_linked_client_order,
         d.id,
         d.ware_id,
@@ -1563,7 +1556,7 @@ begin
 
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.doc_id,r.base_doc_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
+    v_stt = 'select r.doc_id, r.worker_id, r.base_doc_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
     if ( v_ibe = 1 ) then
        v_stt = v_stt || ' ,n.qty_ord,       n.qty_avl,       n.qty_res';
     else
@@ -1582,6 +1575,7 @@ begin
         execute statement (v_stt) ( x := :doc_list_id)
     into
         doc_list_id
+        ,worker_id
         ,client_order_id
         ,doc_data_id
         ,ware_id
@@ -1623,6 +1617,7 @@ create or alter procedure sp_cancel_write_off(
 )
 returns (
     doc_list_id type of dm_idb, -- id of invoice being added to stock
+    worker_id type of dm_ids,
     client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
     doc_data_id type of dm_idb, -- id of created records in doc_data
     ware_id type of dm_idb, -- id of wares that we will get from supplier
@@ -1708,22 +1703,23 @@ begin
     where
         h.id = :doc_list_id
     returning
-        h.base_doc_id
+        h.base_doc_id, h.worker_id
     into
-        client_order_id; -- out arg
+        client_order_id, worker_id; -- out args
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
     execute procedure sp_add_perf_log(0, v_this, null, 'doc_id='||doc_list_id);
 
+
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     v_stt = 'select d.doc_id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail';
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ',d.doc_data_id ,d.qty_avl ,d.qty_res  ,d.qty_out from v_doc_detailed d';
+       v_stt = v_stt || ',d.worker_id ,d.doc_data_id ,d.qty_avl ,d.qty_res  ,d.qty_out from v_doc_detailed d';
     else
-       v_stt = v_stt || ',d.id         ,null      ,null       ,null      from doc_data d';
-
+       v_stt = v_stt || ',null        ,d.id          ,null      ,null       ,null      from doc_data d';
+    
     v_stt = v_stt || ' where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
@@ -1735,6 +1731,7 @@ begin
         ,qty
         ,purchase
         ,retail
+        ,worker_id
         ,doc_data_id
         ,qty_avl
         ,qty_res
@@ -1761,6 +1758,7 @@ when any do
     end
 
 end
+
 
 ^ -- sp_cancel_write_off
 
@@ -1831,6 +1829,7 @@ begin
             q.ware_id = :v_ware_id
             and q.snd_optype_id = :v_oper_order_by_customer
             and q.rcv_optype_id = :v_oper_retail_reserve
+            and q.worker_id is not distinct from fn_this_worker_seq_no() -- 14.08.2018
             and not exists(
                 select * from tmp$dep_docs t
                 where
@@ -1917,6 +1916,7 @@ create or alter procedure sp_add_invoice_to_stock(
 )
 returns (
     doc_list_id type of dm_idb, -- id of invoice being added to stock
+    worker_id type of dm_ids,
     agent_id type of dm_idb, -- id of supplier
     doc_data_id type of dm_idb, -- id of created records in doc_data
     ware_id type of dm_idb, -- id of wares that we will get from supplier
@@ -2149,17 +2149,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if (  v_ibe = 1 ) then
-        v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
+        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,     null,       null '
+        v_stt = 'select h.worker_id, h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,     null,       null '
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement (v_stt) ( x := :doc_list_id )
      into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -2198,6 +2199,7 @@ create or alter procedure sp_cancel_adding_invoice(
 )
 returns (
     doc_list_id type of dm_idb, -- id of invoice being added to stock
+    worker_id type of dm_ids,
     agent_id type of dm_idb, -- id of supplier
     doc_data_id type of dm_idb, -- id of created records in doc_data
     ware_id type of dm_idb, -- id of wares that we will get from supplier
@@ -2236,17 +2238,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
+        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,      null,      null'
+        v_stt = 'select h.worker_id, h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,      null,      null'
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement (v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -2286,6 +2289,7 @@ create or alter procedure sp_cancel_supplier_order(
     a_selected_doc_id type of dm_idb default null)
 returns (
     doc_list_id type of dm_idb,
+    worker_id type of dm_ids,
     agent_id type of dm_idb,
     doc_data_id type of dm_idb,
     ware_id type of dm_idb,
@@ -2431,9 +2435,19 @@ begin
 
     -- save data which is to be deleted (NB! this action became MANDATORY for
     -- checking in srv_find_qd_qs_mism, do NOT delete it!):
-    insert into tmp$result_set( doc_id, agent_id, doc_data_id, ware_id, qty, cost_purchase, cost_retail)
+    insert into tmp$result_set( 
+        doc_id, 
+        worker_id, 
+        agent_id, 
+        doc_data_id, 
+        ware_id, 
+        qty, 
+        cost_purchase, 
+        cost_retail
+    )
     select
         :doc_list_id,
+        h.worker_id,
         h.agent_id,
         d.id,
         d.ware_id,
@@ -2458,7 +2472,7 @@ begin
 
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.agent_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
+    v_stt = 'select r.worker_id, r.agent_id, r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
     if ( v_ibe = 1 ) then
         v_stt = v_stt ||' ,n.qty_clo,n.qty_ord'
                       ||' from tmp$result_set r left join v_saldo_invnt n on r.ware_id = n.ware_id';
@@ -2472,7 +2486,8 @@ begin
     for
         execute statement (v_stt) ( x := :doc_list_id )
     into
-         agent_id
+         worker_id
+        ,agent_id
         ,doc_data_id
         ,ware_id
         ,qty
@@ -2509,6 +2524,7 @@ end
 create or alter procedure sp_reserve_write_off(a_selected_doc_id type of dm_idb default null)
 returns (
     doc_list_id type of dm_idb, -- id of customer reserve doc
+    worker_id type of dm_ids, 
     client_order_id type of dm_idb, -- id of client order (if current reserve was created with link to it)
     doc_data_id type of dm_idb, -- id of processed records in doc_data
     ware_id type of dm_idb, -- id of ware
@@ -2595,19 +2611,20 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.doc_data_id,v.ware_id,v.qty,v.cost_purchase,v.cost_retail'
+        v_stt = 'select v.worker_id, v.doc_data_id,v.ware_id,v.qty,v.cost_purchase,v.cost_retail'
                 ||',v.qty_avl,v.qty_res,v.qty_out'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select d.id,d.ware_id,d.qty,d.cost_purchase,d.cost_retail'
+        v_stt = 'select h.worker_id, d.id,d.ware_id,d.qty,d.cost_purchase,d.cost_retail'
                 ||',null     ,null     ,null'
-                ||' from doc_data d where d.doc_id = :x';
+                ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement (v_stt) ( x := :doc_list_id )
     into
-         doc_data_id
+         worker_id
+        ,doc_data_id
         ,ware_id
         ,qty
         ,purchase
@@ -2754,7 +2771,13 @@ begin
 
             if ( a_total_pay is null ) then
                 begin
-                    select sum( p.snd_cost ) from pdistr p where p.snd_id = :source_doc_id into v_non_paid_total;
+                    select sum( p.snd_cost ) 
+                    from pdistr p 
+                    where 
+                        p.snd_id = :source_doc_id 
+                        and p.worker_id is not distinct from fn_this_worker_seq_no() -- added 05.10.2018
+                    into v_non_paid_total;
+                    
                     current_pay_sum = round( v_non_paid_total, v_round_to );
                     if (current_pay_sum < v_non_paid_total) then
                     begin
@@ -3151,6 +3174,92 @@ end
 
 ^ -- sp_cancel_pay_to_supplier
 
+create or alter procedure srv_diag_pay_distr( -- ::: NB ::: 3.0 only!
+    a_doc_id dm_idb default null
+) returns(
+    result varchar(3), -- 'ok.' | 'err'
+    ptab varchar(8),
+    ptab_id int,
+    snd_oper dm_mcode,
+    snd_id dm_idb,
+    rcv_oper dm_mcode,
+    rcv_id dm_idb,
+    ptab_cost dm_cost,
+    ptab_sum_cost dm_cost,
+    payment_id dm_idb, 
+    payment_cost dm_cost
+)
+as
+begin
+    for
+        select
+             iif( iif( h.optype_id=fn_oper_pay_from_customer(), h.cost_retail, h.cost_retail) = sum(ps.cost)over( partition by iif(ps.ptab='pdistr',ps.snd_optype_id,ps.rcv_optype_id)), 'ok.','err' ) result
+            ,cast(ps.ptab as varchar(8)) as ptab
+            ,ps.id as ptab_id
+            ,ps.snd_oper
+            ,ps.snd_id as ptab_snd_id
+            ,ps.rcv_oper
+            ,ps.rcv_id as ptab_rcv_id
+            ,ps.cost as ptab_cost
+            ,sum(ps.cost)over( partition by iif(ps.ptab='pdistr',ps.snd_optype_id,ps.rcv_optype_id)) ptab_sum_cost
+            --,ps.trn_id as ptab_trn
+            ,h.id as payment_id
+            ,iif( h.optype_id=fn_oper_pay_from_customer(), h.cost_retail, h.cost_retail) as payment_cost
+        from (
+            select
+                'pdistr' ptab,
+                pd.trn_id,
+                pd.snd_optype_id,
+                so.mcode as snd_oper,
+                pd.rcv_optype_id,
+                ro.mcode as rcv_oper,
+                pd.id,
+                pd.snd_id,
+                pd.snd_cost cost, -- NOT YET storned value
+                cast(null as int) as rcv_id
+            from pdistr pd
+            --join doc_list h on pd.snd_id = h.id and pd.snd_optype_id = h.optype_id
+            join optypes so on pd.snd_optype_id=so.id
+            join optypes ro on pd.rcv_optype_id=ro.id
+            where (pd.snd_id = :a_doc_id or :a_doc_id is null) -- OR'ed optimization, 3.0 only
+
+            UNION ALL
+
+            select
+                'pstorned',
+                ps.trn_id,
+                ps.snd_optype_id,
+                so.mcode as snd_oper,
+                ps.rcv_optype_id,
+                ro.mcode as rcv_oper,
+                ps.id,
+                ps.snd_id,
+                ps.rcv_cost, -- ALREADY STORNED value
+                ps.rcv_id
+            from pstorned ps
+            --join doc_list h on ps.rcv_id = h.id and ps.rcv_optype_id = h.optype_id
+            join optypes so on ps.snd_optype_id=so.id
+            join optypes ro on ps.rcv_optype_id=ro.id
+            where (ps.rcv_id = :a_doc_id or :a_doc_id is null) -- OR'ed optimization, 3.0 only
+        ) ps
+        join doc_list h on h.id = iif(ps.ptab='pdistr',ps.snd_id,ps.rcv_id)
+    into
+        result
+        ,ptab
+        ,ptab_id
+        ,snd_oper
+        ,snd_id
+        ,rcv_oper
+        ,rcv_id
+        ,ptab_cost
+        ,ptab_sum_cost
+        ,payment_id
+        ,payment_cost
+    do suspend;
+end
+
+^ -- srv_diag_pay_distr
+
 --------------------------------------------------------------------------------
 -- #######################   S E R V I C E   U N I T S   #######################
 --------------------------------------------------------------------------------
@@ -3279,7 +3388,7 @@ begin
     upd_rows = 0;
     del_rows = 0;
     v_neg_info = '';
-    v_exc_on_chk_violation = iif( rdb$get_context('USER_SESSION', 'HALT_TEST_ON_ERRORS') containing ',CK,', 1, 0);
+    v_exc_on_chk_violation = iif( rdb$get_context('USER_SESSION', 'HALT_TEST_ON_ERRORS') containing '/CK/', 1, 0);
 
     for
         select
@@ -3717,9 +3826,11 @@ end
 
 ^ -- srv_recalc_idx_stat
 
+
 --------------------------------------------------------------------------
 -- ###########################    R E P O R T S   ########################
 --------------------------------------------------------------------------
+-- 14.08.2018. Only procedures that differ in 3.0 comparing to 2.5 remain here.
 
 create or alter procedure srv_get_last_launch_beg_end(
     a_last_hours smallint default 3,
@@ -3728,1127 +3839,17 @@ returns (
      last_launch_beg timestamp
     ,last_launch_end timestamp
 ) as
-begin
-    -- Auxiliary SP: finds moments of start and finish business operations in perf_log
-    -- on timestamp interval that is [L, N] where:
-    -- "L" = latest from {-abs( :a_last_hours * 60 + :a_last_mins ), 'perf_watch_interval'}
-    -- "N" = latest record in perf_log table
-    select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-    from (
-        select p.dts_beg as last_job_start_dts
-        from perf_log p
-        where p.unit = 'perf_watch_interval'
-        order by dts_beg desc rows 1
-    ) x
-    cross join
-    (
-        select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-        from perf_log p
-        where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
-        order by p.dts_beg desc
-        rows 1
-    ) y
-    into last_launch_beg;
 
-    select p.dts_end as report_end
-    from perf_log p
-    where
-        p.dts_beg >= :last_launch_beg
-        and p.dts_end is not null
-    order by p.dts_beg desc
-    rows 1
-    into last_launch_end;
+begin
+    -- ###########################################################
+    -- STUB! Will be filled with actual code in oltp_common_sp.sql
+    -- ###########################################################
+
     suspend;
+
 end
 
 ^ -- srv_get_last_launch_beg_end
-
-create or alter procedure srv_mon_perf_total(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-    business_action dm_info,
-    job_beg varchar(16),
-    job_end varchar(16),
-    avg_times_per_minute numeric(12,2),
-    avg_elapsed_ms int,
-    successful_times_done int
-)
-as
-    declare v_sort_prior int;
-    declare v_overall_performance double precision;
-    declare v_all_minutes int;
-    declare v_succ_all_times int;
-    declare v_this dm_dbobj = 'srv_mon_perf_total';
-begin
-    -- MAIN SP for estimating performance: provides number of business operations
-    -- per minute which were SUCCESSFULLY finished. Suggested by Alexey Kovyazin.
-
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    delete from tmp$perf_log p  where p.stack = :v_this;
-
-    insert into tmp$perf_log(unit, info, id, dts_beg, dts_end, aux1, aux2, stack)
-    with
-    a as(
-        -- reduce needed number of minutes from most last event of some SP starts:
-        -- 18.07.2014: handle only data which belongs to LAST job.
-        -- Record with p.unit = 'perf_watch_interval' is added in
-        -- oltp_isql_run_worker.bat before FIRST isql will be launched
-        -- for each mode ('sales', 'logist' etc)
-        select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-        from (
-            select p.dts_beg as last_job_start_dts
-            from perf_log p
-            where p.unit = 'perf_watch_interval'
-            order by dts_beg desc rows 1
-        ) x
-        join
-        (
-            select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-            from perf_log p
-            -- nb: do NOT use inner join here (bad plan with sort)
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- "order by" - only for 3.0
-            order by p.dts_beg desc
-            rows 1
-        ) y
-        on 1=1
-    )
-    ,p as(
-        select
-            g.unit
-            ,min( g.dts_beg ) report_beg
-            ,max( g.dts_end  ) report_end
-            ,count(*) successful_times_done
-            ,avg(g.elapsed_ms) successful_avg_ms
-        from perf_log g
-        join business_ops b on b.unit=g.unit
-        join a on g.dts_beg >= a.last_job_start_dts -- only rows which are from THIS job!
-        where  -- we must take in account only SUCCESSFULLY finished units, i.e. fb_gdscode is NULL.
-            g.fb_gdscode + 0 -- 25.11.2015: suppress making bitmap for this index! almost 90% of rows contain NULL in this field.
-            is null
-        group by g.unit
-    )
-    select b.unit, b.info, b.sort_prior, p.report_beg, p.report_end,
-           p.successful_times_done, p.successful_avg_ms, :v_this
-    from business_ops b
-    left join p on b.unit = p.unit;
-    -- tmp$perf_log(unit, info, id, dts_beg, dts_end, aux1, aux2)
-
-    -- total elapsed minutes and number of successfully finished SPs for ALL units:
-    select nullif(datediff( minute from min_beg to max_end ),0),
-           succ_all_times,
-           left(cast(min_beg as varchar(24)),16),
-           left(cast(max_end as varchar(24)),16)
-    from (
-        select min(p.dts_beg) min_beg, max(p.dts_end) max_end, sum(p.aux1) succ_all_times
-        from tmp$perf_log p
-        where p.stack = :v_this
-    )
-    into v_all_minutes, v_succ_all_times, job_beg, job_end;
-
-    for
-        select
-             business_action
-            ,avg_times_per_minute
-            ,avg_elapsed_ms
-            ,successful_times_done
-            ,sort_prior
-        from (
-            select
-                0 as sort_prior
-                ,'*** OVERALL *** for '|| :v_all_minutes ||' minutes: ' as business_action -- 'Average ops/minute = '||:v_all_minutes||' ;'||(sum( aux1 ) / :v_all_minutes)  as business_action
-                ,1.00*sum( aux1 ) / :v_all_minutes as avg_times_per_minute
-                ,avg(aux2) as avg_elapsed_ms
-                ,sum(aux1) as successful_times_done
-            from tmp$perf_log p
-            where p.stack = :v_this
-
-            UNION ALL
-            
-            select
-                 p.id as sort_prior
-                ,p.info as business_action
-                ,1.00 * aux1 / maxvalue( 1, datediff( minute from p.dts_beg to p.dts_end ) ) as avg_times_per_minute
-                ,aux2 as avg_elapsed_ms
-                ,aux1 as successful_times_done
-            from tmp$perf_log p
-            where p.stack = :v_this
-        ) x
-        order by x.sort_prior
-        into
-             business_action
-            ,avg_times_per_minute
-            ,avg_elapsed_ms
-            ,successful_times_done
-            ,v_sort_prior
-    do begin
-        if ( v_sort_prior = 0 ) then -- save value to be written into perf_log
-            v_overall_performance = avg_times_per_minute;
-        suspend;
-    end
-
-    delete from tmp$perf_log p  where p.stack = :v_this;
-
-    begin
-        -- 02.11.2015: save overall performance value so it can be used later:
-        update perf_log p set aux1 = :v_overall_performance
-        where p.unit = 'perf_watch_interval'
-        order by dts_beg desc rows 1;
-    when any do
-        begin
-            -- lock/update conflict can be here with another ISQL session with SID #1
-            -- (running on other machine) that makes this report at the same time.
-            -- We suppress this exception because this record will anyway contain
-            -- value that we want to save.
-        end
-    end
-    -- Statistics for database with size = 100 Gb and cleaned OS cache (LI-V3.0.0.32179):
-    -- sync
-    -- echo 3 > /proc/sys/vm/drop_caches
-    -- 20 records fetched
-    -- 600187 ms, 233041 read(s), 4 write(s), 3206400 fetch(es), 70 mark(s)
-    --
-    -- Table                             Natural     Index    Update    Insert    Delete
-    -- ***********************************************************************************
-    -- RDB$INDICES                                       9
-    -- BUSINESS_OPS                           19        38
-    -- PERF_LOG                                     369967         1
-    -- TMP$PERF_LOG                           76                            19        19
-
-end
-
-^ -- srv_mon_perf_total
-
-create or alter procedure srv_mon_perf_dynamic(
-    a_intervals_number smallint default 10,
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-     business_action dm_info
-    ,interval_no smallint
-    ,cnt_ok_per_minute int
-    ,cnt_all int
-    ,cnt_ok int
-    ,cnt_err int
-    ,err_prc numeric(12,2)
-    ,ok_avg_ms int
-    ,interval_beg timestamp
-    ,interval_end timestamp
-)
-as
-    declare v_this dm_dbobj = 'srv_mon_perf_dynamic';
-begin
-
-    -- 15.09.2014 Get performance results 'in dynamic': split all job time to N
-    -- intervals, where N is specified by 1st input argument.
-    -- 03.09.2015 Removed cross join perf_log and CTE 'inp_args as i' because
-    -- of inefficient plan. Input parameters are injected inside DT.
-    -- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
-
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    delete from tmp$perf_log p where p.stack = :v_this;
-    insert into tmp$perf_log(
-        unit
-        ,info
-        ,id        -- interval_no
-        ,dts_beg   -- interval_beg
-        ,dts_end   -- interval_end
-        ,aux1      -- cnt_ok
-        ,aux2       -- cnt_err
-        ,elapsed_ms -- ok_avg_ms
-        ,stack
-    )
-    with
-    a as(
-        -- reduce needed number of minutes from most last event of some SP starts:
-        -- 18.07.2014: handle only data which belongs to LAST job.
-        -- Record with p.unit = 'perf_watch_interval' is added in
-        -- oltp_isql_run_worker.bat before FIRST isql will be launched
-        select
-            maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
-            ,y.last_job_finish_dts
-            ,y.intervals_number
-        from (
-            select p.dts_beg as last_added_watch_row_dts
-            from perf_log p
-            where p.unit = 'perf_watch_interval'
-            order by dts_beg desc rows 1
-        ) x
-        join (
-            select
-                dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
-                ,p.dts_beg as last_job_finish_dts
-                ,p.intervals_number
-            from
-            ( -- since 03.09.2015:
-                select
-                    p.*
-                    , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                    , :a_intervals_number as intervals_number
-                from perf_log p
-            ) p
-            -- nb: do NOT use inner join here (bad plan with sort)
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-            order by p.dts_beg desc
-            rows 1
--- Before 03.09.2015
--- (inefficient plan with nested loops of all pef_log rows + SORT, 'rows 1' was ignored!
--- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
---            select
---                dateadd( i.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
---                ,p.dts_beg as last_job_finish_dts
---                ,i.intervals_number
---            from perf_log p
---            join i on 1=1  -- CTE 'i' was: "with i as(select :a_intervals_number, :a_last_hours, :a_last_mins from rdb$database)
---            -- nb: do NOT use inner join here (bad plan with sort)
---            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
---            order by p.dts_beg desc
---            rows 1
-        ) y on 1=1
-    )
-    ,d as(
-        select
-            a.first_job_start_dts
-            ,a.last_job_finish_dts
-            ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
-        from a
-    )
-    --    select * from d
-
-    ,p as(
-        select
-            g.unit
-            ,b.info
-            ,1+cast(datediff(second from d.first_job_start_dts to g.dts_beg) / d.sec_for_one_interval as int) as interval_no
-            ,count(*) cnt_all
-            ,count( iif( g.fb_gdscode is null, 1, null ) ) cnt_ok
-            ,count( iif( g.fb_gdscode is NOT null, 1, null ) ) cnt_err
-            ,100.00 * count( nullif(g.fb_gdscode,0) ) / count(*) err_prc
-            ,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-            ,min(d.first_job_start_dts) as first_job_start_dts
-            ,min(d.sec_for_one_interval) as sec_for_one_interval
-        from perf_log g
-        join business_ops b on b.unit = g.unit
-        join d on g.dts_beg >= d.first_job_start_dts -- only rows which are from THIS measured test run!
-        group by 1,2,3
-    )
-    ,q as(
-        select
-            unit
-            ,info
-            ,interval_no
-            ,dateadd( (interval_no-1) * sec_for_one_interval+1 second to first_job_start_dts ) as interval_beg
-            ,dateadd( interval_no * sec_for_one_interval second to first_job_start_dts ) as interval_end
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-        from p
-    )
-    --select * from q;
-    select
-        unit
-        ,info
-        ,interval_no
-        ,interval_beg
-        ,interval_end
-        ,cnt_ok          -- aux1
-        ,cnt_err         -- aux2
-        ,ok_avg_ms
-        ,:v_this
-    from q;
-    -----------------------------
-
-    for
-        select
-             business_action
-            ,interval_no
-            ,cnt_ok_per_minute
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-            ,interval_beg
-            ,interval_end
-        from (
-            select
-                0 as sort_prior
-                ,'interval #'||lpad(id, 4, ' ')||', overall' as business_action
-                ,id as interval_no
-                ,min(dts_beg) as interval_beg
-                ,min(dts_end) as interval_end
-                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0), 0) cnt_ok_per_minute
-                ,sum(aux1 + aux2) as cnt_all
-                ,sum(aux1) as cnt_ok
-                ,sum(aux2) as cnt_err
-                ,100 * sum(aux2) / sum(aux1 + aux2) as err_prc
-                ,cast(null as int) as ok_avg_ms
-                --,avg(elapsed_ms) as ok_avg_ms
-            from tmp$perf_log p
-            where p.stack = :v_this
-            group by id
-        
-            UNION ALL
-        
-            select
-                1 as sort_prior
-                ,info as business_action
-                ,id as interval_no
-                ,dts_beg as interval_beg
-                ,dts_end as interval_end
-                ,aux1 / nullif(datediff(minute from dts_beg to dts_end),0) cnt_ok_per_minute
-                ,aux1 + aux2 as cnt_all
-                ,aux1 as cnt_ok
-                ,aux2 as cnt_err
-                ,100 * aux2 / (aux1 + aux2) as err_prc
-                ,elapsed_ms as ok_avg_ms
-            from tmp$perf_log p
-            where p.stack = :v_this
-        )
-        order by sort_prior, business_action, interval_no
-    into
-             business_action
-            ,interval_no
-            ,cnt_ok_per_minute
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-            ,interval_beg
-            ,interval_end
-    do suspend;
-end
-
-^ -- srv_mon_perf_dynamic
-
-create or alter procedure srv_mon_perf_detailed (
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0,
-    a_show_detl smallint default 0)
-returns (
-    unit type of dm_unit,
-    cnt_all integer,
-    cnt_ok integer,
-    cnt_err integer,
-    err_prc numeric(6,2),
-    ok_min_ms integer,
-    ok_max_ms integer,
-    ok_avg_ms integer,
-    cnt_lk_confl integer,
-    cnt_user_exc integer,
-    cnt_chk_viol integer,
-    cnt_unq_viol integer,
-    cnt_fk_viol integer,
-    cnt_stack_trc integer, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
-    cnt_zero_gds integer,  -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
-    cnt_other_exc integer,
-    job_beg varchar(16),
-    job_end varchar(16)
-)
-as
-begin
-    -- SP for detailed performance analysis: count of operations
-    -- (NOT only business ops; including BOTH successful and failed ones),
-    -- count of errors (including by their types)
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
-    a_last_mins = coalesce(a_last_mins, 0);
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    delete from tmp$perf_mon where 1=1;
-
-    insert into tmp$perf_mon(
-         dts_beg                     -- 1
-        ,dts_end
-        ,unit
-        ,cnt_all
-        ,cnt_ok                       -- 5
-        ,cnt_err
-        ,err_prc
-        ,ok_min_ms
-        ,ok_max_ms
-        ,ok_avg_ms                  -- 10
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc               -- 15
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-    )
-    with
-    a as(
-        -- reduce needed number of minutes from most last event of some SP starts:
-        -- 18.07.2014: handle only data which belongs to LAST job.
-        -- Record with p.unit = 'perf_watch_interval' is added in
-        -- oltp_isql_run_worker.bat before FIRST isql will be launched
-        -- for each mode ('sales', 'logist' etc)
-        select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-        from (
-            select p.dts_beg as last_job_start_dts
-            from perf_log p
-            where p.unit = 'perf_watch_interval'
-            order by dts_beg desc rows 1
-        ) x
-        join
-        (
-            select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-            from perf_log p
-            where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit) -- nb: do NOT use inner join here (bad plan with sort)
-            order by p.dts_beg desc
-            rows 1
-        ) y
-        on 1=1
-    )
---    a as( select p.dts_beg last_beg from perf_log p order by p.dts_beg desc rows 1 )
-    ,r as(
-          select min(p.dts_beg) report_beg, max(dts_end) report_end
-          from perf_log p
-          join a on p.dts_beg >= a.last_job_start_dts
-    )
-    ,c as (
-        select
-             r.report_beg
-            ,r.report_end
-            ,pg.unit
-            ,count(*) cnt_all
-            ,count( iif( nullif(pg.fb_gdscode,0) is null, 1, null) ) cnt_ok                -- 5
-            ,count( nullif(pg.fb_gdscode,0) ) cnt_err
-            ,100.00 * count( nullif(pg.fb_gdscode,0) ) / count(*) err_prc
-            ,min( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_min_ms
-            ,max( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_max_ms
-            ,avg( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_avg_ms
-            ,count( iif(pg.fb_gdscode in( 335544347, 335544558 ), 1, null ) ) cnt_chk_viol    -- 10
-            ,count( iif(pg.fb_gdscode in( 335544665, 335544349 ), 1, null ) ) cnt_unq_viol
-            ,count( iif(pg.fb_gdscode in( 335544466, 335544838, 335544839 ), 1, null ) ) cnt_fk_viol
-            ,count( iif(pg.fb_gdscode in( 335544345, 335544878, 335544336, 335544451 ), 1, null ) ) cnt_lk_confl
-            ,count( iif(pg.fb_gdscode = 335544517, 1, null) ) cnt_user_exc
-            ,count( iif(pg.fb_gdscode = 335544842, 1, null) ) cnt_stack_trc                 -- 15
-            ,count( iif(pg.fb_gdscode = 0, 1, null) ) cnt_zero_gds
-            ,count( iif( pg.fb_gdscode
-                         in (
-                                335544347, 335544558,
-                                335544665, 335544349,
-                                335544466, 335544838, 335544839,
-                                335544345, 335544878, 335544336, 335544451,
-                                335544517,
-                                335544842,
-                                0
-                            )
-                          ,null
-                          ,pg.fb_gdscode
-                       )
-                   ) cnt_other_exc
-        from perf_log pg
-        join r on pg.dts_beg between r.report_beg and r.report_end
-        where
-            pg.elapsed_ms >= 0 and  -- 24.09.2014: prevent from display in result 'sp_halt_on_error', 'perf_watch_interval' and so on
-            pg.unit not starting with 'srv_recalc_idx_stat_'
-        group by
-             r.report_beg
-            ,r.report_end
-            ,pg.unit
-    )
-    select *
-    from c;
-
-    insert into tmp$perf_mon(
-         rollup_level
-        ,unit
-        ,cnt_all
-        ,cnt_ok
-        ,cnt_err
-        ,err_prc
-        ,ok_min_ms
-        ,ok_max_ms
-        ,ok_avg_ms
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-        ,dts_beg
-        ,dts_end
-    )
-    select
-         1
-        ,unit
-        ,sum(cnt_all)
-        ,sum(cnt_ok)
-        ,sum(cnt_err)
-        ,100.00 * sum(cnt_err) / sum(cnt_all)
-        ,min(ok_min_ms)
-        ,max(ok_max_ms)
-        ,max(ok_avg_ms)
-        ,sum( cnt_chk_viol ) cnt_chk_viol
-        ,sum( cnt_unq_viol ) cnt_unq_viol
-        ,sum( cnt_fk_viol ) cnt_fk_viol
-        ,sum( cnt_lk_confl ) cnt_lk_confl
-        ,sum( cnt_user_exc ) cnt_user_exc
-        ,sum( cnt_stack_trc ) cnt_stack_trc
-        ,sum( cnt_zero_gds ) cnt_zero_gds
-        ,sum( cnt_other_exc ) cnt_other_exc
-        ,max( dts_beg )
-        ,max( dts_end )
-    from tmp$perf_mon
-    group by unit; -- overall totals
-
-    if ( :a_show_detl = 0 ) then
-        delete from tmp$perf_mon m where m.rollup_level is null;
-
-    -- final resultset (with overall totals first):
-    for
-        select
-            unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
-            ,cnt_chk_viol
-            ,cnt_unq_viol
-            ,cnt_fk_viol
-            ,cnt_lk_confl
-            ,cnt_user_exc
-            ,cnt_stack_trc
-            ,cnt_zero_gds
-            ,cnt_other_exc
-            ,left(cast(dts_beg as varchar(24)),16)
-            ,left(cast(dts_end as varchar(24)),16)
-        from tmp$perf_mon
-        --order by dy desc nulls first,hr desc, unit
-    into unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-        ,job_beg
-        ,job_end
-    do
-        suspend;
-
-end
-
-^ -- srv_mon_perf_detailed
-
-create or alter procedure srv_mon_business_perf_with_exc (
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-    info dm_info,
-    unit dm_unit,
-    cnt_all integer,
-    cnt_ok integer,
-    cnt_err integer,
-    err_prc numeric(6,2),
-    cnt_chk_viol integer,
-    cnt_unq_viol integer,
-    cnt_lk_confl integer,
-    cnt_user_exc integer,
-    cnt_other_exc integer,
-    job_beg varchar(16),
-    job_end varchar(16)
-)
-AS
-declare v_dummy int;
-begin
-
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
-    a_last_mins = coalesce(a_last_mins, 0);
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    delete from tmp$perf_mon where 1=1;
-    -- call to fill tmp$perf_mon with ONLY aggregated data:
-    select count(*) from srv_mon_perf_detailed(:a_last_hours, :a_last_mins, 0) into v_dummy;
-
-    for
-        select
-             o.info,s.unit, s.cnt_all, s.cnt_ok,s.cnt_err,s.err_prc
-            ,s.cnt_chk_viol
-            ,s.cnt_unq_viol
-            ,s.cnt_lk_confl
-            ,s.cnt_user_exc
-            ,s.cnt_other_exc
-            ,left(cast(s.dts_beg as varchar(24)),16)
-            ,left(cast(s.dts_end as varchar(24)),16)
-        from business_ops o
-        left join tmp$perf_mon s on o.unit=s.unit
-        order by o.sort_prior
-    into
-        info
-        ,unit
-        ,cnt_all
-        ,cnt_ok
-        ,cnt_err
-        ,err_prc
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_other_exc
-        ,job_beg
-        ,job_end
-    do
-        suspend;
-
-end
-
-^ -- srv_mon_business_perf_with_exc
-
-create or alter procedure srv_mon_exceptions(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-    fb_gdscode int,
-    fb_mnemona type of column fb_errors.fb_mnemona,
-    unit type of dm_unit,
-    cnt int,
-    dts_min timestamp,
-    dts_max timestamp
-)
-as
-begin
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    for
-        with
-        a as(
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            -- for each mode ('sales', 'logist' etc)
-            select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-            from (
-                select p.dts_beg as last_job_start_dts
-                from perf_log p
-                where p.unit = 'perf_watch_interval'
-                order by dts_beg desc rows 1
-            ) x
-            join
-            (
-                select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-                from perf_log p
-                -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-                order by p.dts_beg desc
-                rows 1
-            ) y
-            on 1=1
-        )
-        select p.fb_gdscode, e.fb_mnemona, p.unit, count(*) cnt, min(p.dts_beg) dts_min, max(p.dts_beg) dts_max
-        from perf_log p
-        join a on p.dts_beg >= a.last_job_start_dts
-        LEFT -- !! some exceptions can missing in fb_errors !!
-            join fb_errors e on p.fb_gdscode = e.fb_gdscode
-        where
-            p.fb_gdscode > 0
-            and p.exc_unit='#' -- 10.01.2015, see sp_add_to_abend_log: take in account only those units where exception occured, and skip callers of them
-        group by 1,2,3
-    into
-       fb_gdscode, fb_mnemona, unit, cnt, dts_min, dts_max
-    do
-        suspend;
-end
-
-^ -- srv_mon_exceptions
-
-create or alter procedure srv_mon_perf_trace (
-    a_intervals_number smallint default 10,
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0
-)
-returns (
-    unit dm_unit
-    ,info dm_info
-    ,interval_no smallint
-    ,cnt_success int
-    ,fetches_per_second int
-    ,marks_per_second int
-    ,reads_to_fetches_prc numeric(6,2)
-    ,writes_to_marks_prc numeric(6,2)
-    ,interval_beg timestamp
-    ,interval_end timestamp
-) as
-begin
-
-    -- Report based on result of parsing TRACE log which was started by
-    -- ISQL session #1 when config parameter trc_unit_perf = 1.
-    -- Data for each business operation are displayed separately because
-    -- they depends on execution plans and can not be compared each other.
-    -- We have to analyze only RATIOS between reads/fetches and writes/marks,
-    -- and also values of speed (fetches and marks per second) instead of
-    -- absolute their values.
-
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    for
-        with
-        a as(
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select
-                maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
-                ,y.last_job_finish_dts
-                ,y.intervals_number
-            from (
-                select p.dts_beg as last_added_watch_row_dts
-                from perf_log p
-                where p.unit = 'perf_watch_interval'
-                order by dts_beg desc rows 1
-            ) x
-            join (
-                select
-                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
-                    ,p.dts_beg as last_job_finish_dts
-                    ,p.intervals_number
-                from
-                ( -- since 03.09.2015:
-                    select
-                        p.*
-                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                        , :a_intervals_number as intervals_number
-                    from perf_log p
-                ) p
-                -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-                order by p.dts_beg desc
-                rows 1
-            ) y on 1=1
-        )
-        ,d as(
-            select
-                a.first_job_start_dts
-                ,a.last_job_finish_dts
-                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
-            from a
-        )
-        --select * from d
-        ,p as(
-            select
-                t.unit
-                ,b.info
-                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
-                ,count(*) cnt_success
-                ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
-                ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
-                ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
-                ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
-                --,count( nullif(t.success,0) ) cnt_ok
-                --,count( nullif(t.success,1) ) cnt_err
-                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
-                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-                ,min(d.first_job_start_dts) as first_job_start_dts
-                ,min(d.sec_for_one_interval) as sec_for_one_interval
-            from trace_stat t
-            join business_ops b on t.unit = b.unit
-            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS measured test run!
-            where t.success = 1
-            group by 1,2,3
-        )
-        --select * from p
-        ,q as (
-            select
-                unit
-                ,info
-                ,interval_no
-                ,cnt_success
-                ,fetches_per_second
-                ,marks_per_second
-                ,reads_to_fetches_prc
-                ,writes_to_marks_prc
-                ,first_job_start_dts
-                ,sec_for_one_interval
-                ,dateadd( (interval_no-1) * sec_for_one_interval+1 second to first_job_start_dts ) as interval_beg
-                ,dateadd( interval_no * sec_for_one_interval second to first_job_start_dts ) as interval_end
-            from p
-        )
-         --select * from q
-        select
-            unit
-            ,info
-            ,interval_no
-            ,cnt_success
-            ,fetches_per_second
-            ,marks_per_second
-            ,reads_to_fetches_prc
-            ,writes_to_marks_prc
-            ,interval_beg
-            ,interval_end
-        from q
-        into
-            unit
-            ,info
-            ,interval_no
-            ,cnt_success
-            ,fetches_per_second
-            ,marks_per_second
-            ,reads_to_fetches_prc
-            ,writes_to_marks_prc
-            ,interval_beg
-            ,interval_end
-    do
-        suspend;
-end
-
-^ -- srv_mon_perf_trace
-
-create or alter procedure srv_mon_perf_trace_pivot (
-    a_intervals_number smallint default 10,
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0
-)
-returns (
-    traced_data varchar(30),
-    interval_no smallint,
-    sp_client_order bigint,
-    sp_cancel_client_order bigint,
-    sp_supplier_order bigint,
-    sp_cancel_supplier_order bigint,
-    sp_supplier_invoice bigint,
-    sp_cancel_supplier_invoice bigint,
-    sp_add_invoice_to_stock bigint,
-    sp_cancel_adding_invoice bigint,
-    sp_customer_reserve bigint,
-    sp_cancel_customer_reserve bigint,
-    sp_reserve_write_off bigint,
-    sp_cancel_write_off bigint,
-    sp_pay_from_customer bigint,
-    sp_cancel_pay_from_customer bigint,
-    sp_pay_to_supplier bigint,
-    sp_cancel_pay_to_supplier bigint,
-    srv_make_invnt_saldo bigint,
-    srv_make_money_saldo bigint,
-    srv_recalc_idx_stat bigint,
-    interval_beg timestamp,
-    interval_end  timestamp
-) as
-begin
-
-    -- Report based on result of parsing TRACE log which was started by
-    -- ISQL session #1 when config parameter trc_unit_perf = 1.
-    -- Data for each business operation are displayed separately because
-    -- they depends on execution plans and can not be compared each other.
-    -- We have to analyze only RATIOS between reads/fetches and writes/marks,
-    -- and also values of speed (fetches and marks per second) instead of
-    -- absolute their values.
-
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    for
-        with recursive
-        a as(
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select
-                maxvalue( x.last_added_watch_row_dts, y.first_trace_statd_start_dts ) as first_job_start_dts
-                ,y.last_job_finish_dts
-                ,y.intervals_number
-            from (
-                select p.dts_beg as last_added_watch_row_dts
-                from perf_log p
-                where p.unit = 'perf_watch_interval'
-                order by dts_beg desc rows 1
-            ) x
-            join (
-                select
-                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_trace_statd_start_dts
-                    ,p.dts_beg as last_job_finish_dts
-                    ,p.intervals_number
-                from
-                ( -- since 03.09.2015:
-                    select
-                        p.*
-                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                        , :a_intervals_number as intervals_number
-                    from perf_log p
-                ) p
-                -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-                order by p.dts_beg desc
-                rows 1
-            ) y on 1=1
-        )
-        ,d as(
-            select
-                a.first_job_start_dts
-                ,a.last_job_finish_dts
-                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
-            from a
-        )
-        --select * from d
-        ,p as(
-            select
-                t.unit
-                ,b.info
-                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
-                ,count(*) cnt_success
-                ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
-                ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
-                ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
-                ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
-                --,count( nullif(t.success,0) ) cnt_ok
-                --,count( nullif(t.success,1) ) cnt_err
-                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
-                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-                ,min(d.first_job_start_dts) as first_job_start_dts
-                ,min(d.sec_for_one_interval) as sec_for_one_interval
-            from trace_stat t
-            join business_ops b on t.unit = b.unit
-            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS trace_statd test run!
-            where t.success = 1
-            group by 1,2,3
-        )
-        --select * from p
-        ,q as (
-            select
-                unit
-                ,info
-                ,interval_no
-                ,cnt_success
-                ,fetches_per_second
-                ,marks_per_second
-                ,reads_to_fetches_prc
-                ,writes_to_marks_prc
-                ,first_job_start_dts
-                ,sec_for_one_interval
-                ,dateadd( (interval_no-1) * sec_for_one_interval+1 second to first_job_start_dts ) as interval_beg
-                ,dateadd( interval_no * sec_for_one_interval second to first_job_start_dts ) as interval_end
-            from p
-        )
-         --select * from q
-        , n as (
-          select 1 i from rdb$database union all
-          select n.i+1 from n where n.i+1<=4
-        )
-
-        select
-            decode(n.i, 1, 'fetches per second', 2, 'marks per second', 3, 'reads/fetches*100', 'writes/marks*100') as trace_stat
-            ,interval_no
-            ,max( iif(unit='sp_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as                  sp_client_order
-            ,max( iif(unit='sp_cancel_client_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as           sp_cancel_client_order
-            ,max( iif(unit='sp_supplier_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as                sp_supplier_order
-            ,max( iif(unit='sp_cancel_supplier_order', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as         sp_cancel_supplier_order
-            ,max( iif(unit='sp_supplier_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_supplier_invoice
-            ,max( iif(unit='sp_cancel_supplier_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as       sp_cancel_supplier_invoice
-            ,max( iif(unit='sp_add_invoice_to_stock', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as          sp_add_invoice_to_stock
-            ,max( iif(unit='sp_cancel_adding_invoice', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as         sp_cancel_adding_invoice
-            ,max( iif(unit='sp_customer_reserve', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_customer_reserve
-            ,max( iif(unit='sp_cancel_customer_reserve', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as       sp_cancel_customer_reserve
-            ,max( iif(unit='sp_reserve_write_off', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             sp_reserve_write_off
-            ,max( iif(unit='sp_cancel_write_off', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              sp_cancel_write_off
-            ,max( iif(unit='sp_pay_from_customer', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             sp_pay_from_customer
-            ,max( iif(unit='sp_cancel_pay_from_customer', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as      sp_cancel_pay_from_customer
-            ,max( iif(unit='sp_pay_to_supplier', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as               sp_pay_to_supplier
-            ,max( iif(unit='sp_cancel_pay_to_supplier', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as        sp_cancel_pay_to_supplier
-            ,max( iif(unit='srv_make_invnt_saldo', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             srv_make_invnt_saldo
-            ,max( iif(unit='srv_make_money_saldo', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as             srv_make_money_saldo
-            ,max( iif(unit='srv_recalc_idx_stat', decode(n.i, 1, fetches_per_second, 2, marks_per_second, 3, reads_to_fetches_prc, writes_to_marks_prc), null) ) as              srv_recalc_idx_stat
-            ,interval_beg
-            ,interval_end
-        from q
-        cross join n
-        group by n.i, interval_no, interval_beg, interval_end
-        into
-            traced_data
-            ,interval_no
-            ,sp_client_order
-            ,sp_cancel_client_order
-            ,sp_supplier_order
-            ,sp_cancel_supplier_order
-            ,sp_supplier_invoice
-            ,sp_cancel_supplier_invoice
-            ,sp_add_invoice_to_stock
-            ,sp_cancel_adding_invoice
-            ,sp_customer_reserve
-            ,sp_cancel_customer_reserve
-            ,sp_reserve_write_off
-            ,sp_cancel_write_off
-            ,sp_pay_from_customer
-            ,sp_cancel_pay_from_customer
-            ,sp_pay_to_supplier
-            ,sp_cancel_pay_to_supplier
-            ,srv_make_invnt_saldo
-            ,srv_make_money_saldo
-            ,srv_recalc_idx_stat
-            ,interval_beg
-            ,interval_end
-    do
-        suspend;
-end
-
-^ -- srv_mon_perf_trace_pivot
-
-
-create or alter procedure srv_mon_idx
-returns (
-    tab_name dm_dbobj,
-    idx_name dm_dbobj,
-    last_stat double precision,
-    curr_stat double precision,
-    diff_stat double precision,
-    last_done timestamp
-) as
-    declare v_last_recalc_trn bigint;
-begin
-
-    select p.trn_id
-    from perf_log p
-    where p.unit starting with 'srv_recalc_idx_stat_'
-    order by p.trn_id desc rows 1
-    into v_last_recalc_trn;
-
-    -- SP for analyzing results of index statistics recalculation:
-    -- ###########################################################
-    for
-        select
-            t.tab_name
-            ,t.idx_name
-            ,t.last_stat
-            ,r.rdb$statistics
-            ,t.last_stat - r.rdb$statistics
-            ,t.last_done
-        from (
-            select
-                g.info as tab_name
-                ,substring(g.unit from char_length('srv_recalc_idx_stat_')+1 ) as idx_name
-                ,g.aux1 as last_stat
-                ,g.dts_end as last_done
-            from perf_log g
-            where g.trn_id = :v_last_recalc_trn
-        ) t
-        join rdb$indices r on t.idx_name = r.rdb$index_name
-    into
-        tab_name,
-        idx_name,
-        last_stat,
-        curr_stat,
-        diff_stat,
-        last_done
-    do suspend;
-end
-
-^ -- srv_mon_idx
---------------------------------------------------------------------------------
 
 create or alter procedure srv_fill_mon(
     a_rowset bigint default null -- not null ==> gather info from tmp$mo_log (2 rows); null ==> gather info from ALL attachments
@@ -5773,249 +4774,6 @@ end
 
 ^ -- srv_mon_stat_per_tables
 
-create or alter procedure srv_get_report_name(
-     a_format varchar(20) default 'regular' -- 'regular' | 'benchmark'
-    ,a_build varchar(50) default '' -- WI-V3.0.0.32136 or just '32136'
-    ,a_num_of_sessions int default -1
-    ,a_test_time_minutes int default -1
-    ,a_prefix varchar(255) default ''
-    ,a_suffix varchar(255) default ''
-) returns (
-    report_file varchar(255) -- full name of final report
-    ,start_at varchar(15) -- '20150223_1527': timestamp of test_time phase start
-    ,fb_arch varchar(50) -- 'ss30' | 'sc30' | 'cs30'
-    ,overall_perf varchar(50) -- 'score_07548'
-    ,fw_setting varchar(20) -- 'fw__on' | 'fw_off'
-    ,load_time varchar(50) -- '03h00m'
-    ,load_att varchar(50) -- '150_att'
-    ,heavy_load_ddl varchar(50) -- only when a_format='benchmark': solid' | 'split'
-    ,compound_1st_col varchar(50) -- only when a_format='benchmark': 'most__selective_1st' | 'least_selective_1st'
-    ,compound_idx_num varchar(50) -- only when a_format='benchmark': 'one_index' | 'two_indxs'
-)
-as
-    declare v_test_finish_state varchar(50);
-    declare v_tab_name dm_dbobj;
-    declare v_min_idx_key varchar(255);
-    declare v_max_idx_key varchar(255);
-    declare v_test_time int;
-    declare v_num_of_sessions int;
-    declare v_dts_beg timestamp;
-    declare k smallint;
-    declare v_fb_major_vers varchar(10);
-begin
-
-    -- Aux. SP for returning FILE NAME of final report which does contain all
-    -- valuable FB, database and test params
-    -- Sample:
-    -- select * from srv_get_report_name('regular', 31236)
-    -- select * from srv_get_report_name('benchmark', 31236)
-
-    select d1 || d2
-    from (
-        select d1, left(s, position('.' in s)-1) d2
-        from (
-            select left(r,  position('.' in r)-1) d1, substring(r from 1+position('.' in r)) s
-            from (
-              select rdb$get_context('SYSTEM','ENGINE_VERSION') r from rdb$database
-            )
-        )
-    ) into v_fb_major_vers; -- '2.5.0' ==> '25'; '3.0.0' ==> '30'; '19.17.1' ==> '1917' :-)
-
-    select p.fb_arch from sys_get_fb_arch p into fb_arch;
-    fb_arch =
-        iif( fb_arch containing 'superserver' or upper(fb_arch) starting with upper('ss'), 'ss'
-            ,iif( fb_arch containing 'superclassic' or upper(fb_arch) starting with upper('sc'), 'sc'
-                ,iif( fb_arch containing 'classic' or upper(fb_arch) starting with upper('cs'), 'cs'
-                    ,'fb'
-                    )
-                )
-           )
-        || v_fb_major_vers -- prev: iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5', '25', '30' )
-    ;
-    fw_setting='fw' || iif( (select mon$forced_writes from mon$database)= 1,'__on','_off');
-
-    select
-        'score_'||lpad( cast( coalesce(aux1,0) as int ), iif( coalesce(aux1,0) < 99999, 5, 18 ) , '0' )
-        ,datediff(minute from p.dts_beg to p.dts_end)
-        ,p.dts_beg
-    from perf_log p
-    where p.unit = 'perf_watch_interval'
-    order by p.dts_beg desc
-    rows 1
-    into overall_perf, v_test_time, v_dts_beg;
-
-    v_test_finish_state = null;
-    if ( a_test_time_minutes = -1 ) then -- call AFTER test finish, when making final report
-        begin
-            select 'ABEND_GDS_'||p.fb_gdscode
-            from perf_log p
-            where p.unit = 'sp_halt_on_error' and p.fb_gdscode >= 0
-            order by p.dts_beg desc
-            rows 1
-            into v_test_finish_state; -- will remain NULL if not found ==> test finished NORMAL.
-        end
-    else -- a_test_time_minutes > = 0
-        begin
-           -- call from main batch (1run_oltp_emul) just BEFORE all ISQL
-           -- sessions will be launched: display *estimated* name of report
-            overall_perf = 'score_' || lpad('',5,'X');
-            v_test_time = a_test_time_minutes;
-        end
-
-    select left(ansi_dts, 13) from sys_timestamp_to_ansi( coalesce(:v_dts_beg, current_timestamp))
-    into start_at;
-
-    v_test_time = coalesce(v_test_time,0);
-    load_time = lpad(cast(v_test_time/60 as int),2,'_')||'h' || lpad(mod(v_test_time,60),2,'0')||'m';
-
-    if ( a_num_of_sessions = -1 ) then
-        -- Use *actual* number of ISQL sessions that were participate in this test run.
-        -- This case is used when final report is created AFTER test finish, from oltp_isql_run_worker.bat (.sh):
-        select count(distinct e.att_id)
-        from perf_estimated e
-        into v_num_of_sessions;
-    else
-        -- Use *declared* number of ISQL sessions that *will* be participate in this test run:
-        -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
-        v_num_of_sessions= a_num_of_sessions;
-
-    k=iif( coalesce(v_num_of_sessions, 0) <= 0, 1, iif(v_num_of_sessions<=999, 3, char_length(v_num_of_sessions) ) );
-    load_att = lpad( coalesce(v_num_of_sessions, '0'), k, '_') || '_att';
-
-    k = position('.' in reverse(a_build));
-    a_build = iif( k > 0, reverse(left(reverse(a_build), k - 1)), a_build );
-
-    if ( a_format = 'regular' ) then
-        -- 20151102_2219_score_06578_build_32136_ss30__0h30m__10_att_fw_off.txt 
-        report_file =
-            start_at
-            || '_' || coalesce( v_test_finish_state, overall_perf )
-            || iif( a_build > '', '_build_' || a_build, '' )
-            || '_' || fb_arch
-            || '_' || load_time
-            || '_' || load_att
-            || '_' || fw_setting
-        ;
-    else if (a_format = 'benchmark') then
-        begin
-            for
-                select
-                    tab_name,
-                    min(idx_key) as min_idx_key,
-                    max(idx_key) as max_idx_key
-                from z_qd_indices_ddl z
-                group by tab_name
-                rows 1
-            into
-                v_tab_name, v_min_idx_key, v_max_idx_key
-            do begin
-        
-                heavy_load_ddl = iif( upper(v_tab_name)=upper('qdistr'), 'solid', 'split' );
-        
-                if ( upper(v_min_idx_key) starting with upper('ware_id') or upper(v_max_idx_key) starting with upper('ware_id')  ) then
-                    compound_1st_col = 'most__sel_1st';
-                else if ( upper(v_min_idx_key) starting with upper('snd_optype_id') or upper(v_max_idx_key) starting with upper('snd_optype_id')  ) then
-                    compound_1st_col = 'least_sel_1st';
-        
-                if ( v_min_idx_key = v_max_idx_key ) then
-                    compound_idx_num = 'one_index';
-                else
-                    compound_idx_num = 'two_indxs';
-            end
-            -- ss30_fw__on_solid_most__sel_1st_two_indxs_loadtime_180m_by_100_att_20151102_0958_20151102_1258.txt
-            report_file =
-                fb_arch
-                || '_' || fw_setting
-                || '_' || heavy_load_ddl -- 'solid' | 'split'
-                || '_' || compound_1st_col -- 'most__sel_1st' | 'least_sel_1st'
-                || '_' || compound_idx_num -- 'one_index' | 'two_indxs'
-                || '_' || coalesce( v_test_finish_state, overall_perf )
-                || iif( a_build > '', '_build_' || a_build, '' )
-                || '_' || load_time
-                || '_' || load_att
-                || '_' || start_at
-            ;
-        end
-
-    if ( trim(a_prefix) > '' ) then report_file = trim(a_prefix) || '-' || report_file;
-
-    if ( trim(a_suffix) > '' ) then report_file = report_file || '-' || trim(a_suffix);
-
-    suspend;
-
-end
-
-^ -- srv_get_report_name
-
-create or alter procedure srv_test_work
-returns (
-    ret_code integer)
-as
-    declare v_bak_ctx1 int;
-    declare v_bak_ctx2 int;
-    declare n bigint;
-    declare v_clo_id bigint;
-    declare v_ord_id bigint;
-    declare v_inv_id bigint;
-    declare v_res_id bigint;
-begin
-    -- "express test" for checking that main app units work OK.
-    -- NB: all tables must be EMPTY before this SP run.
-    v_bak_ctx1 = rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT');
-    v_bak_ctx2 = rdb$get_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE');
-
-    rdb$set_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT',0);
-    rdb$set_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE',1);
-
-    select min(p.doc_list_id) from sp_client_order(0,1,1) p into v_clo_id;
-    select count(*) from srv_make_invnt_saldo into n;
-    select min(p.doc_list_id) from sp_supplier_order(0,1,1) p into v_ord_id;
-    select count(*) from srv_make_invnt_saldo into n;
-    select min(p.doc_list_id) from sp_supplier_invoice(0,1,1) p into v_inv_id;
-    select count(*) from srv_make_invnt_saldo into n;
-    select count(*) from sp_add_invoice_to_stock(:v_inv_id) into n;
-    select count(*) from srv_make_invnt_saldo into n;
-
-    select h.id
-    from doc_list h
-    where h.optype_id = fn_oper_retail_reserve()
-    rows 1
-    into :v_res_id;
-
-    select count(*) from sp_reserve_write_off(:v_res_id) into n;
-    select count(*) from srv_make_invnt_saldo into n;
-    select count(*) from sp_cancel_client_order(:v_clo_id) into n;
-    select count(*) from srv_make_invnt_saldo into n;
-    select count(*) from sp_cancel_supplier_order(:v_ord_id) into n;
-    select count(*) from srv_make_invnt_saldo into n;
-
-    rdb$set_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT', v_bak_ctx1);
-    rdb$set_context('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE', v_bak_ctx2);
-
-    ret_code = iif( exists(select * from v_qdistr_source ) or exists(select * from v_qstorned_source ), 1, 0);
-    ret_code = iif( exists(select * from invnt_turnover_log), bin_or(ret_code, 2), ret_code );
-    ret_code = iif( NOT exists(select * from invnt_saldo), bin_or(ret_code, 4), ret_code );
-    
-    n = null;
-    select s.id
-    from invnt_saldo s
-    where NOT
-    (
-        s.qty_clo=1 and s.qty_clr = 1
-        and s.qty_ord = 0 and s.qty_sup = 0
-        and s.qty_avl = 0 and s.qty_res = 0
-        and s.qty_inc = 0 and s.qty_out = 0
-    )
-    rows 1
-    into n;
-    
-    ret_code = iif( n is NOT null, bin_or(ret_code, 8), ret_code );
-    
-    suspend;
-end
-
-^ -- srv_test_work
-
 set term ;^
 commit;
 
@@ -6028,7 +4786,7 @@ set list off;
 commit;
 
 -- ###################################################################
--- End of script oltp30_SP.sql;  next to be run: oltp_main_filling.sql
+-- End of script oltp30_SP.sql;  next to be run: oltp_common_SP.sql
 -- (common for both FB 2.5 and 3.0)
 -- ###################################################################
 

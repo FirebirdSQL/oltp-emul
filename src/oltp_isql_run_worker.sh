@@ -1,5 +1,22 @@
 #!/bin/bash
 
+function pause(){
+   read -p "$*"
+}
+
+msg_noarg() {
+  clear
+  echo Current script:
+  echo $shname | sed -e 's/^/    /'
+  echo
+  echo - must be called from:
+  echo $shdir/1run_oltp_emul.sh | sed -e 's/^/    /'
+  echo
+  echo Do not run it yourself.
+  echo
+  pause "Press any key to exit. . ."
+}
+
 sho() {
   local msg=$1
   local log=$2
@@ -18,23 +35,42 @@ log_elapsed_time() {
     echo $msg >>$plog
 }
 
+#.......................................... m a i n     p a r t ................................
+export shname=$(cd `dirname "${BASH_SOURCE[0]}"` && pwd)/`basename "${BASH_SOURCE[0]}"`
+export shdir=$(cd "$(dirname "$0")" && pwd)
+
+[ -z $1 ] && msg_noarg && exit 1
+
 # limits for log of work and errors
 # (zap if size exceed and fill again from zero):
 maxlog=25000000
 maxerr=25000000
 
+# ./oltp_isql_run_worker.sh
+# 1   ./oltp30_config.nix
+# 2   /var/tmp/logs.oltp30/sql/tmp_random_run.sql                   <-- SQL script to be performed by every ISQL session
+# 3   /var/tmp/logs.oltp30/oltp30_localhost.localdomain             <-- prefix for temp files name which will be created by every ISQL session
+# 4   143                                                           <-- sid
+# 5   /var/tmp/logs.oltp30/oltp30.report.txt 
+# 6   regular 
+# 7   LI-V3.0.4.33054 
+# 8   nix_cpu24_ram16
+
 cfg=$1
 sql=$2
-prf=$3
+prf=$3 # prefix for temp files name which will be created by every ISQL session; based on $HOSTNAME value, sample: '/var/tmp/logs.oltp30/oltp30_some_box.our_firm.ru'
 sid=$4 # ISQL window (session) sequential number
 rpt=$5 # final report where sid N1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
 fname=$6 # file_name_with_test_params
 build=$7
-ainfo=$8 #file_name_this_host_info
+conn_pool_support=$8
+ainfo=$9 # file_name_this_host_info: 'cpu_2x4_ram_16' etc
 
 #echo build=$build
 
-prf=$prf-$(echo `printf "%03d" $sid`)
+# 26.10.2018: number of ISQL sessions can be greater than 999.
+prf=$prf-$(echo `printf "%04d" $sid`)
+
 # log where current acitvity of this ISQL will be:
 log=$prf.log
 
@@ -42,41 +78,77 @@ log=$prf.log
 err=$prf.err
 
 # cumulative log with brief info about running process state:
-sts=$prf.running_state.txt
+sts=$prf.state.txt
 
 rm -f $log $err $sts
 >$log
 >$err
 
 #echo -e Config file \>$cfg\< parsing result:
-echo ..................+++++++++++++++++..............
+echo 
 echo log=$log
-sho "Config file $cfg parsing result:" $log
+sho "SID=$sid. Read config file $cfg. Log: $log" $log
 
 shopt -s extglob
+
+######################
+# AGAIN RE-READ CONFIG
+######################
+
 # not work: grep -e "^[  ]*[a-z]" ./oltp_config.30 | \
 while IFS='=' read lhs rhs
 do
-  if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
-    # | sed -e 's/^[ \t]*//'
-    #echo Init in line: lsh=$lhs, rhs=$rhs
+    if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
+      # | sed -e 's/^[ \t]*//'
+      #echo Init in line: lsh=$lhs, rhs=$rhs
 
-    lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
-    rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
-    #echo Try to declare lhs=rhs: lsh=$lhs, rhs=$rhs
-    declare $lhs=$rhs
-    if [ $? -eq 0 ]; then
-        #msg="$(echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###"))"
-        #msg="$(echo -e param=$lhs, val=$rhs $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###"))"
-        sho "param=$lhs, val=$rhs" $log
-    else
-        sho "-------------------- SOMETHING WRONG IN YOUR CONFIG FILE ------------------" $log
-        exit
+      lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
+      rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
+      #echo Try to declare lhs=rhs: lsh=$lhs, rhs=$rhs
+      declare $lhs=$rhs
+      if [ $? -gt 0 ]; then
+          sho "param=$lhs, val=$rhs" $log
+          sho "-------------------- SOMETHING WRONG IN YOUR CONFIG FILE ------------------" $log
+          exit
+      fi
     fi
-  fi
-#done<$cfg
 done < <( sed -e 's/^[ \t]*//' $cfg | grep "^[^#;]" )
 
+sho "SID=$sid. Config file $cfg parsed OK." $log
+
+
+##############################################################################################################
+# 12.08.2018
+# Define name of .sql script that will be launched by THIS - and only this - command window.
+# This is name like "/var/tmp/logs.oltp30/sql/tmp_sid_197.starter.sql" etc, and it will create CONTEXT VAR
+# with session-level scope. Main script will be invoked from THIS starter, thus it will know
+# sequential ID of THIS command window: 1, 2, 3, ..., $winq
+
+
+#sid_starter_sql=$(dirname $sql)/tmp_sid_$sid.starter.sql
+sid_starter_sql=$(dirname $sql)/tmp_starter.$(echo `printf "%04d" $sid`).sql
+
+sho "SID=$sid. Creating starter script sid_starter_sql='$sid_starter_sql'" $log
+
+cat <<- EOF > $sid_starter_sql
+        -- Generated auto by $shname
+        -- Do _NOT_ edit. This script will be removed after test.
+        set term ^;
+        execute block as
+        begin
+            -- Define 'sequential number' of current ISQL session and make it be known 
+            -- for main script and every business operations that are called from there:
+            -- NB: name 'WORKER_SEQUENTIAL_NUMBER' is used in procedures for storing
+            -- value in doc_list.worker_id for possible separation of scope that is avaliable
+            -- for each ISQL session. Purpose - reduce frequency of lock conflicts.
+            rdb\$set_context( 'USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', '$sid' );
+            rdb\$set_context( 'USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE', '$sid' );
+        end^
+        set term ;^
+        -- Call main script that was created on prepare phase of oltp-emul scenario:
+        in $sql;
+EOF
+##############################################################################################################
 
 if [ $is_embed = 1 ]; then
   dbauth=
@@ -85,7 +157,11 @@ else
   dbauth="-user $usr -password $pwd"
   dbconn=$host/$port:$dbnm
 fi
-run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
+
+#run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
+# since 12.08.2018
+run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sid_starter_sql $dbauth"
+
 
 cat << EOF >>$sts
 $(date +'%Y.%m.%d %H:%M:%S'). Batch running now: $0 - check start command:
@@ -96,9 +172,18 @@ EOF
 
 [[ $sid = 1 ]] &&  echo This session *WILL* do performance report after test make selfstop.>>$sts
 
-tmpsidsql=$tmpdir/tmp_$sid.sql
-tmpsidlog=$tmpdir/tmp_$sid.log
-tmpsiderr=$tmpdir/tmp_$sid.err
+tmpauxsql=$tmpdir/tmp_$sid.aux.sql
+tmpauxlog=$tmpdir/tmp_$sid.aux.log
+tmpauxerr=$tmpdir/tmp_$sid.aux.err
+tmpauxtmp=$tmpdir/tmp_$sid.aux.tmp
+
+#tmpsidsql=$tmpdir/tmp_$sid.sql
+#tmpsidlog=$tmpdir/tmp_$sid.log
+#tmpsiderr=$tmpdir/tmp_$sid.err
+
+tmpsidsql=$(dirname $sql)/tmp_$sid.sql
+tmpsidlog=$(dirname $sql)/tmp_$sid.log
+tmpsiderr=$(dirname $sql)/tmp_$sid.err
 
 fblog_beg=$tmpdir/fb_log_when_test_started.$fb.log
 fblog_end=$tmpdir/fb_log_when_test_finished.$fb.log
@@ -115,23 +200,52 @@ if [ $sid -eq 1 ]; then
   $run_fbs 1>$fblog_beg 2>>$rpt
   echo Got:>>$rpt
   ls -l $fblog_beg 1>>$rpt 2>&1
-  ls -l $fblog_beg
+  sho "SID=$sid. Extracted firebird.log BEFORE test: $(ls -l $fblog_beg)" $log
 fi
 
-echo
-#echo $(date +'%Y.%m.%d %H:%M:%S'). 
-sho "Intro separate ISQL session, sid=$sid." $log
-if [ $winq -gt 1 ]; then
-  sho "Take initial random pause. . ." $log
-  #echo TEMPLY DISABLED, UNCOMMENT LATER.
-  sleep $[ ( $RANDOM % 8 )  + 2 ]s
-fi
-#echo $(date +'%Y.%m.%d %H:%M:%S'). "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire."
-sho "SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire." $log
+
+sho "ISQL session SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire." $log
 
 packet=1
 while :
 do
+
+  if [ $sleep_max -gt 0 ]; then
+      if [ $sid -gt 1 ]; then
+          if [ -z "$sleep_min" ]; then
+              echo Parameter \'sleep_min\' was not defined in config and is assigned to 1.
+              sleep_min=1
+          fi
+
+          #[[ $sleep_max -gt $sleep_min ]] && random_delay=$(( sleep_min + ( RANDOM % (sleep_max-sleep_min)) )) || random_delay=$sleep_min
+
+          sho "SID=$sid. Point before execution packet $packet. Take random delay before attempt to make attachment." $log 
+          if [ $warm_time -gt 0 ]; then
+              random_delay=$(( 60 + ( RANDOM % ((1+$warm_time)*60) ) ))
+              sho "SID=$sid. Formula: 60 + ( RANDOM mod ((1 + warm_time)*60) ). Result: random_delay=$random_delay seconds." $log
+          else
+              random_delay=$(( 1 + (RANDOM % 10) ))
+              sho "SID=$sid. Formula: (( 1 + (RANDOM mod 10) )), config parameter warm_time is zero. Result: random_delay=$random_delay seconds." $log
+          fi
+
+          #if [[ $packet -eq 1 && $sid -gt 1400 ]]; then
+          #  random_delay=$(( 90 + (($sid - 1400) % 90)  ))
+          #  sho "SID=$sid. Take fixed pause = $random_delay seconds before establish attachment." $log
+          #else
+          #      sho "SID=$sid. Take random pause = $random_delay seconds before establish attachment." $log
+          #fi
+
+          sleep $random_delay
+          sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $log
+      else
+          # 26.10.2018. If SID=1 will get client error and this message in STDERR:
+          #     Statement failed, SQLSTATE = 08004
+          #     connection rejected by remote interface
+          # -- then no report will exist after test finish!
+          sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $log
+      fi
+  fi
+
   if [ -s $log ]; then
     if [ $(stat -c%s $log) -gt $maxlog ]; then
 
@@ -153,7 +267,7 @@ do
       $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
 
       echo size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it >> $sts
-      rm -f $log $tmpsidlog
+      rm -f $log $tmpsidlog $tmpsiderr
     fi
   fi
   if [ -s $err ]; then
@@ -177,18 +291,23 @@ do
   ##############################################################
   ####################   r u n    i s q l   ####################
   ##############################################################
+
   $run_isql 1>>$log 2>>$err
 
-  echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Finish isql, packet No. $packet
+  sho "SID=$sid. Finish isql, packet No. $packet" $sts
+
+  echo ------ last lines in isql STDOUT log: ------------>>$sts
+  tail -15 $log | grep . | sed -e 's/^/    /' >>$sts
+  echo ------ last lines in isql STDERR log: ------------>>$sts
+  tail -15 $err | grep . | sed -e 's/^/    /' >>$sts
+  echo -------------------------------------------------->>$sts
 
   if grep -E "database.*shutdown" $err > /dev/null ; then
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job."
-    echo $msg
-    echo $msg>>$sts
-    ###################################################
-    # ....................  e x i t ...................
-    ###################################################
-    exit
+      sho "SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job." $sts
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      break
   fi
 
   # 27.05.2016 Check whether server crashed during this round:
@@ -200,67 +319,115 @@ do
   crashes_cnt=$(grep -i -c -e "$crash_pattern" $err)
   #crashes_cnt=$(grep -i -c "elapsed time" $log)
   if [ $crashes_cnt -gt 5 ] ; then
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job."
-    echo $msg
-    echo $msg>>$sts
-    ###################################################
-    # ....................  e x i t ...................
-    ###################################################
-    exit
+      sho "SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job." $sts
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      break
   else
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. No FB craches detected during last package was run."
-    echo $msg
-    echo $msg>>$sts
+      sho "SID=$sid. No FB craches detected during last package was run." $sts
   fi
 
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
-  msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Check that FB is still alive: attempt to get server version."
-  echo
-  echo $msg
-  echo $msg>>$sts
-
-  $run_fbs 1>$tmpsidlog 2>$tmpsiderr
-
-  if [ -s $tmpsiderr ]; then
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Firebird is UNAVAILABLE, session has finished its job."
-    echo $msg
-    echo $msg>>$sts
-    cat $tmpsiderr
-    cat $tmpsiderr>>$sts
-    rm -f $tmpsiderr
-    ###################################################
-    # ....................  e x i t ...................
-    ###################################################
-    exit
-  else
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Firebird is active, test can be continued."
-    echo $msg>>$sts
-    cat $tmpsidlog>>$sts
-  fi
-  rm -f $tmpsidlog
 
   cancel_test=0
-  if grep -i "test_was_cancelled" $log > /dev/null ; then
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDOUT log, file $log."
-    cancel_test=1
-  elif grep -i "ex_test_cancel" $err > /dev/null ; then
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Found sign of TEST CANCELLATION in STDERR log, file $err."
-    cancel_test=1
-  fi
+
+  # 26.10.2018: unable to establish connect under extremely heavy workload, ~2000-3000 attachments.
+  GET_FB_REPLY_MAX_TRIES=20
+  for k in `seq $GET_FB_REPLY_MAX_TRIES`
+  do
+      if grep -i "test_was_cancelled" $log > /dev/null ; then
+          msg="SID=$sid. Found sign of TEST CANCELLATION in STDOUT log, file $log."
+          cancel_test=1
+      elif grep -i "ex_test_cancel" $err > /dev/null ; then
+          msg="SID=$sid. Found sign of TEST CANCELLATION in STDERR log, file $err."
+          cancel_test=1
+      fi
+      if [ $cancel_test -eq 1 ]; then
+          # ::: NB ::: do NOT forget double quotes here!
+          sho "$msg" $sts
+          break
+      fi
+
+      echo
+      sho "SID=$sid. Check that FB is still alive: attempt to get server version using fbsvcmgr call. WAIT..." $sts
+      #echo     Command: $run_fbs >>$sts
+      #echo      STDLOG: $tmpsidlog >>$sts
+      #echo      STDERR: $tmpsiderr >>$sts
+      $run_fbs 1>$tmpsidlog 2>$tmpsiderr
+      if [[ $k -gt 1 && $(stat -c%s $tmpsiderr) -eq 0 ]]; then
+          sho "SID=$sid. Return to script. Problem RESOLVED after $k iterations." $sts
+          echo Content of STDOUT received from fbsvcmgr:>>$sts
+          echo ----------------------------------------->>$sts
+          cat $tmpsidlog | sed -e 's/^/       /' >> $sts
+          echo ----------------------------------------->>$sts
+      else
+          if [ $(stat -c%s $tmpsiderr) -gt 0 ]; then
+              sho "SID=$sid. Problem EXISTS. Size of logs: STDOUT=$(stat -c%s $tmpsidlog), STDERR=$(stat -c%s $tmpsiderr)" $sts
+          else
+              sho "SID=$sid. Successful get FB version on first call." $sts
+          fi
+      fi
+
+      #sho "SID=$sid. Size of logs: STDOUT=$(stat -c%s $tmpsidlog), STDERR=$(stat -c%s $tmpsiderr)" $sts
+      # ::: NB ::: 26.10.2018
+      # Under heavy workload (2500...3000 attachments) client can issue:
+      # 'connection rejected by remote interface'
+      # It is recommended to increase FB config parameter
+      # connection_timeout in this case.
+      # --------------------------------------------------------
+      # When FB is really unavaliable then error message will be:
+      # Unable to complete network request to host "localhost".
+      # -Failed to establish a connection.  
+
+      if [ -s $tmpsiderr ]; then
+          sho "SID=$sid. Firebird is UNAVAILABLE. We have to check whether this problem relates to CLIENT or SERVER side." $sts
+          cat $tmpsiderr
+          echo Content of STDERR received from fbsvcmgr:>>$sts
+          echo ----------------------------------------->>$sts
+          cat $tmpsiderr | sed -e 's/^/       /' >> $sts
+          echo ----------------------------------------->>$sts
+
+          # Only 'connection rejected by remote interface' can be interpreted as TEMPORARY unavaliable!
+          if grep -i "connection rejected" $tmpsiderr > /dev/null ; then
+              sho "Failure seems to be on CLIENT-SIDE." $sts
+              rm -f $tmpsiderr
+              if [ $k -eq $GET_FB_REPLY_MAX_TRIES ] ; then
+                  ###################################################
+                  # ....................  e x i t ...................
+                  ###################################################
+                  sho "SID=$sid exceeds limit $GET_FB_REPLY_MAX_TRIES for attempts to get reply from FB server. Job is terminated." $sts
+                  exit
+              else
+                  sho "Try to solve failure: iteration $k of total $GET_FB_REPLY_MAX_TRIES. Loop to next attempt after small pause." $sts
+                  sleep 5
+                  sho "Pause finished, LOOP to next iteration." $sts
+              fi
+          else
+              ###################################################
+              # ....................  e x i t ...................
+              ###################################################
+              sho "Failure seems to be on SERVER-SIDE. Job is terminated" $sts
+              rm -f $tmpsiderr
+              exit
+          fi
+      else
+          sho "SID=$sid. Firebird is alive, test can be continued." $sts
+          cat $tmpsidlog>>$sts
+          rm -f $tmpsidlog
+          break
+      fi
+  done
 
   if [ $cancel_test -eq 1 ]; then
-    echo $msg
-    echo $msg>>$sts
 
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Saving data about estimated performance for displaying later in final report."
-    echo $msg>>$sts
-    echo $msg
+    sho "SID=$sid. Saving data about estimated performance for displaying later in final report." $sts
 
     grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
     while read s
     do
-      a=( $s )
-      echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
+        a=( $s )
+        echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
     done < $tmpsidlog >$tmpsidsql
     echo commit\;>>$tmpsidsql
 
@@ -271,12 +438,43 @@ do
     # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   I d   g r e a t e r   t h a n   "1".
     # -------------------------------------------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
-      msg="$(date +'%Y.%m.%d %H:%M:%S'). Bye-bye from SID=$sid"
-      echo $msg
-      echo $msg>>$sts
-      exit
+        sho "SID=$sid. Leave from loop because SID greater than 1." $sts
+        break
     fi
 
+    #run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Forcedly drop all other attachments: change DB state to full shutdown."
+    echo
+    echo $msg
+    # rpt =$5 -- final report where sid N1 has to ADD info about performanc, its name: $tmpdir/oltpNN.report.txt
+    echo $msg >>$rpt
+
+    # ---------------------------------------------------
+    # t e m p - l y    s h u t d o w n    d a t a b a s e
+    # ---------------------------------------------------
+    run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
+    echo Command: $run_fbs_dbshut >>$rpt
+    $run_fbs_dbshut 2>>$rpt
+
+    run_fbs_dbattr="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_hdr_pages -dbname $dbnm"
+    $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
+    
+    # If we are here then one may sure that ALL attachments now are dropped and there is NO any activity of internal FB processes against DB.
+    # Now we can turn DB online and continue work with it using only SINGLE attachment which SID=1
+
+    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Return DB online."
+    echo $msg
+    echo $msg >>$rpt
+    # -----------------------------------
+    # r e t u r n     D B     o n l i n e 
+    # -----------------------------------
+    run_fbs_online="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_db_online dbname $dbnm"
+    echo Command: $run_fbs_online >>$rpt
+
+    $run_fbs_online 2>>$rpt
+    $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
+
+    
     msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Start final performance analysys."
     echo $msg >>$sts
     psql=$prf.performance_report.tmp
@@ -287,9 +485,9 @@ do
     rm -f $psql
     # ---- do NOT ---- rm $plog
 
-    ##########################################
-    ###  t e s t    f i n i s h   i n f o  ###
-    ##########################################
+    ################################################################################################
+    ###  h o w     t e s t    w a s      f i n i s h e d ?   (normally / premature termination)  ###
+    ################################################################################################
 	cat <<- "EOF" >>$psql
 		set heading off;
 		select 'Test finish info:' as " " from rdb$database;
@@ -299,19 +497,58 @@ do
 		   p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona,
 		      coalesce(p.stack,'') as stack,
 		         p.ip,p.trn_id, p.att_id,p.exc_unit
-		from perf_log p
+		from perf_log p -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
 		left join fb_errors e on p.fb_gdscode = e.fb_gdscode
 		where p.unit = 'sp_halt_on_error'
 		order by p.dts_beg desc
 		rows 1;
+		set list off;
+
+		set heading off;
+		select 'Attachments that still alive:' as " " from rdb$database;
+		set heading on;
+		set list on;
+		set count on;
+                select mon$attachment_id, mon$server_pid, mon$state, mon$remote_protocol, mon$remote_address, mon$remote_pid, mon$timestamp
+                from mon$attachments where mon$attachment_id != current_connection and mon$remote_address is not null;
+		set count off;
+                set list off;
+
 	EOF
-    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Output test finish state - START
 
-    $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    cat <<- EOF >$tmpauxtmp
+                set list on;
+                set term ^;
+                -- get SQL statements 'create index ... on perf_split_NN' for applying them below (need for reports)
+                execute block returns(" " varchar(32765)) as
+                begin
+                    for 
+                        select sql_sttm from srv_gen_sql_4tmp_idx_perf_split into " "
+                    do
+                        suspend;
+                end
+                ^
+                set term ;^
+                commit;
+                set list off;
+EOF
+
+    # Generate SQL code for create indexes on perf_split_NN tables 
+    # (we need these indices only for reports):
+    $fbc/isql $dbconn -now -q -n -i $tmpauxtmp $dbauth 1>$tmpauxsql 2>$tmpauxerr
+
+    cat $tmpauxsql >> $psql
+    # psql = /var/tmp/logs.oltp30/oltp30_localhost.localdomain-001.performance_report.tmp
+
+    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. START additional script after all sessions completed.
+
+    $fbc/isql $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+
     echo>>$plog
-    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Output test finish state - FINISH
-    rm -f $psql
+    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. FINISH additional script.
 
+
+    rm -f $psql $tmpauxtmp $tmpauxsql $tmpauxerr
 
     ###############################################################################################
     ##########################   P e r f o r m a n c e    R e p o r t s    ########################
@@ -347,6 +584,7 @@ do
 	log_elapsed_time $s1, $plog
 	rm -f $psql
 
+
     #------------------------------------------------------------------------------------
 
 	cat <<- EOF >>$plog
@@ -372,7 +610,7 @@ do
 		      ,substring(cast(interval_beg as varchar(24)) from 12 for 8) itrv_beg
 		      ,substring(cast(interval_end as varchar(24)) from 12 for 8) itrv_end
 		from rdb$database
-		left join srv_mon_perf_dynamic p on
+		left join srv_mon_perf_dynamic(20) p on -- 20 = number of intervals; default: 10
 		-- where
 		      p.business_action containing 'interval'
 		      and p.business_action containing 'overall';
@@ -385,6 +623,7 @@ do
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1, $plog
 	rm -f $psql
+
 
     #------------------------------------------------------------------------------------
 
@@ -425,7 +664,7 @@ do
     #------------------------------------------------------------------------------------
 
 	cat <<- EOF >>$plog
-	
+
 		Preformance in DETAILS:
 		=======================
 		Get performance report with detaliation per units, for last test_time=$test_time minutes of workload.
@@ -459,7 +698,6 @@ do
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1, $plog
 	rm -f $psql
-
     #------------------------------------------------------------------------------------
 
     if [ $mon_unit_perf -eq 1 ]; then
@@ -512,6 +750,7 @@ do
 			# Add timestamps of start and finish and how long last ISQL was:
 			log_elapsed_time $s1, $plog
 			rm -f $psql
+
 		fi # fb is 30 or higher 
     else
 		cat <<- EOF >>$plog
@@ -546,6 +785,7 @@ do
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1, $plog
 	rm -f $psql
+
 
 
 	cat <<- EOF >>$plog
@@ -683,12 +923,12 @@ do
           -- Checking query:
           set list on;
           select iif( exists( select *
-                    from perf_log p
+                    from v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
                     where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
                         p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349 )
                         and p.dts_beg > (
                             select x.dts_beg
-                            from perf_log x
+                            from perf_log x -- 12.10.2018: do NOT replace here "perf_log" with "v_perf_log"
                             where x.unit='perf_watch_interval'
                             order by x.dts_beg desc
                             rows 1
@@ -714,8 +954,15 @@ do
 		  set heading off;
 		  select report_file from srv_get_report_name('$fname', '$build', $winq);
 		EOF
+                if [ $conn_pool_support -eq 1 ]; then
+		    # ::: NB ::: 17.11.2018
+		    # SP srv_get_report_name calls sys_get_fb_arch which uses ES/EDS in order to define FB arch.
+		    # WHen using this in Firebird 2.5 with support of CONNECTIONS POOL then we have to clear
+		    # manuall its connection pool, otherwise one EDS connection will remain infinitely.
+                    echo -e "ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;">>$psql
+                fi
+                
 		echo Evaluate new name of final report.
-
 		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
 		$run_isql 1>$tmpsidlog 2>$tmpsiderr
 		
@@ -734,6 +981,8 @@ do
 			  log_with_params_in_name=${log_with_params_in_name}_$ainfo
 			fi
 			log_with_params_in_name=$tmpdir/$log_with_params_in_name.txt
+
+                        #sho "Final report see in file: $log_with_params_in_name" $plog
 			echo Report will be written into file: 
 			echo $log_with_params_in_name
 			rm -f $log_with_params_in_name $psql $tmpsidlog $tmpsiderr
@@ -761,10 +1010,10 @@ do
 		####################
 		Press any key to EXIT. . .
 	EOF
-
-    exit
-
+      pause
+      break
   fi
+  # end of: $cancel_test= 1
 
   msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Finished packet $packet "
   echo $msg
@@ -772,3 +1021,7 @@ do
 
   packet=$((packet+1))
 done
+
+echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Bye-by from $shname
+rm -f $sid_starter_sql
+exit

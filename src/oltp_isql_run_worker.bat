@@ -12,42 +12,80 @@ set maxerr=25000000
 rem -----------------------------------------------
 rem ###############  mandatory args: ##############
 rem -----------------------------------------------
-rem oltp_isql_run_worker.bat %%i %fb% tmpdir sql log4all %logbase%-!k:~1,3!  
 
 set sid=%1
 set winq=%2
-set fb=%3
-set tmpdir=!%4!
-set sql=!%5!
-set log4all=!%6!
-set lognm=!tmpdir!\%7
-set build=%8
+set conn_pool_support=%3
+set sql=!%4!
+set log4all=!%5!
+for /f %%f in ("!log4all!") do (
+    set tmpdir=%%~dpf
+    set tmpdir=!tmpdir:~0,-1!
+)
+set lognm=!tmpdir!\%6
+set build=%7
 
 @rem fname = value of config parameter file_name_with_test_params: regular | benchmark
-set fname=%9
+set fname=%8
+
+@rem set build=WI-T4.0.0.1227
+@rem set build=WI-V3.0.4.33054
+
+echo %build% | findstr /r /i /c:"-[V,T]2.5.[0-9].[0-9]" >nul
+if NOT errorlevel 1 (
+    set fb=25
+) else (
+    echo %build% | findstr /r /i /c:"-[V,T]3.[0-9].[0-9]" >nul
+    if NOT errorlevel 1 (
+        set fb=30
+    ) else (
+        echo %build% | findstr /r /i /c:"-[V,T]4.[0-9].[0-9]" >nul
+        if NOT errorlevel 1 (
+            set fb=40
+        ) else (
+            echo.
+            echo Could not define numbers in major FB version: 25, 30 or 40.
+            echo.
+            echo #############################################################
+            echo Ensure that this batch must be called from 1run_oltp_emul.bat 
+            echo #############################################################
+            echo.
+            pause
+            goto fin
+        )
+    )
+)
+
 
 rem %tmpdir%\oltpNN.report.txt - name of file for overall performance report
 rem (do NOT overwrite it here, it has already some info that was added there in 1run*.bat):
 
-if not .%3.==.25. if not .%3.==.30. if not .%3.==.40. (
-  echo.
-  echo This batch must be called from 1run_oltp_emul.bat 
-  echo #################################################
-  echo.
-  pause
-  goto fin
+@rem @start /min oltp_isql_run_worker.bat %%i %winq% conn_pool_support tmp_run_test_sql log4all   %logbase%-!k:~1,4!   %build%   %file_name_with_test_params%
+@rem                                       1     2          3                 4            5              6               7                 8
+if .1.==.0. (
+    echo 1 sid    = %sid%
+    echo 2 winq   = %winq%
+    echo 3 conn_pool_support = %conn_pool_support%
+    echo 4 sql    = %sql%
+    echo 5 log4all= %log4all%
+    echo 6 lognm  = %lognm%
+    echo 7 build  = %build%
+    echo 8 fname  = %file_name_with_test_params%
+    dir /-c %sql% | findstr %sql%
+    dir /-c %log4all% | findstr %log4all%
+    echo fb     = %fb%
+    echo tmpdir = !tmpdir!
 )
-
-@rem -- echo sid=%sid%
-@rem -- echo winq=%winq%
-@rem -- echo fb=%fb%
-@rem -- echo tmpdir=%tmpdir%
-@rem -- echo sql=%sql%
-@rem -- echo log4all=%log4all%
-@rem -- echo lognm=%lognm%
-@rem -- echo on
-@rem -- dir %sql%
-@rem -- dir %log4all%
+@rem sid    = 1
+@rem winq   = 1
+@rem fb     = 25
+@rem conn_pool_support = 1
+@rem sql    = c:\temp\logs.oltp25\sql\tmp_random_run.sql
+@rem log4all= c:\temp\logs.oltp25\oltp25.report.txt
+@rem lognm  = c:\temp\logs.oltp25\oltp25_IMAGE-PC1-0001
+@rem build  = WI-V2.5.9.27117
+@rem fname  = regular
+@rem pause &exit
 
 @rem log where current acitvity of this ISQL will be:
 set log=%lognm%.log
@@ -59,7 +97,7 @@ set err=%lognm%.err
 set tmp=%lognm%.tmp
 
 @rem Cumulative log with brief info about running process state:
-set sts=%lognm%.running_state.txt
+set sts=%lognm%.sts
 
 set rpt=%lognm%.perf_report.sql
 
@@ -84,17 +122,15 @@ echo sts=%sts%
 rd /q /s %sts% 1>nul 2>&1
 
 for /d %%i in (%tmp% %log% %err% %rpt%)  do (
-  set msg=Trying to remove FILE %%i
-  echo !msg!
-  echo !msg!>>%sts%
-  del /q /s %%i 1>>%sts% 2>&1
-
-  set msg=Trying to remove DIR %%i
-  echo !msg!
-  echo !msg!>>%sts%
-  rd /q /s %%i 1>>%sts% 2>&1
+  @rem todo later: https://stackoverflow.com/questions/138981/how-to-test-if-a-file-is-a-directory-in-a-batch-script
+  for %%f in (%%i) do (
+      if exist %%~sf\nul (
+          rd /q /s %%~sf
+      ) else if exist %%~sf (
+          del /q %%~sf
+      )
+  )
 )
-
 
 @rem Only for 3.0: we can get content of firebird.log before and after test
 @rem and compare them:
@@ -108,13 +144,36 @@ call :repl_with_bound_quotes %fblog_start% fblog_start
 call :repl_with_bound_quotes %fblog_final% fblog_final
 
 for %%i in ("%sql%") do (
-  set trace_lst=%%~dpitmp_trace.lst
-  set trace_sql=%%~dpitmp_trace.sql
-  set trace_log=%%~dpitmp_trace.log
-  set trace_cfg=%%~dpitmp_trace.conf
-  set trace_run=%%~dpitmp_run1t.sql
-  set trace_prs=%%~dpitmp_parse.log
-  set trace_sav=%%~dpitmp_tsave.sql
+    set trace_lst=%%~dpitmp_trace.lst
+    set trace_sql=%%~dpitmp_trace.sql
+    set trace_log=%%~dpitmp_trace.log
+    set trace_cfg=%%~dpitmp_trace.conf
+    set trace_run=%%~dpitmp_run1t.sql
+    set trace_prs=%%~dpitmp_parse.log
+    set trace_sav=%%~dpitmp_tsave.sql
+
+    @rem Define name of .sql script that will be launched by THIS - and only this - command window.
+    @rem This is name like "!tmppath!\sql\tmp_sid_10_starter.sql" etc, and it will create CONTEXT VAR
+    @rem with session-level scope. Main script will be invoked from THIS starter, thus it will know
+    @rem sequential ID of THIS command window: 1, 2, 3, ..., !winq!
+    set sid_starter_sql=%%~dpitmp_sid_!sid!_starter.sql
+    (
+        echo set term ^^;
+        echo execute block as
+        echo begin
+        echo     -- Define 'sequential number' of current ISQL session and make it be known 
+        echo     -- for main script and every business operations that are called from there:
+        echo     -- NB: name 'WORKER_SEQUENTIAL_NUMBER' is used in procedures for storing
+        echo     -- value in doc_list.worker_id for possible separation of scope that is avaliable
+        echo     -- for each ISQL session. Purpose - reduce frequency of lock conflicts.
+        echo     rdb$set_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', '%sid%'^);
+        echo     rdb$set_context('USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE', '%sid%'^);
+        echo.
+        echo end^^
+        echo set term ;^^
+        echo -- Call main script that was created on prepare phase of oltp-emul scenario:
+        echo in %sql%;
+    ) >!sid_starter_sql!
 )
 
 if .%is_embed%.==.1. (
@@ -125,7 +184,9 @@ if .%is_embed%.==.1. (
     set dbconn=%host%/%port%:%dbnm%
 )
 
-set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 
+@rem before 12.08.2018: set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 
+
+set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i !sid_starter_sql! %dbauth% 
 
 echo.>>%sts%
 echo %date% %time%, batch running now: %~f0 - check start command: >>%sts%
@@ -167,7 +228,7 @@ if .%sid%.==.1. (
 
     if .%trc_unit_perf%.==.1. (
 
-        set msg=1st launching ISQL starts and stops TRACE before and after each packet - see config 'trc_unit_perf' parameter.
+        set msg=First launching ISQL starts and stops TRACE before and after each packet - see config 'trc_unit_perf' parameter.
         echo !msg!
         echo !msg!>>%log4tmp%
 
@@ -250,40 +311,33 @@ if .%sid%.==.1. (
                 echo set heading off;
                 echo shell del %trace_cfg% 2^>nul;
                 echo out %trace_cfg%;
+                echo select 'database = (%%[\\/](security[[:DIGIT:]]+^).fdb^|(security.db^)^)' from rdb$database union all
+                echo select '{' from rdb$database union all
+                echo select '   enabled = false' from rdb$database union all
+                echo select '}' from rdb$database;
+
                 echo select 'database=(%%[\\/]!dbfx!^|!dbfn!^)^' from rdb$database union all
                 echo select '{'  from rdb$database union all
                 echo select '    enabled = true' from rdb$database union all
+                echo select '    log_initfini = false' from rdb$database union all
                 echo select '    time_threshold = 0' from rdb$database union all
                 @rem echo select '    include_filter = ''%%!traced_units:^^=!%%''' from rdb$database union all
-                echo select '    include_filter = %%(from sp_^|from srv_^)%%' from rdb$database union all
-                echo select '    exclude_filter = %%(execute block^)%%' from rdb$database union all
+                echo select '    include_filter = %%(from[[:WHITESPACE:]]+sp_^|from[[:WHITESPACE:]]+srv_^)%%' from rdb$database union all
+                echo select '    exclude_filter = %%(execute[[:WHITESPACE:]]+block^)%%' from rdb$database union all
                 echo select '    log_statement_finish = true' from rdb$database union all
                 echo select '    print_perf = true' from rdb$database union all
                 echo select '    max_sql_length = 16384' from rdb$database union all
                 echo select '    connection_id='^|^|current_connection from rdb$database union all
                 echo select '}' from rdb$database;
                 echo out;
-                
-                @rem echo shell echo database=(%%[\\/]!dbfx!^^^^^|!dbfn!^^^^^)^>%trace_cfg%;
-                @rem echo shell echo { ^>^>%trace_cfg%;
-                @rem echo shell echo     enabled=true^>^>%trace_cfg%;
-                @rem echo shell echo     time_threshold=0 ^>^>%trace_cfg%;
-                @rem echo shell echo     include_filter = %%(!traced_units!^)%%^>^>%trace_cfg%;
-                @rem echo shell echo     log_statement_finish = true^>^>%trace_cfg%;
-                @rem echo shell echo     print_perf = true^>^>%trace_cfg%;
-                @rem echo shell echo     max_sql_length = 16384^>^>%trace_cfg%;
-                @rem echo out %trace_cfg%;
-                @rem echo set heading off;
-                @rem echo select '    connection_id='^|^|current_connection from rdb$database;
-                @rem echo out;
-                @rem echo shell echo }^>^>%trace_cfg%;
             )
             echo shell start /min cmd /c "%fbsvcrun% action_trace_start trc_cfg %trace_cfg% 1>%trace_log% 2>&1";
         ) > %trace_sql%
 
         (
             echo in %trace_sql%;
-            echo in %sql%;
+            echo in !sid_starter_sql!;
+            @rem echo in %sql%;
         ) > %trace_run%
 
         echo Script for creating trace config, %trace_sql%: >> %log4tmp%
@@ -298,6 +352,8 @@ if .%sid%.==.1. (
     @rem end of block for preparing trace when test config parameter 'trc_unit_perf' = 1
     
     echo This ISQL session will make performance report after test make selfstop.>>%sts%
+
+    echo check %trace_sql%, %trace_run%
 
     set msg=Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test.
     echo !msg!
@@ -325,31 +381,58 @@ if .%sid%.==.1. (
 @set k=0
 @echo off
 
-set initdelay=1
-if not .%winq%.==.1. if .%initdelay%.==.. (
-   set /a initdelay = 2 + (%random% %% 8^)
-)
-
-set msg=Take initial sleep %initdelay% seconds to start ISQLs at different moments. . .
-echo %msg%>>%sts%
-echo %msg%
-echo Delay at: %date% %time%>>%sts%
-
-@rem echo ################# REMOVE DEBUG COMMENT ########################
-ping -n %initdelay% 127.0.0.1 >nul
-
-set msg=Start ISQL #%sid% of total %winq% at: %date% %time%
-
-echo %msg% >>%sts%
+call :sho "Start ISQL #%sid% of total %winq%." %sts%
 
 if .%sid%.==.1. (
-  echo.>>%log4all%
-  echo %date% %time%. Now wait for all ISQL sessions will finish their job. After this, ISQL session #1 will continue writing final report here.>>%log4all%
-  echo.>>%log4all%
+    call :sho "SID=1. This ISQL session will create reports after test finish." %sts%
+    call :getRandom gen_vbs
+)
+
+call :getRandom gen_vbs
+
+set /a random_delay=1
+set /a min_delay=1
+if %warm_time% EQU 0 (
+    set /a max_delay=10
+) else (
+    set /a min_delay=30
+    set /a max_delay=60*%warm_time%+30
 )
 
 :start
-    @rem for /f "usebackq" %%A in ('%log%') do set size=%%~zA
+
+    @set /a k=k+1
+
+    if %sleep_max% GTR 0 (
+        if %sid% GTR 1 (
+            if !sleep_min! GEQ !sleep_max! (
+                set /a sleep_min=1
+            )
+            call :sho "SID=%sid%. Point before execution packet !k!." %sts%
+            call :getRandom get_rnd %sid% %min_delay% %max_delay% random_delay
+            call :sho "Parameter 'warm_time'=%warm_time% minutes. Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds." %sts%
+
+            @rem -- ############################################################
+            @rem -- ###    p a u s e      u s i n g      S H E L L    c m d  ###
+            @rem -- ############################################################
+            set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp
+            call :sho "Command: !run_cmd!" %sts%
+            cmd /c !run_cmd! 1>nul
+            @rem cscript //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp >nul;
+
+            call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
+
+        ) else (
+            @rem 26.10.2018. If SID=1 will get client error and this message in STDERR:
+            @rem     Statement failed, SQLSTATE = 08004
+            @rem     connection rejected by remote interface
+            @rem -- then no report will exist after test finish!
+            @rem See mailbox pz@..., subj: "OLTP-EMUL, heavy workload testing", sent to dimitr et al at 26.10.2018 17:13
+            call :sho "SID=1. SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." %sts%
+        )
+    )
+    @rem if %sleep_max% GTR 0
+
     for /f "usebackq tokens=*" %%a in ('%log%') do set size=%%~za
     if .%size%.==.. set size=0
     echo size of %log% = %size%
@@ -366,7 +449,6 @@ if .%sid%.==.1. (
         del %log%
     )
 
-    @rem for /f "usebackq" %%A in ('%err%') do set size=%%~zA
     for /f "usebackq tokens=*" %%a in ('%err%') do set size=%%~za
     if .%size%.==.. set size=0
     echo size of %err% = %size%
@@ -374,8 +456,6 @@ if .%sid%.==.1. (
         echo %date% %time% size of %err% = %size% - exceeds limit %maxerr%, remove it >> %sts%
         del %err%
     )
-
-    @set /a k=k+1
 
     echo ------------------------------------------
     (
@@ -398,10 +478,12 @@ if .%sid%.==.1. (
         %run_isql% 2>&1 1>>%log% | mtee /t /+ %err% >nul
     ) else (
         %run_isql% 1>>%log% 2>>%err%
+        @rem -- 4debug, when STDERR need to be near STDOUT -- %run_isql% 1>>%log% 2>&1
     )
     @rem ####################################################################################
 
     @echo off
+
 
     @rem -----------------------------------------------------------------
     @rem Stop trace session that was launched for ISQL #1
@@ -623,13 +705,12 @@ if .%sid%.==.1. (
       echo Command: %run_get_db_hdr%
     )>>%sts%
 
-    %run_get_db_hdr% | findstr /i /c:"Attributes" 1>%tmp% 2>&1
-    @rem Attributes              full shutdown
-
-    findstr /i /c:"shutdown" %tmp% >nul
-    if errorlevel 1 goto db_online
-    goto db_offline
-
+    %run_get_db_hdr% | findstr /i /r /c:"attributes.*shutdown" 1>>%sts% 2>&1
+    if NOT errorlevel 1 (
+        @rem Output msg about shutdown state and script termination.
+        goto db_offline
+    )
+    goto db_online
 
 :db_online
     @echo database ONLINE, continue the job - check test cancellation string in %err%
@@ -733,8 +814,39 @@ if .%sid%.==.1. (
 
     call :wait4all
 
-    set msg=Making final performance analysys. . .
-    echo %date% %time% %msg% >>%sts%
+    call :getRandom del_vbs
+
+    
+    @rem #######################################################################################################################
+    @rem ###   S I D = 1:     c h a n g e    s t a t e    t o        O F F L I N E    a n d    r e t u r n    t o    O N L I N E
+    @rem #######################################################################################################################
+    @rem 14.11.2018
+
+    call :sho "SID=1. Forcedly drop all other attachments: change DB state to full shutdown." %sts%
+    @rem run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
+    set run_cmd=%fbsvcrun% action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname %dbnm%
+    call :sho "SID=1. Command: !run_cmd!" %sts%
+
+    @rem ..................................................
+    @rem SHUTDOWN DATABASE IN ORDER TO KILL ALL ATTACMENTS
+    @rem THIS IS SYNCHRONOUS OPERATION, **NO** RETURN UNTIL
+    @rem ALL ATTACHMENTS WILL ACTUALLY DISCONNECT FROM DB.
+    @rem ..................................................
+    cmd /c !run_cmd! 1>>%sts% 2>&1
+
+    call :sho "SID=1. Check that DB is really in full shutdown mode:" %sts%
+    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
+    
+    set run_cmd=%fbsvcrun% action_properties prp_db_online dbname %dbnm%
+    call :sho "SID=1. Return DB to online state." %sts%
+    call :sho "SID=1. Command: !run_cmd!" %sts%
+    cmd /c !run_cmd! 1>>%sts% 2>&1
+    call :sho "SID=1. Check that DB is online:" %sts%
+    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
+    @rem ########################################################################################
+
+
+    call :sho "SID=1. Starting final performance analysys." %sts%
 
     del %rpt% 2>nul
 
@@ -809,7 +921,7 @@ if .%sid%.==.1. (
         echo ^<td^>
         echo ^<ol^>
         echo     ^<li^>^<a href="#perftotal"^>Performance, TOTAL score^</a^> ^</li^>
-        echo     ^<li^>^<a href="#perfdynam"^>Performance, DYNAMIC, 10 intervals^</a^> ^</li^>
+        echo     ^<li^>^<a href="#perfdynam"^>Performance, DYNAMIC, 20 intervals^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfminute"^>Performance, per MINUTE, since launch^</a^> ^</li^>
         echo     ^<li^>^<a href="#perftrace"^>Performance, TRACE data for ISQL #1^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfdetail"^>Performance, DETAILS per units^</a^> ^</li^>
@@ -858,7 +970,7 @@ if .%sid%.==.1. (
         echo     ,mon$page_buffers as page_buffers
         echo     ,mon$page_size as page_size
         echo from mon$database
-        echo left join sys_get_fb_arch p on 1=1;
+        echo left join sys_get_fb_arch('%usr%', '%pwd%'^) p on 1=1;
       ) > %rpt%
 
       call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
@@ -1134,7 +1246,7 @@ if .%sid%.==.1. (
       echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
       echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
       echo from rdb$database 
-      echo left join srv_mon_perf_dynamic p on
+      echo left join srv_mon_perf_dynamic(20^) p on  -- 20 = number of intervals; default: 10
       echo -- where 
       echo       p.business_action containing 'interval' 
       echo       and p.business_action containing 'overall';
@@ -1911,8 +2023,11 @@ if .%sid%.==.1. (
     echo +++ Start of comparison +++>%tmp_file%
 
     %run_fc_compare% 1>>%tmp% 2>&1
-
     set fc_result=%errorlevel%
+    
+    del %fblog_start% 
+    del %fblog_final%
+
     if .!fc_result!.==.0. (
         echo result: files match. No new messages appeared in firebird.log during test ran. >>!tmp_file!
     ) else (
@@ -2110,14 +2225,30 @@ if .%sid%.==.1. (
     @rem ######################################################################
     (
         echo set heading off; 
-        echo select report_file from srv_get_report_name('%fname%', '%fbb%', %winq%^);
+        echo select report_file from srv_get_report_name('%fname%', '%build%', %winq%^);
         echo set heading on; 
     ) > %rpt%
 
+    if !conn_pool_support! EQU 1 (
+        @rem ::: NB ::: 14.11.2018
+        @rem Procedure srv_get_report_name uses PSQL function sys_get_fb_arch, which in turn uses ES/EDS 
+        @rem which keeps infinitely connection in implementation for FB 2.5
+        @rem If current implementation actually supports connection pool then we have to clear it, otherwise idle
+        @rem connection will use metadata and we will not be able to drop existing PK from some tables.
+        (
+            echo -- ::: NB ::: do NOT add here any statement that produces output --
+            echo ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
+            echo commit;
+        ) >>%rpt%
+    )
+
+
     set run_repo=%fbc%\isql %dbconn% -i %rpt% %dbauth%
     %run_repo% 1>%tmp_file% 2>&1
-    
-    del %rpt% 2>nul
+
+    @rem result: tmpfile contains SINGLE string with name of report, e.g.:
+    @rem 20181114_1242_score_00000_bld_27117_sc25__0h03m___5_att_fw_off_sepw_1_repl_1
+
 
     @rem %fname% = value of optional config parameter 'file_name_with_test_params' = regular | benchmark, by default it is undefined.
     @rem When this value is not empty then we have to rename final report (text and html) to the file which will have maximum info
@@ -2129,6 +2260,7 @@ if .%sid%.==.1. (
     @rem    ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448_<host_info>.txt
     @rem -- where <host_info> = content of config parameter %file_name_this_host_info% // 09-mar-2016
 
+    del %rpt% 2>nul
     if not .%fname%.==.. (
         
         @rem ######################################################################################
@@ -2141,7 +2273,7 @@ if .%sid%.==.1. (
             set name_for_saving=!tmpdir!\%%a
             set final_txt=!name_for_saving!
             if not .%file_name_this_host_info%.==.. (
-              set final_txt=!final_txt!_%file_name_this_host_info%
+                set final_txt=!final_txt!_%file_name_this_host_info%
             )
             set final_txt=!final_txt!.txt
             call :repl_with_bound_quotes !final_txt! final_txt
@@ -2824,7 +2956,14 @@ goto:eof
     set /a k=0
     (
       @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
-      for /f "tokens=1-3" %%a in ('findstr EST_OVERALL_AT_MINUTE_SINCE_BEG %log%') do (
+      @rem See in 1run_oltp_emul subroutine ":gen_working_sql" :
+      @rem echo     ,lpad( iif( minutes_since_start ^>0, 1.00 * success_ops_count / minutes_since_start, 0 ^), 12, ' ' ^)
+      @rem echo      ^|^|
+      @rem echo      lpad( minutes_since_start, 7, ' ' ^)
+      @rem echo      as est_overall_at_minute_since_beg      
+      @rem estimated_perf_since_test_beg
+
+      for /f "tokens=1-3" %%a in ('findstr /i /c:"estimated_perf_since_test_beg" /c:"EST_OVERALL_AT_MINUTE_SINCE_BEG" %log%') do (
         if not .%%c.==.. if not .%%b.==.. (
             echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
             set /a k=!k!+1
@@ -2926,6 +3065,112 @@ goto:eof
 
   endlocal&set "%~3=%tdiff%"
 goto:eof
+
+:sho
+    setlocal
+    set msg=%1
+    set msg=!msg:`="!
+    set log=%2
+    if .!log!.==.. (
+        echo Internal func sho: missed argument for log file.
+        @rem ::: 25.06.2018 do NOT use here reference to  %1, use here
+        @rem ::: only variable that stores its value: !msg!
+        @rem ::: Execution control can jump here even for correct
+        @rem ::: input msg if it contains closing parenthesis ")"
+        echo Arg. #1 = ^|!msg!^|
+        goto final
+    ) 
+
+    set left_char=!msg:~0,1!
+    set righ_char=!msg:~-1!
+
+    @rem REMOVE LEADING AND TRAILING DOUBLE QUOTES:
+    @rem ##########################################
+    set result=!left_char:"=!
+    if .!result!.==.. (
+       set result=!righ_char:"=!
+       if .!result!.==.. (
+          set msg=!msg:~1,-1!
+       )
+    )
+
+    set dts=!time!
+    set dts=!dts: =!
+    set dts=10!dts:,=.!
+    set dts=!dts:~-11!
+    set msg=!dts!. !msg!
+    echo !msg!
+    echo !msg!>>!log!
+
+endlocal & goto:eof
+
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+
+:bulksho
+    setlocal
+    set tmp=%1
+    set log=%2
+    for /f "tokens=*" %%a in (!tmp!) do (
+       set line=%%a
+       set line=!line:"=`!
+       call :sho "!line!" !log!
+    )
+    del !tmp!
+endlocal & goto:eof
+
+:getRandom
+    setlocal
+
+    @rem call :getRandom gen_vbs --> for generating .vbs in tmpdir
+    @rem call :getRandom get_rnd %sid% 0 100 rand_delay --> for assign random integer, from 0 to 100, to variable rand_delay that was defined before
+
+    set mode=%1
+    set sid=%2
+    set from_min=%3
+    set upto_max=%4
+    set vbs=!tmpdir!\getRandomInt.tmp.vbs
+    set tmp=!tmpdir!\getRandomInt.%sid%.tmp
+
+    if /i .!mode!.==.gen_vbs. (
+        if exist %vbs% del %vbs%
+        (
+            echo ' Generated auto by %~f0, do NOT edit.
+            echo ' Used to get random value within scope of two integers.
+            echo ' Usage: cscript ^/^/nologo %vbs% ^<from_minimal^> ^<upto_maximal^>
+            echo ' Result: random value within scope, cast as integer.
+            echo dim min,max
+            echo min=WScript.Arguments.Item(0^)
+            echo max=WScript.Arguments.Item(1^)
+            echo Randomize
+            echo WScript.Echo int( min + (max-min+1^) * Rnd ^)
+        )>>%vbs%
+
+        endlocal & goto:eof
+
+    ) else if /i .!mode!.==.get_rnd. (
+        
+        if .1.==.1. (
+            cscript //nologo %vbs% %from_min% %upto_max% >%tmp%
+            endlocal & set /p %~5=<%tmp%
+            del /q %tmp%
+        )
+
+        if .1.==.0. (
+            @rem does NOT work:
+            @rem ==============
+            set run_cmd=cscript //nologo %vbs% %from_min% %upto_max%
+            for /f %%a in ('cmd /c !run_cmd!') do (
+               set %~5=%%a
+            )
+        )
+
+    ) else if /i .!mode!.==.del_vbs. (
+        if exist %vbs% del %vbs%
+    )
+    endlocal
+
+goto:eof
+
 
 
 :err_setenv

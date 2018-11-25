@@ -206,98 +206,118 @@ commit;
 --  by 1run_oltp_emul.bat (.sh) every time test is launched.
 insert into settings(working_mode, mcode,           svalue)
               values('INIT',       'WORKING_MODE',
-                     -- DEBUG_01'
-                     'SMALL_03'
-              ); -- DEFAULT: 'SMALL_03'
--- DEBUG_01 DEBUG_1A DEBUG_02 DEBUG_03 DEBUG_04 SMALL_01  SMALL_02 SMALL_03
--- MEDIUM_01 MEDIUM_02 MEDIUM_03 LARGE_01 LARGE_02 LARGE_03
--- HEAVY_01
+                      '*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
+                    ); 
 
 -- ::: NB ::: This record is created here only as 'stub'.
 -- Value of this variable will be replaced with config parameter 'used_in_replication'
 --  by 1run_oltp_emul.bat (.sh) every time test is launched.
 insert into settings(working_mode, mcode,                 svalue)
-              values('INIT',       'USED_IN_REPLICATION', '0');
-
--- List of units for which we want to gather info from mon$table_stats.
--- Leave this INSERT statement with svalue = ',,'. 
--- If you want to analyze performance of some units (procedures or triggers),
--- use UPDATE statement after this:
-insert into settings(working_mode, mcode,                  svalue
-                    ,description)
-              values('COMMON',       'TRACED_UNITS', ',,'
-                    ,'Units that are subject to gathering MON$ statistics'
-              );
-
--- This is the sample how to change list of units for which test should gather 
--- statistics from MON$ tables for further analyzing:
--- update settings set svalue = ',sp_make_qty_storno,sp_kill_qty_storno,sp_multiply_rows_for_qdistr,sp_multiply_rows_for_pdistr,'
--- where working_mode = 'COMMON' and mcode = 'TRACED_UNITS';
-
--- update settings set svalue = ',sp_make_qty_storno,sp_kill_qty_storno,sp_multiply_rows_for_qdistr,sp_multiply_rows_for_pdistr,'
--- where working_mode = 'COMMON' and mcode = 'TRACED_UNITS';
+              values('COMMON',       'USED_IN_REPLICATION', 
+                      '*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
+                    );
 
 
--- do we ALLOW to query mon$-tables in ALL cases (not only when some blocking bug encountered) ?
--- update settings set svalue='0' where mcode='ENABLE_MON_QUERY';
--- update settings set svalue='1' where mcode='ENABLE_MON_QUERY';
+-- @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+-- Moved here from .bat and .sh 03.10.2018:
+-- @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+insert into settings(working_mode, mcode, context,svalue,init_on)
+            values(  'COMMON'                       -- working_mode
+                    ,'BUILD_WITH_SPLIT_HEAVY_TABS'  -- mcode
+                    ,'USER_SESSION'                 -- context
+                    ,'*** TAKE AT BUILD PHASE FROM CONFIG ***' -- value from config
+                    ,'db_prepare'                   -- init_on
+                  );
+
+-- Inject setting which will force to create either one compound index for table
+-- QDistr (or its XQD* clones) or split columns on two separate indices.
+-- When setting 'create_with_split_heavy_tabs' is 0 then one of these indices is
+-- still compund but contain three fields instead of four.
+-- When setting 'create_with_split_heavy_tabs' is 0 then each XQD* table will have
+-- either compound index of two fields or two single-field indices.
+insert into settings(working_mode, mcode, context,svalue,init_on)
+            values(  'COMMON'                       -- working_mode
+                    ,'BUILD_WITH_SEPAR_QDISTR_IDX'  -- mcode
+                    ,'USER_SESSION'                 -- context
+                    ,'*** TAKE AT BUILD PHASE FROM CONFIG ***' -- value from config
+                    ,'db_prepare'                   -- init_on
+                  );
+
+-- Inject setting for making columns order in compound index
+-- according to the config setting 'create_with_compound_columns_order'.
+-- actual only when setting 'create_with_split_heavy_tabs' = 0.
+insert into settings(working_mode, mcode, context,svalue,init_on)
+	    values(  'COMMON'                       -- working_mode
+		    ,'BUILD_WITH_QD_COMPOUND_ORDR'  -- mcode
+		    ,'USER_SESSION'                 -- context
+		    ,'*** TAKE AT BUILD PHASE FROM CONFIG ***' -- value from config
+		    ,'db_prepare'                   -- init_on
+		  );
+
+
+insert into settings(working_mode, mcode,           svalue)
+              values( 'COMMON',     
+                      'SEPARATE_WORKERS', 
+                      '*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
+                    );
+--                      '*** INJECT AT RUNTIME: TEST LAUNCH PARAM ***'
+
+insert into settings(working_mode, mcode,           svalue)
+              values( 'COMMON',     
+                      'WORKERS_COUNT', 
+                      '*** INJECT AT RUNTIME: TEST LAUNCH PARAM ***' -- value from command line: second argument for '1run_oltp_emul' scenario
+                    );
+
+
+insert into settings(working_mode, mcode,           svalue)
+              values( 'COMMON',     
+                      'UPDATE_CONFLICT_PERCENT', 
+                      '*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
+                    );
+
+
+insert into settings(working_mode, mcode,           svalue)
+              values(  'COMMON'
+                      ,'UNIT_SELECTION_METHOD'
+                      ,'*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
+                    );
+
 insert into settings(working_mode, mcode, svalue, description)
               values(  'COMMON'
                       ,'ENABLE_MON_QUERY'
-                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.'
-                            ,'0'
-                            ,'0'  -- for 3.0 and above can be = '1' since ~10.08.2014
-                          )
+                      ,'*** TAKE AT RUNTIME FROM CONFIG ***' -- value from config
                       ,'0 =  do not gather mon$ tables at all; 1 = gather mon$ tables before and after each Tx, in every ISQL session'
                     );
 
--- Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
--- 'CK' -- halt if CHECK violation or 'not_valid' occurs
--- 'PK' -- halt if PK or UK violation occurs
--- 'FK' -- halt if FK violation occurs // now n/a
--- 'ST' -- halt if exc #335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
--- These mnemonics can be combined in list, i.e.: 'CK,PK,FK' - halt if CHECK or PK or FK violation occurs
--- Default: ',CK,' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
--- 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
--- but it is due to UNDEFINED order of UNDO when some Tx must perform bulk of such work.
--- Detailed investigation:
--- sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
--- (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
-insert into settings(working_mode, mcode, svalue, description)
-              values(  'COMMON'
-                      ,'HALT_TEST_ON_ERRORS'
-                      ,iif(  left(rdb$get_context('SYSTEM','ENGINE_VERSION'),3) starting with '2.5'
-                            ,',CK,'
-                            ,',CK,' -- 12.02.2015: can be ',CK,' on all architectures FB 3.0
-                          )
-                      ,'Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode))'
+
+insert into settings(working_mode, mcode, svalue ,description)
+              values( 'COMMON'
+                     ,'MON_UNIT_LIST'
+                     ,'*** TAKE AT RUNTIME FROM CONFIG ***'
+                     ,'Units that are subject to gathering MON$ statistics'
                     );
 
--- How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
--- (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
--- bit#0 := 1 ==> perform calls of SRV_FIND_QD_QS_MISM in doc_list_aiud in order
---                to register mismatches between doc_data.qty and total number
---                of rows in qdistr + qstorned for doc_data.id
--- bit#1 := 1 ==> perform calls of SRV_CHECK_NEG_REMAINDERS from doc_list_aiud
---                (instead of totalling turnovers to `invnt_saldo` table)
--- bit#2 := 1 ==> allow dump dirty data into z-tables for analysis, see sp zdump4dbg, in case
---                when some 'bad exception' occurs (see ctx var `HALT_TEST_ON_ERRORS`)
--- ##################################################################################
--- ::: NB ::: Correct value of config parameter 'create_with_debug_objects' (set it = 1)
--- if you need to create debug "Z-" tables and procedure for DUMP all data on errors.
--- ##################################################################################
--- update settings set svalue='3' where mcode='QMISM_VERIFY_BITSET';
--- update settings set svalue='7' where mcode='QMISM_VERIFY_BITSET';
-insert into settings(working_mode, mcode,         svalue)
-              values('COMMON',     'QMISM_VERIFY_BITSET',  '1'); -- default: '1'; changed to '0' for branch 'create_with_split_heavy_tabs'
 
+insert into settings(working_mode, mcode, svalue, description)
+              values( 'COMMON'
+                     ,'HALT_TEST_ON_ERRORS'
+                     ,'*** TAKE AT RUNTIME FROM CONFIG ***'
+                     ,'Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode))'
+                    );
 
--- 27.11.2015. Minimal interval in minutes between two subsequent calls of service
--- procedure srv_recalc_idx_stat which updates index statistics and can last
--- too long (more than 3-4 minutes per table on database with size ~100Gb).
--- See SP srv_random_unit_choice for choising algorithm:
-insert into settings(working_mode, mcode,                      svalue)
-              values('COMMON',     'RECALC_IDX_MIN_INTERVAL', '15');
+insert into settings(working_mode, mcode, svalue, description)
+              values( 'COMMON'
+                      ,'QMISM_VERIFY_BITSET'
+                      ,'*** TAKE AT RUNTIME FROM CONFIG ***'
+                      ,'How stock remainders should be verified BEFORE totalling'
+                    ); -- default: '1'; changed to '0' for branch 'create_with_split_heavy_tabs'
+
+insert into settings(working_mode, mcode, svalue, description)
+              values( 'COMMON'
+                     ,'RECALC_IDX_MIN_INTERVAL'
+                     ,'*** TAKE AT RUNTIME FROM CONFIG ***' --- recommened value: no less than 30
+                     ,'Minimal interval in minutes between two subsequent calls of SP srv_recalc_idx_stat'
+                    );
 
 -- Do we allow to make 'batch reserve creations' in sp_add_invoice ?
 -- When '1' then search of client orders with incompleted reserve amounts and
@@ -358,21 +378,6 @@ insert into settings(working_mode, mcode,                             svalue)
 insert into settings(working_mode, mcode,              svalue)
               values('COMMON',     'C_PAYMENT_TO_SUPPLIER_MAX_TOTAL', '15000'); -- 50'000 500'000
 
-commit;
-
--- 4debug on trivial working_mode:
-set term ^;
-execute block as
-begin
-  if ( (select s.svalue from settings s where s.working_mode = 'INIT' and s.mcode='WORKING_MODE') in ('DEBUG_01', 'DEBUG_02') ) then
-  begin
-    update settings s
-    set s.svalue='0'
-    where s.mcode in( 'ENABLE_RESERVES_WHEN_ADD_INVOICE', 'ORDER_FOR_OUR_FIRM_PERCENT' );
-  end
-end
-^
-set term ;^
 commit;
 
 --------------------------------------------------------------------------------
@@ -505,64 +510,92 @@ delete from business_ops;
 -- ::: nb ::: names in column 'unit' mustr match to those which are specified
 -- in variable 'v_this' in all SPs!
 -- select first 1 unit from business_ops where weight >= :r order by rand()
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_client_order',           'stock', 'creation',  95, 100,    'customer order: creation');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_client_order',    'stock', 'removal',   30, 120,    'customer order: refuse');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_client_order',             'stock', 'creation',      95,                      100,        100,                            'customer order: creation');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_supplier_order',         'stock', 'creation',  65, 200,    'order to supplier: creation');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_supplier_order',  'stock', 'removal',   10, 220,    'order to supplier: removal');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_client_order',       'stock',  'removal',      30,                      120,        1600,                           'customer order: refuse');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_supplier_invoice',       'stock', 'creation',  65, 300,    'invoice (draft): creation');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_supplier_invoice','stock', 'removal',   10, 320,    'invoice (draft): removal');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_supplier_order',           'stock', 'creation',      65,                      200,        200,                            'order to supplier: creation');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_add_invoice_to_stock',   'stock', 'state_next', 62, 400,    'invoice accept: apply');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_adding_invoice',  'stock', 'state_back', 10, 420,    'invoice accept: cancel');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_supplier_order',     'stock',  'removal',      10,                      220,        1500,                           'order to supplier: removal');
+
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_supplier_invoice',         'stock', 'creation',      65,                      300,        300,                            'invoice (draft): creation');
+
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_cancel_supplier_invoice',  'stock',  'removal',      10,                      320,        1400,                           'invoice (draft): removal');
+
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_add_invoice_to_stock',     'stock',  'state_next',   62,                      400,        400,                            'invoice accept: apply');
+
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_adding_invoice',     'stock',  'state_back',   10,                      420,        1300,                           'invoice accept: cancel');
 
 -- nb: we can set LOW prior to sp_customer_reserve because most of these docs
 -- will be created from sp_add_invoice_to_stock and only several percents
 -- from avaliable remainders:
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_customer_reserve',       'stock', 'creation',   20, 500,    'customer reserve: creation');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_customer_reserve',          'stock',  'creation',     20,                      500,        500,                            'customer reserve: creation');
 --
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_customer_reserve','stock', 'removal',    15, 520,    'customer reserve: removal');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_customer_reserve',   'stock',  'removal',      15,                      520,        1200,                           'customer reserve: removal');
 --
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_reserve_write_off',      'stock', 'state_next', 80, 600,    'realization accept: apply');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_write_off',       'stock', 'state_back', 20, 620,    'realization accept: cancel');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_reserve_write_off',         'stock',  'state_next',   80,                      600,        600,                            'realization accept: apply');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_pay_from_customer',       'payments', 'creation', 72, 700,   'payment from customer: creation');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_pay_from_customer','payments', 'removal',  15, 720,   'payment from customer: removal');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_pay_to_supplier',         'payments', 'creation', 67, 800,   'payment to supplier: creation');
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('sp_cancel_pay_to_supplier',  'payments', 'removal',  10, 820,   'payment to supplier: removal');
+insert into business_ops(
+        unit,                          mode,     kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_write_off',          'stock',  'state_back',   20,                      620,        1100,                           'realization accept: cancel');
+
+insert into business_ops(
+        unit,                        mode,       kind,           random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_pay_from_customer',       'payments',  'creation',     72,                      700,        550,                           'payment from customer: creation');
+
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_cancel_pay_from_customer', 'payments', 'removal',     15,                      720,        1000,                           'payment from customer: removal');
+
+insert into business_ops(
+        unit,                         mode,         kind,        random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('sp_pay_to_supplier',          'payments',   'creation',  67,                      800,        450,                            'payment to supplier: creation');
+
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values( 'sp_cancel_pay_to_supplier',  'payments', 'removal',     10,                      820,        1050,                           'payment to supplier: removal');
 
 ---
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('srv_make_invnt_saldo',  'service', 'service',        35, 990,   'service: total inventory turnovers');
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('srv_make_invnt_saldo',        'service',  'service',     35,                      990,        9990,                           'service: total inventory turnovers');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('srv_make_money_saldo',  'service', 'service',        25, 995,   'service: total monetary turnovers');
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('srv_make_money_saldo',        'service',  'service',     25,                      995,        9991,                           'service: total monetary turnovers');
 
-insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
-values('srv_recalc_idx_stat',  'service', 'service',         20, 997,   'service: refresh index statistics');
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('srv_recalc_idx_stat',         'service',  'service',      3,                      997,        9992,                           'service: refresh index statistics');
+
 
 -- need only to check FB stability against extremely high frequency of MON$-querying:
 -- --update business_ops b set b.random_selection_weight=40 where b.unit='srv_fill_mon'; commit;
 -- delete from business_ops b where b.unit='srv_fill_mon'; commit;
---insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, info )
---values('srv_fill_mon',         'service', 'service',         40, 999,   '(temply) stability test when querying mon$-tables');
+--insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, predictable_selection_priority, info )
+--values('srv_fill_mon',         'service', 'service',         40, 999, 9995,  '(temply) stability test when querying mon$-tables');
 
 --------------------------------------------------------------------------------
 -- ##################   FIREBIRD STANDARD ERROR CODES   ########################
@@ -1340,12 +1373,12 @@ execute block returns(add_info varchar(255)) as
     declare v_ctr_name dm_dbobj;
     declare v_run_ddl varchar(128);
     declare v_rel_list varchar(255);
-    declare v_halt_on_err_list dm_setting_value = ',,';
+    declare v_halt_on_err_list dm_setting_value = '//';
 begin
     select upper(s.svalue) from settings s where s.mcode='HALT_TEST_ON_ERRORS'
-    into v_halt_on_err_list; -- ',CK,'; ',CK,PK,'
+    into v_halt_on_err_list; -- '/CK/'; '/CK/PK/'
 
-    if ( v_halt_on_err_list containing upper(',PK,') ) then
+    if ( v_halt_on_err_list containing upper('/PK/') ) then
     begin
         add_info = 'Setting ''HALT_TEST_ON_ERRORS'' contains ''PK'', we have to preserve PK/UK in tables even if they are unneeded.';
         --#####

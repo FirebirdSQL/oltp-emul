@@ -26,6 +26,7 @@ as
     declare v_ddl_qdistr varchar(1024);
     declare v_id bigint;
     declare v_build_with_qd_compound_ordr varchar(31); -- 'most_selective_first' or 'least_selective_first'
+    declare v_separate_workers smallint; -- 12.08.2018
     declare v_make_separate_qd_idx smallint;
 begin
 
@@ -35,6 +36,7 @@ begin
     v_ddl_const = '
        id dm_idb not null
       ,doc_id dm_idb -- denorm for speed, also 4debug
+      ,worker_id dm_ids -- 12.08.2018
       ,ware_id dm_idb
       ,snd_optype_id dm_ids -- denorm for speed
       ,snd_id dm_idb -- ==> doc_data.id of "sender"
@@ -65,6 +67,12 @@ begin
     from settings s 
     where s.working_mode='COMMON' and s.mcode='BUILD_WITH_QD_COMPOUND_ORDR'
     into v_build_with_qd_compound_ordr;
+
+    -- Value is defined by config parameter 'separate_workers' = 1 or 0.
+    select s.svalue 
+    from settings s 
+    where s.working_mode = upper('COMMON') and s.mcode = upper('SEPARATE_WORKERS')
+    into v_separate_workers;
     
     v_idx_expr1 = '';
     v_idx_expr2 = '';
@@ -75,33 +83,81 @@ begin
     -- see oltp_main_filling.sql).
     -- See also sp_get_clo_for_invoice - there is query that search only for ware_id, w/o snd_id!
     if ( v_make_separate_qd_idx = 1 ) then
+        -- ###########################################################
+        -- ### create TWO INDICES for XQD***: compound and ordinar ###
+        -- ###########################################################
         begin
             if ( upper(v_build_with_qd_compound_ordr) = upper('least_selective_first') ) then
                 begin
-                    v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    if ( v_separate_workers = 0 ) then
+                        begin
+                            v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'sop_rop_ware';
+                        end
+                    else
+                        begin
+                            v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id, worker_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'so_ro_wa_wkr';
+                        end
                     v_idx_expr2 = '(snd_id)';
-                    v_idx_suff1 = 'sop_rop_ware';
                     v_idx_suff2 = 'snd';
                 end
             else -- 'most_selective_first'
                 begin
-                    v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id)'; -- do NOT remove snd_optype & rcv_optype!
+                    if ( v_separate_workers = 0 ) then
+                        begin
+                            v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'ware_sop_rop';
+                        end
+                    else
+                        begin
+                            v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id, worker_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'wa_so_ro_wkr';
+                        end
                     v_idx_expr2 = '(snd_id)';
-                    v_idx_suff1 = 'ware_sop_rop';
                     v_idx_suff2 = 'snd';
                 end
         end
     else
+        -- ###############################################
+        -- ### create SINGLE compound index for XQD*** ###
+        -- ###############################################
         begin
             if ( upper(v_build_with_qd_compound_ordr) = upper('least_selective_first') ) then
                 begin
-                    v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
-                    v_idx_suff1 = 'sop_rop_ware_snd';
+                    if ( v_separate_workers = 0 ) then
+                        begin
+                            v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'sop_rop_ware_snd';
+                        end
+                    else
+                        begin
+                            -- 21.08.2018 19:20 ==> performance score = 05553 (!) ### BEST ### ?!
+                            v_idx_expr1 = '(snd_optype_id, rcv_optype_id, ware_id, worker_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'so_ro_wa_wkr_snd';
+                            
+                            -- 21.08.2018 18:10 ==> performance score = ~1070
+                            -- v_idx_expr1 = '(snd_optype_id, rcv_optype_id, worker_id, ware_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            -- v_idx_suff1 = 'so_ro_wkr_wa_snd';
+                        end
                 end
             else -- 'most_selective_first'
                 begin
-                    v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
-                    v_idx_suff1 = 'ware_sop_rop_snd';
+                    if ( v_separate_workers = 0 ) then
+                        begin
+                            v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'ware_sop_rop_snd';
+                        end
+                    else
+                        begin
+                           -- retest, 21.08.2018 16:47 ==> performance score = 05399
+                            v_idx_expr1 = '(ware_id, snd_optype_id, rcv_optype_id, worker_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            v_idx_suff1 = 'wa_so_ro_wkr_snd';
+
+                            -- 21.08.2018: probe, move 'worker_id' to beginning of key  ==> performance score = 04346
+                            --v_idx_expr1 = '(ware_id, worker_id, snd_optype_id, rcv_optype_id, snd_id)'; -- do NOT remove snd_optype & rcv_optype!
+                            --v_idx_suff1 = 'wa_wkr_so_ro_snd';
+                        end
                 end
         end
 
@@ -119,12 +175,17 @@ begin
 
         in autonomous transaction do
         begin
+            -- Here we create TABLE xqd_****:
             execute statement v_ddl_qdistr;
+
+            -- 12.08.2018
+            -- ?? --> dis 21.08.2018 --> execute statement 'create index ' || v_qd_table || '_worker_id on ' || v_qd_table || '(worker_id)';
+
             if ( not v_ddl_qdidx1 = '' ) then execute statement v_ddl_qdidx1;
             if ( not v_ddl_qdidx2 = '' ) then execute statement v_ddl_qdidx2;
             if ( v_qd_suffix = '1000_3300' ) then -- 13.11.2015: make v_min_id_clo_res much faster
                 execute statement 'create index xqd_1000_3300_doc on xqd_1000_3300(doc_id)';
-
+            
         end
     end
     if ( v_ddl_qdistr is null ) then
@@ -132,6 +193,7 @@ begin
        -- Probably this table currently is empty!
        exception ex_record_not_found;
        --'required record not found, datasource: @1, key: @2';
+
 
 end -- tmp_init_autogen_qdistr_tables
 
@@ -154,13 +216,20 @@ as
     declare v_ddl_qsidx2 varchar(1024);
     declare v_ddl_qsidx3 varchar(1024);
     declare v_id bigint;
+    declare v_separate_workers smallint; -- 12.08.2018
 begin
     -- Called from 1build_oltp_emul.bat  when config setting create_with_split_heavy_tabs = 1, see:
     -- echo execute procedure tmp_init_autogen_qstorn_tables; >> %...%
 
+    select s.svalue 
+    from settings s 
+    where s.working_mode = upper('COMMON') and s.mcode = upper('SEPARATE_WORKERS')
+    into v_separate_workers;
+
     v_ddl_const = '
        id dm_idb not null
       ,doc_id dm_idb -- denorm for speed
+      ,worker_id dm_ids -- 12.08.2018
       ,ware_id dm_idb
       ,snd_optype_id dm_ids -- denorm for speed
       ,snd_id dm_idb -- ==> doc_data.id of "sender"
@@ -180,10 +249,6 @@ begin
     v_idx_expr2='(snd_id)';
     v_idx_expr3='(rcv_id)';
     for
---        select o.id
---        from optypes o
---        where o.acn_type in('1', '2', 'i', 'o') -- all operations that affect on quantity remainders
---        into v_id
         select '' || q.snd_optype_id || '_' || q.rcv_optype_id
         from rules_for_qdistr q
         where q.snd_optype_id is not null
@@ -196,7 +261,14 @@ begin
         v_ddl_qsidx3 = 'create index '||v_qs_table||'_rcv_id on ' || v_qs_table || v_idx_expr3;
         in autonomous transaction do
         begin
+
+            -- Here we create TABLE xqs_****:
             execute statement v_ddl_qstorn;
+
+            -- 12.08.2018
+            if ( v_separate_workers = 1 ) then
+                execute statement 'create index ' || v_qs_table || '_worker_id on ' || v_qs_table || '(worker_id)';
+
             execute statement v_ddl_qsidx1;
             execute statement v_ddl_qsidx2;
             if ( upper(v_qs_table) <> upper('xqs_3300_3400') ) then
@@ -469,6 +541,8 @@ execute block returns(" " varchar(32765)) as
   declare v_qd_names varchar(32765);
   declare v_qs_names varchar(32765);
 
+  declare v_separate_workers smallint;
+
 begin
     v_lf = ascii_char(10);
 
@@ -601,8 +675,6 @@ begin
         i = i + 1;
 
     end -- i = 1..4
-
-
 
     -- ||||||||||||||||||||||||||||||||||||||||||||
 
@@ -1509,7 +1581,6 @@ begin
           'drop procedure tmp_init_autogen_qstorn_tables;' || v_lf ||
           'commit;' ;
     suspend;
-
 
 end
 ^

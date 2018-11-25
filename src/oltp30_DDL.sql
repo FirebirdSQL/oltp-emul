@@ -7,6 +7,9 @@
 -- ##############################
 -- ::: nb-1 ::: Required FB version: 3.0 and above.
 -- ::: nb-2 ::: Use '-nod' switch when run this script from isql
+-- Pattern for search queries to [v_]qdistr using regexp (in IBE):
+-- (from|((left(( ){1,}outer( ){1,})|full(( ){1,}outer( ){1,})|inner)( ){0,1}){0,1}join)( ){1,}(v_){0,1}qdistr
+
 set bail on;
 set autoddl off;
 set list on;
@@ -345,6 +348,7 @@ commit;
 recreate exception ex_context_var_not_found 'required context variable(s): @1 - not found or has invalid value';
 recreate exception ex_bad_working_mode_value 'db-level trigger TRG_CONNECT: no found rows for settings.working_mode=''@1'', correct it!';
 recreate exception ex_bad_argument 'argument @1 passed to unit @2 is invalid';
+
 recreate exception ex_test_cancellation 'test_has_been_cancelled (either by adding text into external text file ''stoptest'' or by changing value of sequence ''g_stop_test'' to non-zero)';
 
 recreate exception ex_record_not_found 'required record not found, datasource: @1, key: @2';
@@ -458,6 +462,7 @@ recreate global temporary table tmp$result_set(
     qdistr_id bigint, 
     qdistr_dbkey dm_dbkey,
     doc_id bigint,
+    worker_id smallint,
     optype_id bigint,
     oper varchar(80),
     base_doc_id bigint,
@@ -700,8 +705,16 @@ recreate table doc_list(
   ,dts_clos timestamp -- when ALL changes of this doc. became disabled
   ,constraint pk_doc_list primary key(id) using index pk_doc_list
   ,constraint dts_clos_greater_than_open check(dts_clos is null or dts_clos > dts_open)
+   -- 12.08.2018, only when config parameter 'separate_work' is 1: 
+   -- sequential number of ISQL session that did create this document.
+   -- This number is evaluated as mod(CURRENT_CONNECTION, %winq% ), where %winq% is total number
+   -- of ISQL sessions that are launched now. Value of %winq% is stored /updated in the table 'SETTINGS'.
+  ,worker_id dm_ids 
 );
 create descending index doc_list_id_desc on doc_list(id); -- need for quick select random doc
+
+-- 27.08.2018 do NOT put here this, instead inject actual value of config parameter 'separate_workers' in main batch when build DB: 
+-- index doc_list_worker_id on doc_list(worker_id^);
 commit;
 
 -- doc detailization (child for doc_list):
@@ -714,7 +727,7 @@ recreate table doc_data(
   ,cost_retail dm_cost default 0
   ,dts_edit timestamp -- last modification timestamp; do NOT use `default 'now'` here!
   -- PK will be removed from this table if setting 'HALT_TEST_ON_ERRORS' does NOT containing
-  -- word ',PK,'. See statements in EB at the ending part of oltp_main_filling.sql:
+  -- word '/PK/'. See statements in EB at the ending part of oltp_main_filling.sql:
   ,constraint pk_doc_data primary key(id) using index pk_doc_data
   ,constraint doc_data_doc_ware_unq unique(doc_id, ware_id) using index doc_data_doc_ware_unq
   ,constraint doc_data_qty_cost_both check ( qty>0 and cost_purchase>0 and cost_retail>0 or qty = 0 and cost_purchase = 0 and cost_retail=0 )
@@ -803,6 +816,7 @@ commit;
 recreate table qdistr(
    id dm_idb not null
   ,doc_id dm_idb -- denorm for speed, also 4debug
+  ,worker_id dm_ids -- denorm for speed; 12.08.2018
   ,ware_id dm_idb
   ,snd_optype_id dm_ids -- denorm for speed
   ,snd_id dm_idb -- ==> doc_data.id of "sender"
@@ -824,8 +838,9 @@ commit;
 -- 'oltp_create_with_split_heavy_tabs_1.sql' (when table QDistr is replaced with XQD* tables).
 -- ................................................................................................
 -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
--- if setting 'HALT_TEST_ON_ERRORS' does not contain ',PK,'
+-- if setting 'HALT_TEST_ON_ERRORS' does not contain '/PK/'
 alter table qdistr add  constraint pk_qdistr primary key(id) using index pk_qdistr;
+-- see in 'oltp_split_heavy_tabs_0,1.sql': create index qdistr_worker_id on qdistr(worker_id);
 commit;
 
 -- 22.05.2014: storage for records which are removed from Qdistr when they are 'storned'
@@ -833,6 +848,7 @@ commit;
 recreate table qstorned(
    id dm_idb not null
   ,doc_id dm_idb -- denorm for speed
+  ,worker_id dm_ids -- denorm for speed; 12.08.2018
   ,ware_id dm_idb
   ,snd_optype_id dm_ids -- denorm for speed
   ,snd_id dm_idb -- ==> doc_data.id of "sender"
@@ -851,8 +867,9 @@ recreate table qstorned(
 create index qstorned_doc_id on qstorned(doc_id); -- confirmed 16.09.2014, see s`p_lock_dependent_docs
 create index qstorned_snd_id on qstorned(snd_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
 create index qstorned_rcv_id on qstorned(rcv_id); -- confirmed 16.09.2014, see s`p_kill_qty_storno
+-- see in 'oltp_split_heavy_tabs_0,1.sql': create index qstorned_worker_id on qstorned(worker_id); -- 12.08.2018
 -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
--- if setting 'HALT_TEST_ON_ERRORS' does not contain ',PK,'
+-- if setting 'HALT_TEST_ON_ERRORS' does not contain '/PK/'
 alter table qstorned add  constraint pk_qdstorned primary key(id) using index pk_qdstorned;
 commit;
 -------------------------------------------------------------------------------
@@ -861,33 +878,41 @@ commit;
 -- s`p_add_invoice_to_stock, s`p_reserve_write_off, s`p_cancel_adding_invoice, s`p_cancel_write_off
 recreate table pdistr(
     -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
-    -- if setting 'HALT_TEST_ON_ERRORS' does not contain ',PK,'
+    -- if setting 'HALT_TEST_ON_ERRORS' does not contain '/PK/'
     id dm_idb generated by default as identity constraint pk_pdistr primary key using index pk_pdistr
     ,agent_id dm_idb
     ,snd_optype_id dm_ids -- denorm for speed
     ,snd_id dm_idb -- ==> doc_list.id of "sender"
+    ,worker_id dm_ids -- 12.08.2018
     ,snd_cost dm_qty
     ,rcv_optype_id dm_ids
     ,trn_id bigint default current_transaction
     ,constraint pdistr_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
 );
-create index pdistr_snd_id on pdistr(snd_id); -- for fast seek when emul cascade deleting in s`p_kill_cost_storno
+
+-- disabled here 05.10.2018, see 'oltp_adjust_DDL.sql':
+-- key must be either (worker_id,snd_id) or (snd_id): create index pdistr_snd_id on pdistr(snd_id); -- for fast seek when emul cascade deleting in s`p_kill_cost_storno
+
 -- 09.09.2014: attempt to speed-up random choise of non-paid realizations and invoices
 -- plus reduce number of doc_list IRs (see v_r`andom_find_non_paid_*, v_min_non_paid_*, v_max_non_paid_*)
 create index pdistr_sndop_rcvop_sndid_asc on pdistr (snd_optype_id, rcv_optype_id, snd_id); -- see plan in V_MIN_NON_PAID_xxx
 create descending index pdistr_sndop_rcvop_sndid_desc on pdistr (snd_optype_id, rcv_optype_id, snd_id); -- see plan in V_MAX_NON_PAID_xxx
 create index pdistr_agent_id on pdistr(agent_id); -- confirmed, 16.09.2014: see s`p_make_cost_storno
+
+-- 27.08.2018 do NOT put here this, instead inject actual value of config parameter 'separate_workers' in main batch when build DB: 
+-- index pdistr_worker_id on pdistr(worker_id); -- 12.08.2018
 commit;
 
 -- Storage for records which are removed from Pdistr when they are 'storned'
 -- (will returns back into Pdistr when cancel operation - see sp_k`ill_cost_storno):
 recreate table pstorned(
     -- ::: nb ::: PK on this table will be REMOVED at the end of script 'oltp_main_filling.sql'
-    -- if setting 'HALT_TEST_ON_ERRORS' does not contain ',PK,'
+    -- if setting 'HALT_TEST_ON_ERRORS' does not contain '/PK/'
     id dm_idb generated by default as identity constraint pk_pstorned primary key using index pk_pstorned
     ,agent_id dm_idb
     ,snd_optype_id dm_ids -- denorm for speed
     ,snd_id dm_idb -- ==> doc_list.id of "sender"
+    ,worker_id dm_ids -- 12.08.2018
     ,snd_cost dm_cost
     ,rcv_optype_id dm_ids
     ,rcv_id dm_idb
@@ -897,6 +922,9 @@ recreate table pstorned(
 );
 create index pstorned_snd_id on pstorned(snd_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
 create index pstorned_rcv_id on pstorned(rcv_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
+
+-- disabled here, see 'oltp_adjust_DDL.sql': index pstorned_worker_id on pstorned(worker_id);
+commit;
 
 -- Definitions for "value-to-rows" COST distribution:
 recreate table rules_for_pdistr(
@@ -948,6 +976,7 @@ recreate table ware_groups(
 recreate table semaphores(
     id dm_idb constraint pk_semaphores primary key using index pk_semaphores
     ,task dm_name
+    ,aux1 dm_idb -- 10.10.2018: max ID of "pseudo-temp" table perf_split_nn that was moved to "resident" table perf_log
     ,constraint semaphores_task_unq unique(task) using index semaphores_task_unq
 );
 commit;
@@ -981,10 +1010,13 @@ recreate table business_ops(
     mode dm_name,
     kind dm_name,
     random_selection_weight smallint,
+    predictable_selection_priority smallint,
     constraint bo_unit unique(unit) using index bo_unit_unq
 );
 create index business_ops_rnd_wgth on business_ops(random_selection_weight); -- 23.07.2014
+create index business_ops_predict_prior on business_ops(predictable_selection_priority);
 commit;
+
 
 -- standard Firebird error list with descriptions:
 recreate table fb_errors(
@@ -1065,11 +1097,11 @@ recreate table perf_log(
   ,dump_trn bigint default current_transaction
 );
 -- finally dis 09.01.2015, not needed for this table: create index perf_log_id on perf_log(id);
-create descending index perf_log_dts_beg_desc on perf_log(dts_beg);
+-- finally dis 13.10.2018, huge fetches when do query for 'perfwatch_interval' and get last record among extracted rows: create descending index perf_log_dts_beg_desc on perf_log(dts_beg);
 create descending index perf_log_unit on perf_log(unit, elapsed_ms);
 -- 4 some analysis, added 25.06.2014:
 -- dis 20.08.2014: create index perf_log_att on perf_log(att_id);
-create descending index perf_log_trn_desc on perf_log(trn_id); --  descending - for fast access to last actions, e.g. of srv_mon_idx
+-- dis 13.10.2018 (seems that SP srv_mon_idx is not called from anywhere): create descending index perf_log_trn_desc on perf_log(trn_id); --  descending - for fast access to last actions, e.g. of srv_mon_idx
 -- 20.08.2014:
 create index perf_log_gdscode on perf_log(fb_gdscode);
 
@@ -1100,7 +1132,7 @@ recreate global temporary table tmp$perf_log(
 create index tmp$perf_log_unit_trn_dts_end on tmp$perf_log(unit, trn_id, dts_end);
 
 -- introduced 09.08.2014, for checking mon$-tables stability: gather stats
--- Also used when context 'traced_units' is not empty (see s`p_add_to_perf_log).
+-- Also used when context 'mon_unit_list' is not empty (see s`p_add_to_perf_log).
 -- see mail: SF.net SVN: firebird:[59967] firebird/trunk/src/jrd
 -- (dimitr: Better (methinks) synchronization for the monitoring stuff)
 recreate table mon_log(
@@ -1224,6 +1256,14 @@ alter table wares
 --   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
 --;
 
+commit;
+
+-- 08.10.2018: view for inserting rows in SP_ADD_PERF_LOG,
+-- its DDL can be replaced below with UNIONED query from several tables,
+-- each of them will serve as storage for 'separate' set of rows.
+-- Purpose: reduce low-level lock contention that occurs for perf_log table.
+create or alter view v_perf_log as select * from perf_log
+;
 commit;
 
 set term ^;
@@ -1703,6 +1743,67 @@ end
 
 ^ -- fn_mcode_for_oper
 
+create or alter function fn_make_predictable_workload returns smallint deterministic as
+begin
+    return iif( upper(rdb$get_context('USER_SESSION', 'UNIT_SELECTION_METHOD')) = upper('predictable'), 1, 0);
+end
+^
+
+create or alter function fn_this_worker_seq_no returns smallint deterministic as
+begin
+    if ( rdb$get_context('USER_SESSION', 'SEPARATE_WORKERS') = 0 ) then
+        return null;
+    else
+        return -- rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER');
+            coalesce(
+               rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER'), -- this is defined in oltp_isql_run_worker
+               10000 + mod( current_connection, 100 ) -- this is for initial doc population, developer call from IBE etc
+            );
+end
+^ -- fn_this_worker_seq_no
+
+create or alter function fn_other_rand_worker returns smallint as
+    declare n_this smallint;
+    declare n_rnd smallint;
+    declare n_max smallint;
+    declare n_probes_limit int = 100;
+    declare v_rnd double precision;
+    declare v_min double precision;
+    declare v_max double precision;
+begin
+    -- 17.09.2018
+    -- Used when config params separate_workers = 1 and update_conflict_percent > 0.
+    -- Searches in doc_list any record with worker_id differ from fn_this_worker_seq_no().
+    -- Limit for these probes is defined by variable n_probes_limit: we have to stop search
+    -- when distinct number of doc_list.worker_id is too low and random probes fails every time.
+    -- In that case worker_id for "current" ISQL session is returned.
+    n_max = cast(rdb$get_context('USER_SESSION', 'WORKERS_COUNT') as smallint);
+    if ( n_max = 0 ) then
+        return null;
+    else
+        begin
+            n_this = fn_this_worker_seq_no();
+            v_min = iif( n_this=1, 2, 1 ) - 0.5;
+            v_max = iif( n_this=n_max, n_max-1, n_max ) + 0.5;
+            while ( n_probes_limit > 0 ) do
+            begin
+                n_probes_limit = n_probes_limit - 1;
+                v_rnd = v_min + rand() * (v_max - v_min);
+                v_rnd = maxvalue( minvalue( v_rnd, v_max ), v_min);
+    
+                n_rnd = cast( round(v_rnd, 0) as int );
+                if ( n_this != n_rnd and exists(select 1 from doc_list d where d.worker_id = :n_rnd) ) then
+                    leave;
+            end
+            -- do NOT use this! Value of "current" ISQL worker_id+1 will be selected more often then all others:
+            --n_rnd = ( select d.worker_id from doc_list d where d.worker_id >= :v_rnd and d.worker_id != :n_this order by d.worker_id rows 1 );
+
+            return coalesce( n_rnd, n_this );
+
+        end
+end
+^ -- fn_other_rand_worker
+
 create or alter function fn_get_stack(
     a_halt_due_to_error smallint default 0
 )
@@ -1882,7 +1983,7 @@ begin
                 ,:v_curr_trn
                 ,'now'
                 ,-1
-                ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack into perf_log if this is NOT expected test finish
+                ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack to perf_log if this is NOT expected test finish
                 ,:a_char
                 ,iif( -- write info for reporting state of how test finished:
                     :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
@@ -1919,10 +2020,11 @@ as
     declare i smallint;
     declare v_id dm_idb;
     declare v_curr_tx int;
-    declare v_exc_unit type of column perf_log.exc_unit;
+    declare v_exc_unit char(1); -- type of column perf_log.exc_unit;
     declare v_stack dm_stack;
     declare v_dbkey dm_dbkey;
     declare v_remote_addr dm_ip;
+    declare v_dts_beg timestamp; -- 08.10.2018
 begin
     -- Flushes all data from context variables with names 'PERF_LOG_xxx'
     -- which have been set in sp_f`lush_perf_log_on_abend for saving uncommitted
@@ -1936,14 +2038,8 @@ begin
     -- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1109867&msg=16422273
     in autonomous transaction do -- *****  A U T O N O M O U S    T x, due to call fn_get_stack *****
     begin
-        -- 11.01.2015: decided to profile this:
-        insert into perf_log(unit, dts_beg, trn_id, ip)
-        values( 't$perf-abend:' || :a_starter,
-                'now',
-                :v_curr_tx,
-                :v_remote_addr
-              )
-        returning rdb$db_key into v_dbkey; -- will return to this row after loop
+
+        v_dts_beg = cast('now' as timestamp);
 
         i=0;
         while (i < a_context_rows_cnt) do
@@ -1954,7 +2050,7 @@ begin
             else
                 v_stack = null;
 
-            insert into perf_log(
+            insert into v_perf_log( -- current unit: sp_flush_tmpperf_in_auton_tx
                 id,
                 unit,
                 fb_gdscode,
@@ -2003,12 +2099,25 @@ begin
             i = i + 1;
         end -- while (i < a_context_rows_cnt)
 
-        update perf_log g
-        set info = 'gds='|| :a_gdscode||', autonomous Tx: ' ||:i||' rows',
-            dts_end = 'now',
-            elapsed_ms = datediff( millisecond from dts_beg to cast('now' as timestamp) ),
-            aux1 = :i
-        where g.rdb$db_key = :v_dbkey;
+        -- 11.01.2015: decided to profile this;
+        -- upd 08.10.2018: replace with V_perf_log (reduce lock contention)
+        insert into v_perf_log(
+             unit
+            ,info
+            ,dts_beg
+            ,dts_end
+            ,trn_id
+            ,ip
+            ,aux1
+        ) values(
+             't$perf-abend:' || :a_starter                         -- unit
+            ,'gds='|| :a_gdscode||', saved ' ||:i||' rows in ATx'  -- info
+            ,:v_dts_beg                                            -- dts_beg
+            ,'now'                                                 -- dts_end
+            ,:v_curr_tx                                            -- trn_id
+            ,:v_remote_addr                                        -- IP
+            ,:i                                                    -- aux1
+         );
 
     end -- in autonom. tx
 end
@@ -2197,7 +2306,7 @@ begin
          --and fn_remote_process() containing 'IBExpert'
          rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') = 1
          and
-         rdb$get_context('USER_SESSION','TRACED_UNITS') containing ','||a_unit||',' -- this is call from some module which we want to analyze
+         rdb$get_context('USER_SESSION','MON_UNIT_LIST') containing '/'||a_unit||'/' -- this is call from some module which we want to analyze
        ) then
     begin
         -- Gather all avaliable mon info about caller module: add pair of row sets
@@ -2248,14 +2357,13 @@ begin
 
             end
 
-    end -- engine = '3.x' and remote_process containing 'IBExpert' and ctx TRACED_UNITS containing ',<a_unit>,'
+    end -- engine = '3.x' and remote_process containing 'IBExpert' and ctx MON_UNIT_LIST containing '/<a_unit>/'
 
 end
 
 ^ -- srv_log_mon_for_traced_units
 
 -------------------------------------------------------------------------------
-
 create or alter procedure sp_add_perf_log (
     a_is_unit_beginning dm_sign,
     a_unit dm_unit,
@@ -2282,8 +2390,10 @@ begin
     v_curr_tx = current_transaction;
     v_dts = cast('now' as timestamp);
 
+    -- 08.10.2018: usage of updatable view v_perf_log instead of table perf_log.
+
     -- Gather all avaliable mon info about caller module if its name belongs
-    -- to list specified in `TRACED_UNITS` context var: add pair of row sets
+    -- to list specified in `MON_UNIT_LIST` context var: add pair of row sets
     -- (for beg and end) and then calculate DIFFERENCES of mon. counters with
     -- logging in tables `mon_log` and `mon_log_table_stats`.
     execute procedure srv_log_mon_for_traced_units( a_unit, a_gdscode, a_info );
@@ -2368,7 +2478,7 @@ begin
                     v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
                     v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
 
-                    insert into perf_log(
+                    insert into v_perf_log( -- current unit: sp_add_perf_log
                         id
                         ,unit, exc_unit
                         ,fb_gdscode, trn_id, att_id, elapsed_ms
@@ -2391,7 +2501,7 @@ begin
                 v_save_dts_end = 'now';
 
                 -- Add info about timing and num. of record (tmp$ --> fixed):
-                insert into perf_log(
+                insert into v_perf_log( -- current unit: sp_add_perf_log
                         id,
                         unit, info, dts_beg, dts_end, elapsed_ms, ip, aux1)
                 values( iif( :v_gen_inc_iter_pf < :c_gen_inc_step_pf, :v_pf_new_id+1, gen_id( g_perf_log, 1 )  ),
@@ -3298,6 +3408,7 @@ begin
                 insert into v_qdistr_multiply_1 (
                     id,
                     doc_id,
+                    worker_id, -- 12.08.2018
                     ware_id,
                     snd_optype_id,
                     rcv_optype_id,
@@ -3308,6 +3419,7 @@ begin
                 values(
                     :v_gen_inc_last_qd - ( :c_gen_inc_step_qd - :v_gen_inc_iter_qd ), -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
                     :a_doc_list_id,
+                    fn_this_worker_seq_no(), -- 12.08.2018
                     :v_ware_id,
                     :a_optype_id,
                     :v_rcv_optype_id,
@@ -3331,6 +3443,7 @@ begin
                 insert into v_qdistr_multiply_2 (
                     id,
                     doc_id,
+                    worker_id, -- 12.08.2018
                     ware_id,
                     snd_optype_id,
                     rcv_optype_id,
@@ -3341,6 +3454,7 @@ begin
                 values(
                     :v_gen_inc_last_qd - ( :c_gen_inc_step_qd - :v_gen_inc_iter_qd ), -- iter=1: 12345 - (100-1); iter=2: 12345 - (100-2); ...; iter=100: 12345 - (100-100)
                     :a_doc_list_id,
+                    fn_this_worker_seq_no(), -- 12.08.2018
                     :v_ware_id,
                     :a_optype_id,
                     :v_rcv_optype_id,
@@ -3461,6 +3575,7 @@ begin
                 agent_id,
                 snd_optype_id,
                 snd_id,
+                worker_id,               -- 12.08.2018
                 snd_cost,
                 rcv_optype_id
             )
@@ -3468,6 +3583,7 @@ begin
                 :a_agent_id,
                 :a_optype_id,
                 :a_doc_list_id,
+                fn_this_worker_seq_no(), -- 12.08.2018
                 :v_cost_for_one_row,
                 :v_rcv_optype_id
             )
@@ -3561,11 +3677,17 @@ begin
                 p.agent_id,
                 p.snd_optype_id,
                 p.snd_id,
+                p.worker_id,
                 p.snd_cost as cost_to_be_storned,
                 p.rcv_optype_id,
                 :a_doc_id as rcv_id
             from pdistr p
-            where p.agent_id = :a_agent_id and p.snd_optype_id = :v_storned_doc_optype_id
+            where
+                p.agent_id = :a_agent_id
+                and p.snd_optype_id = :v_storned_doc_optype_id
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and p.worker_id is not distinct from fn_this_worker_seq_no()
             order by
                 p.snd_id+0 -- 23.07.2014: PLAN SORT (P INDEX (PDISTR_AGENT_ID)
                 ,:v_sign * p.id -- attempt to reduce lock conflicts: odd and even Tx handling the same doc must have a chance do not encounter locked rows at all
@@ -3599,6 +3721,7 @@ begin
                         agent_id,
                         snd_optype_id,
                         snd_id,
+                        worker_id, -- 12.08.2018
                         snd_cost,
                         rcv_optype_id,
                         rcv_id,
@@ -3608,7 +3731,8 @@ begin
                         c.agent_id,
                         c.snd_optype_id,
                         c.snd_id,
-                        :v_storned_cost, -- s.cost_to_be_storned,
+                        c.worker_id,
+                        :v_storned_cost,
                         c.rcv_optype_id,
                         c.rcv_id,
                         :v_storned_cost
@@ -3689,7 +3813,10 @@ create or alter procedure sp_kill_cost_storno( a_deleted_or_cancelled_doc_id dm_
     declare storned_cost dm_cost;
     declare rcv_optype_id dm_idb;
     declare v_msg dm_info;
+    declare v_worker_id dm_ids;
+
     declare v_this dm_dbobj = 'sp_kill_cost_storno';
+
     declare cs cursor for (
         select
             s.agent_id,
@@ -3700,6 +3827,7 @@ create or alter procedure sp_kill_cost_storno( a_deleted_or_cancelled_doc_id dm_
         from pstorned s
         where
             :a_deleted_or_cancelled_doc_id in (s.rcv_id, s.snd_id)
+            and s.worker_id is not distinct from :v_worker_id
     );
 begin
     -- Called from trg D`OC_LIST_AIUD for operations:
@@ -3712,6 +3840,8 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    v_worker_id = fn_this_worker_seq_no();
 
     open cs;
     while (1=1) do
@@ -3728,12 +3858,16 @@ begin
         delete from pstorned where current of cs;
         -- insert using variables instead of cursor ref (CORE-4488):
         insert into pdistr
-              ( agent_id,   snd_optype_id,   snd_id,   snd_cost,       rcv_optype_id )
-        values( :agent_id, :snd_optype_id,  :snd_id,  :storned_cost,   :rcv_optype_id );
+              ( agent_id,   snd_optype_id,   snd_id,  worker_id,    snd_cost,       rcv_optype_id )
+        values( :agent_id, :snd_optype_id,  :snd_id,  :v_worker_id, :storned_cost,   :rcv_optype_id );
     end
     close cs;
 
-    delete from pdistr p where p.snd_id = :a_deleted_or_cancelled_doc_id;
+    delete from pdistr p
+    where
+        p.snd_id = :a_deleted_or_cancelled_doc_id
+        and p.worker_id is not distinct from :v_worker_id
+    ;
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
@@ -3829,7 +3963,7 @@ begin
     in autonomous transaction do
     begin
 
-        insert into perf_log( unit, exc_unit, fb_gdscode, trn_id, info, stack )
+        insert into perf_log( unit, exc_unit, fb_gdscode, trn_id, info, stack ) -- current unit: srv_log_dups_qd_qs
         values ( :a_unit, 'U', :a_gdscode, :v_curr_tx, :a_inserting_info, fn_get_stack( 1 ) );
 
         execute statement ( v_put_stt )
@@ -3878,6 +4012,7 @@ as
     declare v_dd_id dm_idb;
     declare v_id dm_idb;
     declare v_doc_id dm_idb;
+    declare v_worker_id type of dm_ids; -- 12.08.2018
     declare v_doc_optype dm_idb;
     declare v_dd_ware_id dm_idb;
     declare v_dd_qty dm_qty;
@@ -3913,6 +4048,7 @@ as
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
             and q.rcv_optype_id = :v_old_rcv_optype
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
             and q.snd_id = :v_dd_id
     );
 
@@ -3920,6 +4056,7 @@ as
         select
              qs.id
             ,qs.doc_id
+            ,qs.worker_id
             ,qs.snd_optype_id
             ,qs.snd_id
             ,qs.snd_qty
@@ -3931,13 +4068,16 @@ as
             ,null as rcv_purchase
             ,null as rcv_retail
         from v_qstorno_name_for_del qs -- this name will be replaced with 'autogen_qdNNNN' when config 'create_with_split_heavy_tabs=1'
-        where qs.rcv_id = :v_dd_id -- for all cancel ops except sp_cancel_wroff
+        where
+            qs.rcv_id = :v_dd_id -- for all cancel ops except sp_cancel_wroff
+            and qs.worker_id is not distinct from fn_this_worker_seq_no()
     );
 
     declare c_ret_qs2qd_by_snd cursor for (
         select
              qs.id
             ,qs.doc_id
+            ,qs.worker_id
             ,qs.snd_optype_id
             ,qs.snd_id
             ,qs.snd_qty
@@ -3949,7 +4089,9 @@ as
             ,null as rcv_purchase
             ,null as rcv_retail
         from v_qstorno_name_for_del qs -- this name will be replaced with 'autogen_qdNNNN' when config 'create_with_split_heavy_tabs=1'
-        where qs.snd_id = :v_dd_id -- for sp_cancel_wroff
+        where
+            qs.snd_id = :v_dd_id -- for sp_cancel_wroff
+            and qs.worker_id is not distinct from fn_this_worker_seq_no()
     );
 begin
     -- Aux SP, called from sp_kill_qty_storno for
@@ -3964,7 +4106,7 @@ begin
     v_doc_pref = fn_mcode_for_oper(a_old_optype);
 
     -- move evaluation outside from cursor loop:
-    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,', 1, 0);
+    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing '/PK/', 1, 0);
 
     select r.rcv_optype_id
     from rules_for_qdistr r
@@ -4016,6 +4158,7 @@ begin
                 fetch c_ret_qs2qd_by_rcv into
                      v_id
                     ,v_doc_id
+                    ,v_worker_id
                     ,v_snd_optype_id
                     ,v_snd_id
                     ,v_snd_qty
@@ -4030,6 +4173,7 @@ begin
                 fetch c_ret_qs2qd_by_snd into
                      v_id
                     ,v_doc_id
+                    ,v_worker_id
                     ,v_snd_optype_id
                     ,v_snd_id
                     ,v_snd_qty
@@ -4090,6 +4234,7 @@ begin
             insert into v_qdistr_name_for_ins(
                 id,
                 doc_id,
+                worker_id, -- 12.08.2018
                 ware_id,
                 snd_optype_id,
                 snd_id,
@@ -4105,6 +4250,7 @@ begin
             values(
                  :v_id
                 ,:v_doc_id
+                ,:v_worker_id -- 12.08.2018
                 ,:v_dd_ware_id
                 ,:v_snd_optype_id
                 ,:v_snd_id
@@ -4331,6 +4477,7 @@ create or alter procedure sp_qd_handle_on_reserve_upd_sts ( -- old name: s~p_kil
     declare v_storno_sub smallint;
     declare v_id dm_idb;
     declare v_doc_id dm_idb;
+    declare v_worker_id type of dm_ids; -- 12.08.2018
     declare v_doc_optype dm_idb;
     declare v_ware_id dm_idb;
     declare v_snd_optype_id dm_idb;
@@ -4349,6 +4496,7 @@ create or alter procedure sp_qd_handle_on_reserve_upd_sts ( -- old name: s~p_kil
         select
              qd.id
             ,qd.doc_id
+            ,qd.worker_id -- 12.08.2018
             ,qd.ware_id
             ,qd.snd_optype_id
             ,qd.snd_id
@@ -4365,6 +4513,7 @@ create or alter procedure sp_qd_handle_on_reserve_upd_sts ( -- old name: s~p_kil
             qd.ware_id = :v_dd_ware_id
             and qd.snd_optype_id = :a_old_optype
             and qd.rcv_optype_id = :v_old_rcv_optype
+            and qd.worker_id is not distinct from fn_this_worker_seq_no()
             and qd.snd_id = :v_dd_id
     );
 
@@ -4426,6 +4575,7 @@ begin
             fetch c_mov_from_qd2qs into
                  v_id
                 ,v_doc_id
+                ,v_worker_id -- 12.08.2018
                 ,v_ware_id
                 ,v_snd_optype_id
                 ,v_snd_id
@@ -4450,6 +4600,7 @@ begin
             insert into v_qstorno_name_for_ins ( -- this name will be replaced when config parameter create_with_split_heavy_tabs = 1
                 id,
                 doc_id,
+                worker_id,
                 ware_id,
                 snd_optype_id,
                 snd_id,
@@ -4465,6 +4616,7 @@ begin
             values(
                 :v_id,
                 :v_doc_id,
+                :v_worker_id,
                 :v_ware_id,
                 :v_snd_optype_id,
                 :v_snd_id,
@@ -4558,6 +4710,7 @@ as
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
             and q.rcv_optype_id = :v_rcv_optype_id
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
             and q.snd_id = :v_dd_id
     );
     declare c_qd_rows_sub_2 cursor for (
@@ -4567,18 +4720,23 @@ as
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
             and q.rcv_optype_id = :v_rcv_optype_id
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
             and q.snd_id = :v_dd_id
     );
 
     declare c_qs_rows_sub_1 cursor for (
         select qs.id, qs.snd_id
         from v_qstorned_target_1 qs  -- this name will be replaced when config parameter create_with_split_heavy_tabs = 1
-        where qs.snd_id = :v_dd_id
+        where
+            qs.snd_id = :v_dd_id
+            and qs.worker_id is not distinct from fn_this_worker_seq_no()
     );
     declare c_qs_rows_sub_2 cursor for (
         select qs.id, qs.snd_id
         from v_qstorned_target_2 qs  -- this name will be replaced when config parameter create_with_split_heavy_tabs = 1
-        where qs.snd_id = :v_dd_id
+        where
+            qs.snd_id = :v_dd_id
+            and qs.worker_id is not distinct from fn_this_worker_seq_no()
     );
 
 begin
@@ -4755,6 +4913,7 @@ as
 
     declare v_qd_rows int = 0;
     declare v_dd_id dm_idb;
+    declare v_worker_id dm_ids; -- 12.08.2018
     declare v_dd_ware_id dm_qty;
     declare v_dd_qty dm_qty;
     declare v_dd_cost dm_qty;
@@ -4768,6 +4927,7 @@ as
         select --q.id, q.snd_id
             id,
             doc_id,
+            worker_id,
             ware_id,
             snd_id,
             snd_qty,
@@ -4784,6 +4944,7 @@ as
             q.ware_id = :v_dd_ware_id
             and q.snd_optype_id = :a_old_optype
             and q.rcv_optype_id = :v_rcv_optype_id
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
             and q.snd_id = :v_dd_id
     );
 
@@ -4865,6 +5026,7 @@ begin
                 into -- v_qd_id, v_qd_snd_id;
                      v_qd_id
                     ,v_qd_doc_id
+                    ,v_worker_id -- 12.08.2018
                     ,v_qd_ware_id
                     ,v_qd_snd_id
                     ,v_qd_snd_qty
@@ -4890,6 +5052,7 @@ begin
                 insert into v_qdistr_name_for_ins( -- name will be replaced when config 'create_with_split_heavy_tabs=1'
                     id,
                     doc_id,
+                    worker_id, -- 12.08.2018
                     ware_id,
                     snd_optype_id,
                     snd_id,
@@ -4905,6 +5068,7 @@ begin
                 ) values(
                      :v_qd_id
                     ,:v_qd_doc_id
+                    ,:v_worker_id
                     ,:v_qd_ware_id
                     ,:a_new_optype ----------- !!
                     ,:v_qd_snd_id
@@ -5174,6 +5338,7 @@ create or alter procedure srv_find_qd_qs_mism(
                     and qd.snd_optype_id = :v_snd_optype_id
                     and qd.rcv_optype_id = :v_rcv_optype_id
                     and qd.snd_id = d.id
+                    and qd.worker_id is not distinct from fn_this_worker_seq_no()
                 where
                     d.doc_id  = :a_doc_list_id
                 group by d.id, d.ware_id, d.qty
@@ -5188,6 +5353,7 @@ create or alter procedure srv_find_qd_qs_mism(
                     :v_snd_optype_id = 1100 and e.qd_cnt = 0
                 )
                 and qs.snd_id = e.dd_id
+                and qs.worker_id is not distinct from fn_this_worker_seq_no()
             group by e.dd_id, e.ware_id, e.qty, e.qd_cnt
         ) f
     );
@@ -5459,6 +5625,7 @@ begin
                 q.doc_id = :a_base_doc_id -- choosen invoice which is to be re-opened
                 and q.snd_optype_id = :a_base_doc_oper_id
                 and q.rcv_optype_id = :v_rcv_optype_id
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             group by 1
         ) x
         join doc_list h on x.dependend_doc_id = h.id
@@ -5646,7 +5813,7 @@ begin
         v_curr_tx = current_transaction;
         in autonomous transaction do
         begin -- 26.09.2014 2222, temply
-            insert into perf_log(
+            insert into perf_log( -- current unit: srv_check_neg_remainders
                 unit,
                 exc_unit,
                 fb_gdscode,
@@ -5713,6 +5880,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 1000 -- fn_oper_order_by_customer
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_supplier_order as
@@ -5721,6 +5891,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 1200 -- fn_oper_order_for_supplier
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 
@@ -5730,6 +5903,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 2000 -- fn_oper_invoice_get
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_add_invoice_to_stock as
@@ -5737,6 +5913,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 2000 -- fn_oper_invoice_get
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_adding_invoice as
@@ -5744,6 +5923,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 2100 -- fn_oper_invoice_add
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_customer_reserve as
@@ -5753,6 +5935,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 3300 -- fn_oper_retail_reserve
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_reserve_write_off as
@@ -5761,6 +5946,9 @@ select h.id, h.agent_id, h.state_id, h.dts_open, h.dts_clos, h.cost_retail
 from doc_list h
 where
     h.optype_id = 3300 -- fn_oper_retail_reserve
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_write_off as
@@ -5770,6 +5958,9 @@ select h.id
 from doc_list h
 where
     h.optype_id = 3400 -- fn_oper_retail_realization
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_payment_to_supplier as
@@ -5778,6 +5969,9 @@ select h.id, h.agent_id, h.cost_purchase
 from doc_list h
 where
     h.optype_id = 4000 -- fn_oper_pay_to_supplier
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 create or alter view v_cancel_customer_prepayment as
@@ -5785,6 +5979,9 @@ select h.id, h.agent_id, h.cost_retail
 from doc_list h
 where
     h.optype_id = 5000 -- fn_oper_pay_from_customer
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 
@@ -5848,6 +6045,9 @@ where
             q.ware_id = w.id
             and q.snd_optype_id = 2100
             and q.rcv_optype_id = 3300
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
         order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
     );
 
@@ -5865,6 +6065,9 @@ create or alter view v_min_id_avl_res as
                 q.ware_id = w.id
                 and q.snd_optype_id = 2100
                 and q.rcv_optype_id = 3300
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -5886,6 +6089,9 @@ create or alter view v_max_id_avl_res as
                 q.ware_id = w.id
                 and q.snd_optype_id = 2100
                 and q.rcv_optype_id = 3300
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -5914,6 +6120,9 @@ where
             q.ware_id = w.id
             and q.snd_optype_id = 1000
             and q.rcv_optype_id = 1200
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
         -- 3.0 only: supress building index bitmap on QDistr
         order by ware_id, snd_optype_id, rcv_optype_id
     );
@@ -5930,6 +6139,9 @@ create or alter view v_min_id_clo_ord as
                 q.ware_id = w.id
                 and q.snd_optype_id = 1000
                 and q.rcv_optype_id = 1200
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -5948,6 +6160,9 @@ create or alter view v_max_id_clo_ord as
                 q.ware_id = w.id
                 and q.snd_optype_id = 1000
                 and q.rcv_optype_id = 1200
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -5976,6 +6191,9 @@ create or alter view v_random_find_ord_sup as
                 q.ware_id = w.id
                 and q.snd_optype_id = 1200 -- fn_oper_order_for_supplier()
                 and q.rcv_optype_id = 2000
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             order by ware_id, snd_optype_id, rcv_optype_id -- supress building index bitmap on QDistr!
         )
 ;
@@ -5992,6 +6210,9 @@ create or alter view v_min_id_ord_sup as
                 q.ware_id = w.id
                 and q.snd_optype_id = 1200
                 and q.rcv_optype_id = 2000
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -6010,6 +6231,9 @@ create or alter view v_max_id_ord_sup as
                 q.ware_id = w.id
                 and q.snd_optype_id = 1200
                 and q.rcv_optype_id = 2000
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from fn_this_worker_seq_no()
             -- 3.0 only: supress building index bitmap on QDistr:
             order by ware_id, snd_optype_id, rcv_optype_id -- do NOT use this 'order by' in 2.5!
         )
@@ -6026,22 +6250,28 @@ create or alter view v_random_find_clo_res as
     select h.id
     from doc_list h
     where h.optype_id = 1000
-    and exists(
-        select *
-        from doc_data d where d.doc_id = h.id
+        -- 12.08.2018: sequential number of ISQL session that queries this view.
+        -- This filter is added with purpose to reduce number of lock-conflict errors:
+        and h.worker_id is not distinct from fn_this_worker_seq_no()
         and exists(
             select *
-            from qdistr q
-            where
-                q.ware_id = d.ware_id
-                and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
-                and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
-                and q.snd_id = d.id
-            -- prevent from building bitmap, 3.0 only:
-            order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+            from doc_data d where d.doc_id = h.id
+            and exists(
+                select *
+                from qdistr q
+                where
+                    q.ware_id = d.ware_id
+                    and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
+                    and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
+                    and q.snd_id = d.id
+                    -- 12.08.2018: sequential number of ISQL session that queries this view.
+                    -- This filter is added with purpose to reduce number of lock-conflict errors:
+                    and q.worker_id is not distinct from fn_this_worker_seq_no()
+                -- prevent from building bitmap, 3.0 only:
+                order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+            )
+            order by d.doc_id -- prevent from building bitmap, 3.0 only
         )
-        order by d.doc_id -- prevent from building bitmap, 3.0 only
-    )
 ;
 
 -------------------------------------------------------------------------------
@@ -6057,18 +6287,24 @@ select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
 where h.optype_id = 1000
-and exists(
-    select *
-    from qdistr q
-    where
-        q.ware_id = d.ware_id
-        and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
-        and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
-        and q.snd_id = d.id
-    order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
-)
-order by h.id
-rows 1
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
+    and exists(
+        select *
+        from qdistr q
+        where
+            q.ware_id = d.ware_id
+            and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
+            and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
+            and q.snd_id = d.id
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
+        order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+    )
+    order by h.id
+    rows 1
 ;
 
 -------------------------------------------------------------------------------
@@ -6084,18 +6320,25 @@ select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
 where h.optype_id = 1000
-and exists(
-    select *
-    from qdistr q
-    where
-        q.ware_id = d.ware_id
-        and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
-        and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
-        and q.snd_id = d.id
-    order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
-)
-order by h.id desc
-rows 1;
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from fn_this_worker_seq_no()
+    and exists(
+        select *
+        from qdistr q
+        where
+            q.ware_id = d.ware_id
+            and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
+            and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
+            and q.snd_id = d.id
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
+        order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+    )
+    order by h.id desc
+    rows 1
+;
 
 -------------------------------------------------------------------------------
 
@@ -6109,6 +6352,9 @@ from pdistr p
 where
     p.snd_optype_id = 2100 -- fn_oper_invoice_add()
     and p.rcv_optype_id = 4000 -- fn_oper_pay_to_supplier()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 -------------------------------------------------------------------------------
@@ -6123,6 +6369,9 @@ from pdistr p
 where
     p.snd_optype_id = 2100 -- fn_oper_invoice_add()
     and p.rcv_optype_id = 4000 -- fn_oper_pay_to_supplier()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 order by
     snd_id
 rows 1
@@ -6140,6 +6389,9 @@ from pdistr p
 where
     p.snd_optype_id = 2100 -- fn_oper_invoice_add()
     and p.rcv_optype_id = 4000 -- fn_oper_pay_to_supplier()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 order by
     p.snd_optype_id desc, p.rcv_optype_id desc, p.snd_id desc
 rows 1
@@ -6157,6 +6409,9 @@ from pdistr p
 where
     p.snd_optype_id = 3400 -- fn_oper_retail_realization()
     and p.rcv_optype_id = 5000 -- fn_oper_pay_from_customer()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 ;
 
 -------------------------------------------------------------------------------
@@ -6171,6 +6426,9 @@ from pdistr p
 where
     p.snd_optype_id = 3400 -- fn_oper_retail_realization()
     and p.rcv_optype_id = 5000 -- fn_oper_pay_from_customer()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 order by
     snd_id
 rows 1
@@ -6188,6 +6446,9 @@ from pdistr p
 where
     p.snd_optype_id = 3400 -- fn_oper_retail_realization()
     and p.rcv_optype_id = 5000 -- fn_oper_pay_from_customer()
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and p.worker_id is not distinct from fn_this_worker_seq_no()
 order by
     p.snd_optype_id desc, p.rcv_optype_id desc, p.snd_id desc
 rows 1
@@ -6232,6 +6493,7 @@ create or alter view v_doc_detailed as
 -- Also very useful for debugging
 select
     h.id doc_id,
+    h.worker_id,
     h.optype_id,
     o.mcode as oper,
     h.base_doc_id,
@@ -6443,168 +6705,11 @@ commit;
 --######################   d e b u g    v i e w s   ############################
 -------------------------------------------------------------------------------
 
-create or alter view z_current_test_settings as
--- This view is used in 1run_oltp_emulbat (.sh) to display current settings before test run.
--- Do NOT delete it!
-select s.mcode as setting_name, s.svalue as setting_value, 'init' as stype
-from settings s
-where s.working_mode='INIT' and s.mcode in ('WORKING_MODE', 'USED_IN_REPLICATION')
-
-UNION ALL
-
-select '--- Detalization for WORKING_MODE: ---' as setting_name, '' as setting_value, 'inf1' as stype
-from rdb$database
-UNION ALL
-
-select '    ' || t.mcode as setting_name, t.svalue as setting_value, 'mode' as stype
-from settings s
-join settings t on s.svalue=t.working_mode
-where s.working_mode='INIT' and s.mcode='WORKING_MODE'
-
-UNION ALL
-
-select '--- Main test settings: ---' as setting_name, '' as setting_value, 'inf2' as stype
-from rdb$database
-UNION ALL
-
-select setting_name, setting_value, 'main' as stype
-from (
-    select '    ' || s.mcode as setting_name, s.svalue as setting_value
-    from settings s
-    where
-        s.working_mode='COMMON'
-        and s.mcode
-            in (
-                 'BUILD_WITH_SPLIT_HEAVY_TABS'
-                ,'BUILD_WITH_SEPAR_QDISTR_IDX'
-                ,'BUILD_WITH_QD_COMPOUND_ORDR'
-                ,'ENABLE_MON_QUERY'
-                ,'TRACED_UNITS'
-                ,'HALT_TEST_ON_ERRORS'
-                ,'QMISM_VERIFY_BITSET'
-                ,'ENABLE_RESERVES_WHEN_ADD_INVOICE'
-               )
-    order by setting_name
-) x
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_settings_pivot as
--- vivid show of all workload settings (pivot rows to separate columns
--- for each important kind of setting). Currently selected workload mode
--- is marked by '*' and displayed in UPPER case, all other - in lower.
--- The change these settings open oltp_main_filling.sql and find EB
--- with 'v_insert_settings_statement' variable
-select
-    iif(s.working_mode=c.svalue,'* '||upper(s.working_mode), lower(s.working_mode) ) as working_mode
-    ,cast(max( iif(mcode = upper('c_wares_max_id'), s.svalue, null ) ) as int) as wares_cnt
-    ,cast(max( iif(mcode = upper('c_customer_doc_max_rows'), s.svalue, null ) ) as int) as cust_max_rows
-    ,cast(max( iif(mcode = upper('c_supplier_doc_max_rows'), s.svalue, null ) ) as int) as supp_max_rows
-    ,cast(max( iif(mcode = upper('c_customer_doc_max_qty'), s.svalue, null ) ) as int) as cust_max_qty
-    ,cast(max( iif(mcode = upper('c_supplier_doc_max_qty'), s.svalue, null ) ) as int) as supp_max_qty
-    ,cast(max( iif(mcode = upper('c_number_of_agents'), s.svalue, null ) ) as int) as agents_cnt
-from settings s
-left join (select s.svalue from settings s where s.mcode='working_mode') c on s.working_mode=c.svalue
-where s.mcode
-in (
-     'c_wares_max_id'
-    ,'c_customer_doc_max_rows'
-    ,'c_supplier_doc_max_rows'
-    ,'c_customer_doc_max_qty'
-    ,'c_supplier_doc_max_qty'
-    ,'c_number_of_agents'
-)
-group by s.working_mode, c.svalue
-order by
-    iif(s.working_mode starting with 'DEBUG',  0,
-    iif(s.working_mode starting with 'SMALL',  1,
-    iif(s.working_mode starting with 'MEDIUM', 2,
-    iif(s.working_mode starting with 'LARGE',  3,
-    iif(s.working_mode starting with 'HEAVY',  5,
-    null) ) ) ) )
-    nulls last
-   ,s.working_mode
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_qd_indices_ddl as
-
--- This view is used in 1run_oltp_emulbat (.sh) to display current DDL of QDistr xor XQD* indices.
--- Do NOT delete it!
-
-with recursive
-r as (
-    select
-        ri.rdb$relation_name tab_name
-        ,ri.rdb$index_name idx_name
-        ,rs.rdb$field_name fld_name
-        ,rs.rdb$field_position fld_pos
-        ,cast( trim(rs.rdb$field_name) as varchar(512)) as idx_key
-    from rdb$indices ri
-    join rdb$index_segments rs using ( rdb$index_name )
-    left join (
-        select cast(t.svalue as int) as svalue
-        from settings t
-        where t.working_mode='COMMON' and t.mcode='BUILD_WITH_SPLIT_HEAVY_TABS'
-    ) t on 1=1
-    where
-        rs.rdb$field_position = 0
-        and (
-            t.svalue = 0 and trim( ri.rdb$relation_name ) is not distinct from 'QDISTR'
-            or
-            t.svalue = 1 and trim( ri.rdb$relation_name ) starts with 'XQD_'
-        )
-
-    UNION ALL
-
-    select
-        r.tab_name
-        ,r.idx_name
-        ,rs.rdb$field_name
-        ,rs.rdb$field_position
-        ,r.idx_key || ',' || trim(rs.rdb$field_name) 
-    from r
-    join rdb$indices ri
-        on r.idx_name = ri.rdb$index_name
-    join rdb$index_segments rs
-        on
-            ri.rdb$index_name = rs.rdb$index_name
-            and r.fld_pos +1 = rs.rdb$field_position
-)
-select r.tab_name, r.idx_name, max(r.idx_key) as idx_key
-from r
-group by r.tab_name, r.idx_name
-;
-
---------------------------------------------------------------------------------
-
-create or alter view z_halt_log as -- upd 28.09.2014
-select p.id, p.fb_gdscode, p.unit, p.trn_id, p.dump_trn, p.att_id, p.exc_unit, p.info, p.ip, p.dts_beg, e.fb_mnemona, p.exc_info,p.stack
-from perf_log p
-join (
-    select g.trn_id, g.fb_gdscode
-    from perf_log g
-    -- 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
-    -- 335544347    not_valid    Validation error for column @1, value "@2".
-    -- if table has unique constraint: 335544665 unique_key_violation (violation of PRIMARY or UNIQUE KEY constraint "T1_XY" on table "T1")
-    -- if table has only unique index: 335544349 no_dup (attempt to store duplicate value (visible to active transactions) in unique index "T2_XY")
-    where g.fb_gdscode in (      0 -- 3.0 SC trouble, core-4565 (gdscode can come in when-section with value = 0!)
-                                ,335544347, 335544558 -- not_valid or viol. of check constr.
-                                ,335544665, 335544349 -- viol. of UNQ constraint or just unq. index (without binding to unq constr)
-                                ,335544466 -- viol. of FOREIGN KEY constraint @1 on table @2
-                                ,335544838 -- Foreign key reference target does not exist (when attempt to ins/upd in DETAIL table FK-field with value which doesn`t exists in PARENT)
-                                ,335544839 -- Foreign key references are present for the record  (when attempt to upd/del in PARENT table PK-field and rows in DETAIL (no-cascaded!) exists for old value)
-                          )
-    group by 1,2
-) g
-on p.trn_id = g.trn_id
-left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-order by p.id
-;
-
---------------------------------------------------------------------------------
+-- Following view were moved in 'oltp_common_sp.sql', 23.11.2018:
+-- create or alter view z_current_test_settings
+-- create or alter view z_settings_pivot
+-- create or alter view z_qd_indices_ddl
+-- create or alter view z_halt_log
 
 create or alter view z_agents_tunrover_saldo as
 -- 4 misc reports and debug, do not delete: agent turnovers and sums; only in 3.0
@@ -7047,7 +7152,7 @@ commit;
 -------------------------------------------------------------------------------
 
 set term ^;
--- NOTE: currently tis trigger is created with INactive state.
+-- NOTE: currently this trigger is created with INactive state.
 -- It will be Active at the end of all database building process, see 'oltp_data_filling.sql'
 create or alter trigger trg_connect inactive on connect as
 begin
@@ -7086,6 +7191,7 @@ begin
     -- add single record into doc_list (document header)
     insert into doc_list(
         id, -- 06.09.2014 2200
+        worker_id, -- 12.08.2018
         optype_id,
         agent_id,
         state_id,
@@ -7095,6 +7201,7 @@ begin
     )
     values(
         coalesce(:a_gen_id, gen_id(g_common,1)),
+        fn_this_worker_seq_no(), -- 12.08.2018:
         :a_optype_id,
         :a_agent_id,
         :a_new_state,
@@ -7138,7 +7245,7 @@ as
 begin
     -- add to performance log timestamp about start/finish this unit:
     -- uncomment if need analyze perormance in mon_log tables
-    -- + update settings set svalue=',sp_make_qty_storno,sp_add_doc_data,pdetl_add,' where mcode='TRACED_UNITS';
+    -- + update settings set svalue='/sp_make_qty_storno/sp_add_doc_data/' where mcode='MON_UNIT_LIST';
     -- execute procedure sp_add_perf_log(1, v_this, null, 'a_gen_dd_id='||trim(coalesce(a_gen_dd_id||'=>ins','null'))||', a_dbkey: '||trim(iif(a_dbkey is null,'isNull','hasVal=>upd')) );
 
     -- insert single record into doc_data
@@ -7401,6 +7508,9 @@ as
             q.ware_id = :v_ware_id -- find invoices to be storned storning by new customer reserve, and all other ops except storning client orders
             and q.snd_optype_id = :v_snd_optype_id
             and q.rcv_optype_id = :v_rcv_optype_id
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
         order by
             q.doc_id
               + 0 -- handle docs in FIFO order
@@ -7427,6 +7537,9 @@ as
             and q.snd_optype_id = :v_snd_optype_id
             and q.rcv_optype_id = :v_rcv_optype_id
             and q.snd_id = :v_dd_clo_id 
+            -- 12.08.2018: sequential number of ISQL session that queries this view.
+            -- This filter is added with purpose to reduce number of lock-conflict errors:
+            and q.worker_id is not distinct from fn_this_worker_seq_no()
         order by
             q.doc_id
               + 0 -- handle docs in FIFO order
@@ -7460,7 +7573,7 @@ begin
     into v_next_rcv_op;
 
     -- move evaluation outside from cursor loop:
-    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing ',PK,', 1, 0);
+    v_halt_on_pk_viol = iif( rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') containing '/PK/', 1, 0);
 
     v_call = v_this;
     -- doc_list.id must be defined PRELIMINARY, before cursor that handles with qdistr:
@@ -7544,9 +7657,9 @@ begin
             v_rows = v_rows + 1; -- total ATTEMPTS to make delete/update in QDistr
 
             if ( mod(v_rows, 100) = 0 ) then
-               -- Check that test can continue his work (request to stop it not yet issued).
-               -- Otherwise raises ex`ception to stop test. 
-               -- Added 11.09.2016 during run 30 sessions on HQBird 2.5.7, Windows 8.1
+               -- Check whether test can continue: if request to stop exists
+               -- then raises ex`ception to stop this session ASAP.
+               -- Added 11.09.2016.
                execute procedure sp_check_to_stop_work;
 
 
@@ -7647,6 +7760,7 @@ begin
                     insert into v_qdistr_target_1 (
                         id,
                         doc_id,
+                        worker_id, -- 12.08.2018
                         ware_id,
                         snd_optype_id,
                         rcv_optype_id,
@@ -7657,6 +7771,7 @@ begin
                     values(
                         :v_id,
                         :v_dh_new_id,
+                        fn_this_worker_seq_no(), -- 12.08.2018
                         :v_ware_id,
                         :a_optype_id,
                         :v_next_rcv_op,
@@ -7693,7 +7808,9 @@ begin
                 if ( v_storno_sub = 1 )  then
                     insert into v_qstorned_target_1 (
                          id,
-                         doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
+                         doc_id,
+                         worker_id, -- 12.08.2018
+                         ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
                          snd_optype_id, snd_id, snd_qty,
                          rcv_optype_id,
                          rcv_doc_id, -- 30.12.2014
@@ -7701,7 +7818,9 @@ begin
                          snd_purchase, snd_retail
                     ) values (
                         :v_id
-                        ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
+                        ,:v_cq_snd_list_id
+                        ,fn_this_worker_seq_no() -- 12.08.2018
+                        ,:v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
                         ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
                         ,:v_cq_rcv_optype_id
                         ,:v_dh_new_id -- 30.12.2014
@@ -7711,7 +7830,9 @@ begin
                 else
                     insert into v_qstorned_target_2 (
                         id,
-                        doc_id, ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
+                        doc_id,
+                        worker_id, -- 12.08.2018
+                        ware_id, dts, -- do NOT specify field `trn_id` here! 09.10.2014 2120
                         snd_optype_id, snd_id, snd_qty,
                         rcv_optype_id,
                         rcv_doc_id, -- 30.12.2014
@@ -7719,7 +7840,9 @@ begin
                         snd_purchase, snd_retail
                     ) values (
                         :v_id
-                        ,:v_cq_snd_list_id, :v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
+                        ,:v_cq_snd_list_id
+                        ,fn_this_worker_seq_no() -- 12.08.2018
+                        ,:v_ware_id, :v_cq_dts -- dis 09.10.2014 2120: :v_cq_trn_id,
                         ,:v_cq_snd_optype_id, :v_cq_snd_data_id,:v_cq_snd_qty
                         ,:v_cq_rcv_optype_id
                         ,:v_dh_new_id -- 30.12.2014
@@ -7888,80 +8011,35 @@ end
 
 --------------------------------------------------------------------------------
 
-create or alter procedure sp_split_into_words(
-    a_text dm_name,
-    a_dels varchar(50) default ',.<>/?;:''"[]{}`~!@#$%^&*()-_=+\|/',
-    a_special char(1) default ' '
-)
-returns (
-  word dm_name
+create or alter procedure srv_predictable_unit_choice returns(
+    unit dm_name
 ) as
+    declare v_this dm_dbobj = 'srv_predictable_unit_choice';
+    declare v_prev varchar(100);
 begin
--- Aux SP, used only in oltp_data_filling.sql to filling table PATTERNS
--- with miscelan combinations of words to be used in SIMILAR TO testing.
-for
-    with recursive
-    j as( -- loop #1: transform list of delimeters to rows
-        select s,1 i, substring(s from 1 for 1) del
-        from(
-          select replace(:a_dels,:a_special,'') s
-          from rdb$database
-        )
-        
-        UNION ALL
-        
-        select s, i+1, substring(s from i+1 for 1)
-        from j
-        where substring(s from i+1 for 1)<>''
-    )
-
-    ,d as(
-        select :a_text s, :a_special sp from rdb$database
-    )
-    ,e as( -- loop #2: perform replacing each delimeter to `space`
-        select d.s, replace(d.s, j.del, :a_special) s1, j.i, j.del
-        from d join j on j.i=1
-
-        UNION ALL
-
-        select e.s, replace(e.s1, j.del, :a_special) s1, j.i, j.del
-        from e
-        -- nb: here 'column unknown: e.i' error will be on old builds of 2.5,
-        -- e.g: WI-V2.5.2.26540 (letter from Alexey Kovyazin, 24.08.2014 14:34)
-        join j on j.i = e.i + 1
-    )
-    ,f as(
-        select s1 from e order by i desc rows 1
-    )
-    
-    ,r as ( -- loop #3: perform split text into single words
-        select iif(t.k>0, substring(t.s from t.k+1 ), t.s) s,
-             iif(t.k>0,position( del, substring(t.s from t.k+1 )),-1) k,
-             t.i,
-             t.del,
-             iif(t.k>0,left(t.s, t.k-1),t.s) word
-        from(
-          select f.s1 s, d.sp del, position(d.sp, s1) k, 0 i from f cross join d
-        )t
-
-        UNION ALL
-
-        select iif(r.k>0, substring(r.s from r.k+1 ), r.s) s,
-             iif(r.k>0,position(r.del, substring(r.s from r.k+1 )),-1) k,
-             r.i+1,
-             r.del,
-             iif(r.k>0,left(r.s, r.k-1),r.s) word
-        from r
-        where r.k>=0
-    )
-    select word from r where word>''
-    into
-        word
-do
+    v_prev = coalesce( rdb$get_context('USER_SESSION','PREV_SELECTED_INFO'), rpad('',80,' ') || cast(0 as char(11)) );
+    select cast( b.unit as char(80) ) || cast( b.predictable_selection_priority as char(11) )
+    from business_ops b
+    where b.predictable_selection_priority > cast( substring( :v_prev from 81 ) as int )
+    order by b.predictable_selection_priority
+    rows 1
+    into v_prev;
+    if (row_count = 0) then
+    begin
+        -- returns to first operation: sp_client_order
+        select cast( b.unit as char(80) ) || cast( b.predictable_selection_priority as char(11) )
+        from business_ops b
+        order by b.predictable_selection_priority
+        rows 1
+        into v_prev;
+        if (row_count = 0) then
+            exception ex_record_not_found using ('BUSINESS_OPS', '"' || trim( substring( v_prev from 81 ) ) || '"' );
+    end
+    rdb$set_context('USER_SESSION','PREV_SELECTED_INFO', v_prev);
+    unit = trim(substring( v_prev from 1 for 80 ));
     suspend;
 end
-
-^ -- sp_split_into_words
+^
 
 create or alter procedure srv_random_unit_choice(
     a_included_modes dm_info default '',
@@ -7997,20 +8075,18 @@ begin
     a_excluded_modes = coalesce( a_excluded_modes, '');
     a_excluded_kinds = coalesce( a_excluded_kinds, '');
 
-    select g.dts_beg
-    from perf_log g where g.unit = 'srv_recalc_idx_stat'
-    order by g.dts_beg desc rows 1
-    into v_last_recalc_idx_dts;
-    -- FB 3.0: on database with size = 101Gb, non-cached:
-    -- 454 ms, 92 read(s), 95 fetch(es)
-    -- Table                             Natural     Index
-    -- ****************************************************
-    -- PERF_LOG                                          1
+-- disabled 14.10.2018: perf_log now is replaced with V_pref_log ("unioned" view),
+-- and its underlied tables (perf_split_NN) have no index on field 'unit' (due to possible performance issues!)
+--    select g.dts_beg
+--    from perf_log g where g.unit = 'srv_recalc_idx_stat'
+--    order by g.dts_beg desc rows 1
+--    into v_last_recalc_idx_dts;
 
-    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG')is not null ) then -- see SP_CHECK_TO_STOP_WORK
-        v_last_recalc_idx_dts = maxvalue(v_last_recalc_idx_dts, cast(rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) );
 
-    v_last_recalc_idx_minutes_ago = coalesce( datediff(minute from v_last_recalc_idx_dts to cast('now' as timestamp)), cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int ) );
+--    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG')is not null ) then -- see SP_CHECK_TO_STOP_WORK
+--        v_last_recalc_idx_dts = maxvalue(v_last_recalc_idx_dts, cast(rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) );
+--
+--    v_last_recalc_idx_minutes_ago = coalesce( datediff(minute from v_last_recalc_idx_dts to cast('now' as timestamp)), cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int ) );
 
     r_max = rdb$get_context('USER_SESSION', 'BOP_RND_MAX');
     if ( r_max is null ) then
@@ -8027,15 +8103,18 @@ begin
     from business_ops o
     where o.random_selection_weight >= :r
         and (fn_internal_enable_mon_query() = 1 or o.unit <> :c_unit_for_mon_query)
-        and ( -- 27.11.2015: skip call of index statistics recalc if it was done not so far:
-                o.unit <> 'srv_recalc_idx_stat'
-                or
-                o.unit = 'srv_recalc_idx_stat'
-                and
-                    :v_last_recalc_idx_minutes_ago
-                    >=
-                    cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int )
-            )
+-- disabled 14.10.2018: perf_log now is replaced with V_pref_log ("unioned" view),
+-- and its underlied tables (perf_split_NN) have no index on field 'unit' (due to possible performance issues!)
+-- Decided to reduce frequency by assigned low value for probability of srv_recalc_idx_stat calls.
+--        and ( -- 27.11.2015: skip call of index statistics recalc if it was done not so far:
+--                o.unit <> 'srv_recalc_idx_stat'
+--                or
+--                o.unit = 'srv_recalc_idx_stat'
+--                and
+--                    :v_last_recalc_idx_minutes_ago
+--                    >=
+--                    cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int )
+--            )
         and (:a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
         and (:a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
         and (:a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
@@ -8058,389 +8137,27 @@ begin
 
 end
 
-
 ^ -- srv_random_unit_choice
 
 ---------------------------------------------------------------------------
 
-create or alter procedure srv_diag_pay_distr( -- ::: NB ::: 3.0 only!
-    a_doc_id dm_idb default null
-) returns(
-    result varchar(3), -- 'ok.' | 'err'
-    ptab varchar(8),
-    ptab_id int,
-    snd_oper dm_mcode,
-    snd_id dm_idb,
-    rcv_oper dm_mcode,
-    rcv_id dm_idb,
-    ptab_cost dm_cost,
-    ptab_sum_cost dm_cost,
-    payment_id dm_idb, 
-    payment_cost dm_cost
-)
-as
-begin
-    for
-        select
-             iif( iif( h.optype_id=fn_oper_pay_from_customer(), h.cost_retail, h.cost_retail) = sum(ps.cost)over( partition by iif(ps.ptab='pdistr',ps.snd_optype_id,ps.rcv_optype_id)), 'ok.','err' ) result
-            ,cast(ps.ptab as varchar(8)) as ptab
-            ,ps.id as ptab_id
-            ,ps.snd_oper
-            ,ps.snd_id as ptab_snd_id
-            ,ps.rcv_oper
-            ,ps.rcv_id as ptab_rcv_id
-            ,ps.cost as ptab_cost
-            ,sum(ps.cost)over( partition by iif(ps.ptab='pdistr',ps.snd_optype_id,ps.rcv_optype_id)) ptab_sum_cost
-            --,ps.trn_id as ptab_trn
-            ,h.id as payment_id
-            ,iif( h.optype_id=fn_oper_pay_from_customer(), h.cost_retail, h.cost_retail) as payment_cost
-        from (
-            select
-                'pdistr' ptab,
-                pd.trn_id,
-                pd.snd_optype_id,
-                so.mcode as snd_oper,
-                pd.rcv_optype_id,
-                ro.mcode as rcv_oper,
-                pd.id,
-                pd.snd_id,
-                pd.snd_cost cost, -- NOT YET storned value
-                cast(null as int) as rcv_id
-            from pdistr pd
-            --join doc_list h on pd.snd_id = h.id and pd.snd_optype_id = h.optype_id
-            join optypes so on pd.snd_optype_id=so.id
-            join optypes ro on pd.rcv_optype_id=ro.id
-            where (pd.snd_id = :a_doc_id or :a_doc_id is null) -- OR'ed optimization, 3.0 only
-
-            UNION ALL
-
-            select
-                'pstorned',
-                ps.trn_id,
-                ps.snd_optype_id,
-                so.mcode as snd_oper,
-                ps.rcv_optype_id,
-                ro.mcode as rcv_oper,
-                ps.id,
-                ps.snd_id,
-                ps.rcv_cost, -- ALREADY STORNED value
-                ps.rcv_id
-            from pstorned ps
-            --join doc_list h on ps.rcv_id = h.id and ps.rcv_optype_id = h.optype_id
-            join optypes so on ps.snd_optype_id=so.id
-            join optypes ro on ps.rcv_optype_id=ro.id
-            where (ps.rcv_id = :a_doc_id or :a_doc_id is null) -- OR'ed optimization, 3.0 only
-        ) ps
-        join doc_list h on h.id = iif(ps.ptab='pdistr',ps.snd_id,ps.rcv_id)
-    into
-        result
-        ,ptab
-        ,ptab_id
-        ,snd_oper
-        ,snd_id
-        ,rcv_oper
-        ,rcv_id
-        ,ptab_cost
-        ,ptab_sum_cost
-        ,payment_id
-        ,payment_cost
-    do suspend;
-end
-
-^ -- srv_diag_pay_distr
-
 create or alter procedure sys_list_to_rows (
-    A_LST blob sub_type 1 segment size 80,
-    A_DEL char(1) = ',')
+    a_lst blob sub_type 1 segment size 80,
+    a_del char(1) = ',')
 returns (
-    LINE integer,
-    EOF integer,
-    ITEM varchar(8192))
-AS
-  declare pos_ int;
-  declare noffset int = 1;
-  declare beg int;
-  declare buf varchar(30100);
-begin
-  -- Splits blob to lines by single char delimiter.
-  -- adapted from here:
-  -- http://www.sql.ru/forum/actualthread.aspx?bid=2&tid=607154&pg=2#6686267
-
-  if (a_lst is null) then exit;
-  line=0;
-
-  while (0=0) do begin
-    buf = substring(a_lst from noffset for 30100);
-    pos_ = 1; beg = 1;
-    while (pos_ <= char_length(buf) and pos_ <= 30000) do begin
-      if (substring(buf from pos_ for 1) = :a_del) then begin
-        if (pos_ > beg) then
-          item = substring(buf from beg for pos_ - beg);
-        else
-          item = ''; --null;
-        suspend;
-        line=line+1;
-        beg = pos_ + 1;
-      end
-      pos_ = pos_ + 1;
-    end
-    if (noffset + pos_ - 2 = char_length(a_lst)) then leave;
-    noffset = noffset + beg - 1;
-    if (noffset > char_length(a_lst)) then leave;
-  end
-
-  if (pos_ > beg) then begin
-    item = substring(buf from beg for pos_ - beg);
-    eof=-1;
-  end
-  else begin
-    item = '';
-    eof=-1;
-  end
-  suspend;
-
+    line integer,
+    eof integer,
+    item varchar(8192))
+as begin
+   -- ########################################
+   -- STUB! Actual code see in oltp_common.sql
+   -- ########################################
+   suspend;
 end
 
-^  -- sys_list_to_rows
+^ -- sys_list_to_rows // STUB
 
-create or alter procedure sys_get_proc_ddl (
-    a_proc varchar(31),
-    a_mode smallint = 1,
-    a_include_setterm smallint = 1)
-returns (
-    src varchar(32760))
-as
-begin
-    if ( a_proc is null or
-         not singular(select * from rdb$procedures p where p.rdb$procedure_name starting with upper(:a_proc))
-       ) then
-    begin
-        src = '-- invalid input argument a_proc = ' || coalesce('"'||trim(a_proc)||'"', '<null>');
-        suspend;
-        exception ex_bad_argument using( coalesce('"'||trim(a_proc)||'"', '<null>'), 'sys_get_proc_ddl' );
-    end
-
-    for
-        -- Extracts metadata of STORED PROCSEDURES to be executed as statements in isql.
-        -- Samples:
-        -- select src from sys_get_proc_ddl('', 0) -- output all procs with EMPTY body (preparing to update)
-        -- select src from sys_get_proc_ddl('', 1) -- output all procs with ODIGIN body (finalizing update)
-        
-        with
-        s as(
-            select
-                m.mon$sql_dialect db_dialect
-                ,:a_mode mode -- -1=only SP name and its parameters, 0 = name+parameters+empty body, 1=full text
-                ,:a_include_setterm add_set_term -- 1 => include `set term ^;` clause
-                ,r.rdb$character_set_name db_default_cset
-                ,p.rdb$procedure_name p_nam
-                ,ascii_char(10) d
-                ,replace(cast(p.rdb$procedure_source as blob sub_type 1), ascii_char(13), '') p_src
-                ,(
-                    select
-                        coalesce(sum(iif(px.rdb$parameter_type=0,1,0))*1000 + sum(iif(px.rdb$parameter_type=1,1,0)),0)
-                    from rdb$procedure_parameters px
-                    where px.rdb$procedure_name = p.rdb$procedure_name
-                ) pq -- cast(pq/1000 as int) = qty of IN-args, mod(pq,1000) = qty of OUT args
-            from mon$database m -- put it FIRST in the list of sources!
-            join rdb$database r on 1=1
-            join rdb$procedures p on 1=1
-            where p.rdb$procedure_name starting with upper(:a_proc) -- substitute with some name if needed
-        )
-        --select * from s
-        ,r as(
-            select
-                db_dialect
-                ,mode
-                ,add_set_term
-                ,db_default_cset
-                ,p_nam
-                ,p.line as i
-                ,p.item as word
-                ,d
-                ,pq
-                ,p_src
-                ,cast(pq/1000 as int) pq_in
-                ,mod(pq,1000) pq_ou
-                ,p.eof k
-            from s
-            left join sys_list_to_rows(p_src, d) p on 1=1
-        )
-        --select * from r
-        
-        ,p as(
-            select
-                db_dialect
-                ,mode
-                ,add_set_term
-                ,db_default_cset
-                ,p_nam,i
-                ,word
-                ,r.pq_in
-                ,r.pq_ou
-                ,pt -- ip=0, op=1
-                ,pp.rdb$field_source ppar_fld_src
-                ,pp.rdb$parameter_name par_name
-                ,pp.rdb$parameter_number par_num
-                ,pp.rdb$parameter_type par_ty
-                ,pp.rdb$null_flag p_not_null -- 1==> not null
-                ,pp.rdb$parameter_mechanism ppar_mechan -- 1=type of (table.column, domain, other...)
-                ,pp.rdb$relation_name ppar_rel_name
-                ,pp.rdb$field_name par_fld
-                ,case f.rdb$field_type
-                    when 7 then 'smallint'
-                    when 8 then 'integer'
-                    when 10 then 'float'
-                    --when 14 then 'char(' || cast(cast(f.rdb$field_length / iif(ce.rdb$character_set_name=upper('utf8'),4,1) as int) as varchar(5)) || ')'
-                    when 14 then 'char(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
-                    when 16 then -- dialect 3 only
-                        case f.rdb$field_sub_type
-                            when 0 then 'bigint'
-                            when 1 then 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                            when 2 then 'decimal(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                            else 'unknown'
-                        end
-                    when 12 then 'date'
-                    when 13 then 'time'
-                    when 27 then -- dialect 1 only
-                        case f.rdb$field_scale
-                            when 0 then 'double precision'
-                            else 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                        end
-                    when 35 then iif(db_dialect=1, 'date', 'timestamp')
-                    when 37 then 'varchar(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
-                    when 261 then 'blob sub_type ' || f.rdb$field_sub_type || ' segment size ' || f.rdb$segment_length
-                    else 'unknown'
-                end
-                as fddl
-                ,f.rdb$character_set_id fld_source_cset_id
-                ,f.rdb$collation_id fld_coll_id
-                ,ce.rdb$character_set_name fld_src_cset_name
-                ,co.rdb$collation_name fld_collation
-                ,cast(f.rdb$default_source as varchar(1024)) fld_default_src
-                ,cast(pp.rdb$default_source as varchar(1024)) ppar_default_src   -- ppar_default_src
-                ,k -- k=-1 ==> last line of sp
-            from r
-            join (
-                select -2 pt from rdb$database -- 'set term ^;'
-                union all select -1 from rdb$database -- header stmt: 'create or alter procedure ...('
-                union all select  0 from rdb$database -- input pars
-                union all select  5 from rdb$database -- 'returns ('
-                union all select 10 from rdb$database -- output pars
-                union all select 20 from rdb$database -- 'as'
-                union all select 50 from rdb$database -- source code
-                union all select 100 from rdb$database -- '^set term ;^'
-            ) x on
-                -- `i`=line of body, 0='begin'
-                i = 0 and x.pt = -1 -- header
-                or i =0 and x.pt = 0 and pq_in > 0 -- input args, if exists
-                or i =0 and x.pt in(5,10) and pq_ou > 0 -- output args, if exists ('returns(' line)
-                or i =0 and x.pt = 20 -- 'AS'
-                or pt = 50
-                or i = 0 and x.pt in(-2, 100) and add_set_term = 1 -- 'set term ^;', final '^set term ;^'
-            left join rdb$procedure_parameters pp on
-                r.p_nam = pp.rdb$procedure_name
-                and (x.pt = 0 and pp.rdb$parameter_type = 0 or x.pt = 10 and pp.rdb$parameter_type = 1)
-            --x.pt=pp.rdb$parameter_type-- =0 => in, 1=out
-            left join rdb$fields f on
-                pp.rdb$field_source = f.rdb$field_name
-            left join rdb$collations co on
-                f.rdb$character_set_id = co.rdb$character_set_id
-                and f.rdb$collation_id = co.rdb$collation_id
-            left join rdb$character_sets ce on
-                co.rdb$character_set_id = ce.rdb$character_set_id
-        )
-        --select * from p
-        
-        ,fin as(
-            select
-                db_dialect
-                ,mode
-                ,add_set_term
-                ,db_default_cset
-                ,p_nam
-                ,i
-                ,par_num
-                ,case
-                 when pt=-2 then 'set term ^;'
-                 when pt=100 then '^set term ;^'
-                 when pt=-1 then 'create or alter procedure '||trim(p_nam)||iif(pq_in>0,' (','')
-                 when pt=5 then 'returns ('
-                 when pt=20 then 'AS'
-                 when pt in(0,10) then --in or out argument definition
-                     '    '
-                     ||trim(par_name)||' '
-                     ||lower(trim( iif(nullif(p.ppar_mechan,0) is null, -- ==> parameter is defined with direct reference to base type, NOT like 'type of ...'
-                                       iif(ppar_fld_src starting with 'RDB$', p.fddl, ppar_fld_src),
-                                       ' type of '||coalesce('column '||trim(ppar_rel_name)||'.'||trim(par_fld), ppar_fld_src)
-                                      )
-                                 )
-                            ) -- parameter type
-                     ||iif(nullif(p.ppar_mechan,0) is not null -- parameter is defined as: "type of column|domain"
-                           or
-                           ppar_fld_src NOT starting with 'RDB$' -- parameter is defined by DOMAIN: "a_id dm_idb"
-                           or
-                           nullif(p.fld_src_cset_name,upper('NONE')) is null -- field of non-text type or charset was not specified
-                           --coalesce(p.fld_src_cset_name, p.db_default_cset) is not distinct from p.db_default_cset
-                           ,trim(trailing from iif(p.p_not_null=1, ' not null', ''))
-                           ,' character set '||trim(p.fld_src_cset_name)
-                             ||trim(trailing from iif(p.p_not_null=1, ' not null', ''))
-                             ||iif(p.fld_collation is distinct from p.fld_src_cset_name, ' collate '||trim(p.fld_collation), '')
-                          )
-                     ||coalesce(
-                          ' '||trim(
-                               iif( ppar_fld_src starting with upper('RDB$'), ----- adding "default ..." clause
-                                    coalesce(ppar_default_src, fld_default_src), -- this is only for 2.5; on 3.0 default values always are stored in ppar_default_src
-                                    ppar_default_src
-                                  )
-                              )
-                        ,'')
-                     ||iif(pt=0 and par_num=pq_in-1 or pt=10 and par_num=pq_ou-1,')',',')
-                  when k=-1 then coalesce(nullif(word,'')||';','') -- nb: some sp can finish with empty line!
-                  else word
-                end word
-                ,pt
-                ,ppar_fld_src
-                ,par_name
-                ,par_ty
-                ,pq_in
-                ,pq_ou
-                --,f.rdb$field_type ftyp ,f.rdb$field_length flen,f.rdb$field_scale fdec
-                ,p.fddl
-                ,p.fld_src_cset_name
-                ,p.fld_collation
-                ,k
-                --,'#'l,f.*
-            from p
-            left join rdb$fields f on p.ppar_fld_src = f.rdb$field_name
-        )
-        --select * from fin order by p_nam,pt,par_num,i
-        
-        select --mode,p_nam,
-            cast(
-            case
-             when mode<=0 then
-               case when pt <50 /*is not null*/ then word
-                    when pt in(-2, 100) and add_set_term = 1 then word
-                    when mode = 0 and i = 0 and pt < 100 then ' begin'||iif(k = -1, ' end','')
-                    when mode = 0 and i = 1 then iif(pq_ou>0, '  suspend;', '  exit;')
-                    when mode = 0 and k = -1 then 'end;' -- last line of body
-               end
-             else word
-             end
-            as varchar(8192)) -- blob can incorrectly displays (?)
-             as src
-        --,f.* -- do not! implementation exceeded
-        from fin f
-        where mode<=0 and (i in(0,1) or k=-1 /*or pt in(-2, 100) and strm=1*/ ) or mode=1
-        order by p_nam,pt,par_num,i
-        into src
-    do
-        suspend;
-
-end 
-
-^ -- sys_get_proc_ddl
+---------------------------------------------------------------------------
 
 create or alter procedure sys_get_func_ddl (
     a_func varchar(31),
@@ -8450,11 +8167,12 @@ returns (
     src varchar(32760))
 as
 begin
+    -- NB! this SP is called from 'oltp_split_heavy_tabs_1.sql'
     for
-        -- Extracts metadata of STORED PROCSEDURES to be executed as statements in isql.
+        -- Extracts metadata of PSQL FUNCTIONS to be executed as statements in isql.
         -- Samples:
-        -- select src from sys_get_proc_ddl('', 0) -- output all procs with EMPTY body (preparing to update)
-        -- select src from sys_get_proc_ddl('', 1) -- output all procs with ODIGIN body (finalizing update)
+        -- select src from sys_get_func_ddl('', 0) -- output all funcs with EMPTY body (preparing to update)
+        -- select src from sys_get_func_ddl('', 1) -- output all funcs with ORIGIN body (finalizing update)
         with
         s as(
 
@@ -8683,368 +8401,6 @@ begin
 end 
 
 ^ -- sys_get_func_ddl
-
-create or alter procedure sys_get_view_ddl (
-    A_VIEW varchar(31) = '',
-    A_MODE smallint = 1)
-returns (
-    SRC varchar(8192))
-AS
-begin
-    -- Extracts metadata of VIEWS to be executed as statements in isql.
-    -- Samples:
-    -- select src from sys_get_view_ddl('', 0) -- output all views with EMPTY body (preparing to update)
-    -- select src from sys_get_view_ddl('', 1) -- output all views with ODIGIN body (finalizing update)
-    
-    for
-        with
-        inp as(select :a_view a_view, :a_mode mode from rdb$database)
-        ,s as(
-            select
-                m.mon$sql_dialect di
-                ,i.mode mode -- 1=> fill
-                ,1 strm -- 1 => include `set term ^;` clause
-                ,r.rdb$character_set_name cs
-                ,p.rdb$relation_name v_name
-                ,(select count(*) from rdb$relation_fields rf where p.rdb$relation_name=rf.rdb$relation_name) fq -- count of fields
-                ,ascii_char(10) d
-                ,replace(cast(p.rdb$view_source as blob sub_type 1), ascii_char(13), '') ||ascii_char(10)||';' p_src
-            from mon$database m -- put it FIRST in the list of sources!
-            join rdb$database r on 1=1
-            join rdb$relations p on 1=1
-            join inp i on 1=1
-            where coalesce(p.rdb$system_flag,0) = 0
-            and p.rdb$view_source is not null -- views; do NOT: p.rdb$relation_type=1 !!
-            and  (i.a_view='' or p.rdb$relation_name = upper(i.a_view))
-        )
-        ,r as(
-            select --* --s.*,'#'l,p.*,rf.*
-                di
-                ,mode
-                ,strm
-                ,cs
-                ,v_name
-                ,fq
-                ,p.item word
-                ,p.line i
-                ,p.eof k
-                ,rf.rdb$field_position fld_pos
-                ,x.rt
-                ,rf.rdb$field_name v_fld
-                ,rf.rdb$field_source v_src
-                ,case f.rdb$field_type
-                    when 7 then 'smallint'
-                    when 8 then 'integer'
-                    when 10 then 'float'
-                    when 14 then 'char(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
-                    when 16 then -- dialect 3 only
-                    case f.rdb$field_sub_type
-                        when 0 then 'bigint'
-                        when 1 then 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                        when 2 then 'decimal(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                        else 'unknown'
-                    end
-                    when 12 then 'date'
-                    when 13 then 'time'
-                    when 27 then -- dialect 1 only
-                    case f.rdb$field_scale
-                        when 0 then 'double precision'
-                        else 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                    end
-                    when 35 then iif(di=1, 'date', 'timestamp')
-                    when 37 then 'varchar(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
-                    when 261 then 'blob sub_type ' || f.rdb$field_sub_type || ' segment size ' || f.rdb$segment_length
-                    else 'unknown'
-                end fddl
-                ,f.rdb$character_set_id fld_cset
-                ,f.rdb$collation_id fld_coll_id
-                ,ce.rdb$character_set_name cset_name
-                ,co.rdb$collation_name fld_collation
-            from s
-            left join sys_list_to_rows(p_src, d) p
-                on p.line=0 or mode=1
-            left join
-            (
-                select -2 rt from rdb$database -- create or alter view
-                union all select -1 from rdb$database -- for fields of view
-                union all select 0 from rdb$database -- body
-                union all select 99 from rdb$database -- final ';'
-            ) x on
-                p.line=0 and x.rt in(-2,-1,99) or x.rt=0 and mode=1
-            left join rdb$relation_fields rf on -- fields of the view
-                ( /*mode=0 or mode=1 and*/ p.line=0 and x.rt=-1)
-                and s.v_name=rf.rdb$relation_name
-            left join rdb$fields f on
-                rf.rdb$field_source=f.rdb$field_name
-            left join rdb$collations co on
-                f.rdb$character_set_id=co.rdb$character_set_id
-                and f.rdb$collation_id=co.rdb$collation_id
-            left join rdb$character_sets ce on
-                co.rdb$character_set_id=ce.rdb$character_set_id
-        )
-        --select * from r order by v_name,rt,i,fld_pos
-        
-        ,fin as(
-            select
-                di
-                ,mode
-                ,strm
-                ,cs
-                ,v_name
-                ,fq
-                ,case
-                    when 1=1 or mode=0 then
-                        case
-                            when rt=-2 then
-                                'create or alter view '||trim(v_name)||iif( mode=0, ' as select',' (' )
-                            when mode=1 and rt=-1 then -- rt=-1: fields of view
-                                trim(v_fld)||trim(iif(fld_pos+1=fq,') as',','))
-                            when mode=0 and rt=-1 then
-                                iif(fld_pos=0, '', ', ')||
-                                case when
-                                        lower(fddl) in ('smallint','integer','bigint','double precision','float')
-                                        or lower(fddl) starting with 'numeric'
-                                        or lower(fddl) starting with 'decimal'
-                                    then '0 as '||v_fld
-                                    when
-                                        lower(fddl) starting with 'varchar'
-                                        or lower(fddl) starting with 'char'
-                                        or lower(fddl) starting with 'blob'
-                                    then ''''' as '||v_fld
-                                    when
-                                        lower(fddl) in ('timestamp','date')
-                                    then 'cast(''now'' as '||lower(fddl)||') as '||v_fld
-                                end
-                            when rt=0 then word
-                            when rt=99 then iif(mode=0,'from rdb$database;',';') -- final row
-                        end
-                    when mode=1 then
-                        case
-                            when rt=-1 then 'create or alter view '||trim(v_name)||' as '
-                            else word||iif(k=-1 and right(word,1)<>';', ';','')
-                        end
-                 end
-                 as word
-                ,i
-                ,k
-                ,rt
-                ,v_fld
-                ,v_src
-                ,fld_pos
-                ,fddl
-                ,fld_cset
-                ,fld_coll_id
-                ,cset_name
-                ,fld_collation
-            from r
-            where word not in(';')
-        )
-        select word
-        from fin
-        order by v_name, rt, i,fld_pos
-        into src
-    do
-        suspend;
-
-end  
-
-^ -- sys_get_view_ddl
-
-create or alter procedure sys_get_indx_ddl(
-    a_relname varchar(31) = '')
-returns (
-    src varchar(8192))
-as
-begin
-  -- extract DDLs of all indices EXCEPT those which are participated
-  -- in PRIMARY KEYS
-  for
-    with
-    inp as(select :a_relname nm from rdb$database)
-    ,pk_defs as( -- determine primary keys
-      select
-        rc.rdb$relation_name rel_name
-        ,rc.rdb$constraint_name pk_name
-        ,rc.rdb$index_name pk_idx
-      from rdb$relation_constraints rc
-      where rc.rdb$constraint_type containing 'PRIMARY'
-    )
-    --select * from pk_defs
-    
-    ,ix_defs as(
-      select
-       ri.rdb$relation_name rel_name
-      ,rc.rdb$constraint_name con_name
-      ,rc.rdb$constraint_type con_type
-      ,ri.rdb$index_id idx_id
-      ,ri.rdb$index_name idx_name
-      ,ri.rdb$unique_flag unq
-      ,ri.rdb$index_type des
-      ,ri.rdb$foreign_key fk
-      ,ri.rdb$system_flag sy
-      ,rs.rdb$field_name fld
-      ,rs.rdb$field_position pos
-      ,ri.rdb$expression_source ix_expr
-      ,p.pk_idx
-      from rdb$indices  ri
-      join inp i on (ri.rdb$relation_name = upper(i.nm) or i.nm='')
-      left join rdb$relation_constraints rc on ri.rdb$index_name=rc.rdb$index_name
-      left join pk_defs p on ri.rdb$relation_name=p.rel_name and ri.rdb$index_name=p.pk_idx
-      left join rdb$index_segments rs on ri.rdb$index_name=rs.rdb$index_name
-      where
-      ri.rdb$system_flag=0
-      and p.pk_idx is null -- => this index is not participated in PK
-      order by rel_name,idx_id, pos
-    )
-    --select * from ix_defs
-    ,ix_grp as(
-      select rel_name,con_name,con_type,idx_id,idx_name,unq,des,fk,ix_key,ix_expr
-      ,r.rdb$relation_name parent_rname
-      ,r.rdb$constraint_name parent_cname
-      ,r.rdb$constraint_type parent_ctype
-      ,iif(r.rdb$constraint_type='PRIMARY KEY'
-      ,(select cast(list(trim(pk_fld),',') as varchar(8192)) from
-        (select rs.rdb$field_name pk_fld
-           from rdb$index_segments rs
-          where rs.rdb$index_name=t.fk
-          order by rs.rdb$field_position
-        )u
-       )
-       ,null) parent_pkey
-      from(
-        select rel_name,con_name,con_type,idx_id,idx_name,unq,des,fk
-              ,cast(list(trim(fld),',') as varchar(8192)) ix_key
-              ,cast(ix_expr as varchar(8192)) ix_expr
-        from ix_defs
-        group by rel_name,con_name,con_type,idx_id,idx_name,unq,des,fk,ix_expr
-      )t
-      left join rdb$relation_constraints r on t.fk=r.rdb$index_name
-    )
-    --select * from ix_grp
-
-    ,fin as(
-    select
-      rel_name,con_name,con_type,idx_id,idx_name,unq,des,fk
-      ,parent_rname,parent_cname,parent_ctype,parent_pkey
-      ,case
-        when con_type='UNIQUE' then
-            'alter table '
-            ||trim(rel_name)
-            ||' add '||trim(con_type)
-            ||'('||trim(ix_key)||')'
-            ||iif(idx_name like 'RDB$%', '', ' using index '||trim(idx_name))
-            ||';'
-        when con_type='FOREIGN KEY' and con_name like 'INTEG%' then
-            'alter table '
-            ||trim(rel_name)
-            ||' add '||trim(con_type)
-            ||'('||trim(ix_key)||') references '
-            ||trim(parent_rname)
-            ||'('||trim(coalesce(parent_pkey,ix_key)) ||')'
-            ||iif(idx_name like 'RDB$FOREIGN%', '', ' using index '||trim(idx_name))
-            ||';'
-        when con_type='FOREIGN KEY' then
-            'alter table '
-            ||trim(rel_name)
-            ||' add constraint '||trim(con_name)||' '||trim(con_type)
-            ||'('||trim(ix_key)||') references '
-            ||trim(parent_rname)||'('||trim(parent_pkey)||')'
-            ||' using index '||trim(idx_name)
-            ||';'
-       end ct_ddl
-      ,'create '
-      ||trim(iif(unq=1,' unique','')
-      ||iif(des=1,' descending',''))
-      ||' index '||trim(idx_name)
-      ||' on '||trim(rel_name)
-      ||' '||iif(ix_expr is null,'('||trim(ix_key)||')', 'computed by ('||trim(ix_expr)||')' )
-      ||';' ix_ddl
-    from ix_grp
-    )
-    select coalesce(ct_ddl, ix_ddl) idx_ddl --, f.*
-    from fin f
-  into
-    src
-  do
-    suspend;
-end 
-
-^ -- sys_get_indx_ddl
-
-create or alter procedure sys_get_fb_arch (
-     a_connect_with_usr varchar(31) default 'SYSDBA'
-    ,a_connect_with_pwd varchar(31) default 'masterkey'
-) returns(
-    fb_arch varchar(50)
-) as
-    declare cur_server_pid int;
-    declare ext_server_pid int;
-    declare att_protocol varchar(255);
-    declare v_test_sttm varchar(255);
-    declare v_fetches_beg bigint;
-    declare v_fetches_end bigint;
-begin
-    
-    -- Aux SP for detect FB architecture.
-
-    select a.mon$server_pid, a.mon$remote_protocol
-    from mon$attachments a
-    where a.mon$attachment_id = current_connection
-    into cur_server_pid, att_protocol;
-
-    if ( att_protocol is null ) then
-        fb_arch = 'Embedded';
-    else if ( upper(current_user) = upper('SYSDBA')
-              and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
-              and exists(select * from mon$attachments a 
-                         where a.mon$remote_protocol is null
-                               and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
-                        ) 
-            ) then
-        fb_arch = 'SuperServer';
-    else
-        begin
-            v_test_sttm =
-                'select a.mon$server_pid + 0*(select 1 from rdb$database)'
-                ||' from mon$attachments a '
-                ||' where a.mon$attachment_id = current_connection';
-
-            select i.mon$page_fetches
-            from mon$io_stats i
-            where i.mon$stat_group = 0  -- db_level
-            into v_fetches_beg;
-        
-            execute statement v_test_sttm
-            on external
-                 'localhost:' || rdb$get_context('SYSTEM', 'DB_NAME')
-            as
-                 user a_connect_with_usr
-                 password a_connect_with_pwd
-                 role left('R' || replace(uuid_to_char(gen_uuid()),'-',''),31)
-            into ext_server_pid;
-        
-            in autonomous transaction do
-            select i.mon$page_fetches
-            from mon$io_stats i
-            where i.mon$stat_group = 0  -- db_level
-            into v_fetches_end;
-        
-            fb_arch = iif( cur_server_pid is distinct from ext_server_pid, 
-                           'Classic', 
-                           iif( v_fetches_beg is not distinct from v_fetches_end, 
-                                'SuperClassic', 
-                                'SuperServer'
-                              ) 
-                         );
-        end
-
-    fb_arch = fb_arch || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
-
-    suspend;
-
-end 
-
-^ -- sys_get_fb_arch
 
 create or alter function fn$get$random$id$subst$names (
     a_view_for_search dm_dbobj,
@@ -9327,64 +8683,8 @@ when any do
     end
 
 end -- fn$get$random$id$subst$names 
-
 ^
 
-create or alter procedure sys_get_run_info(a_mode varchar(12)) returns(
-    dts varchar(12)
-    ,trn varchar(14)
-    ,unit dm_unit
-    ,msg varchar(20)
-    ,add_info varchar(40)
-    ,elapsed_ms varchar(10)
-)
-as
-begin
-    -- Aux SP for output info about unit that is to be performed now.
-    -- used in batch 'oltpNN_worker.bat'
-    dts = substring(cast(current_timestamp as varchar(24)) from 12 for 12);
-    unit = rdb$get_context('USER_SESSION','SELECTED_UNIT');
-    if ( a_mode='start' ) then
-        begin
-            trn = 'tra_'||coalesce(current_transaction,'<?>');
-            msg = 'start';
-            add_info = 'att_'||current_connection;
-        end
-    else
-        begin
-            trn = 'tra_'||rdb$get_context('USER_SESSION','APP_TRANSACTION');
-            msg = rdb$get_context('USER_SESSION', 'RUN_RESULT');
-            add_info = rdb$get_context('USER_SESSION','ADD_INFO');
-            elapsed_ms =
-                lpad(
-                           cast(
-                                 datediff(
-                                   millisecond
-                                   from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
-                                   to   cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
-                                        )
-                                as varchar(10)
-                               )
-                          ,10
-                          ,' '
-                        );
-        end
-    suspend;
-end
-
-^ -- sys_get_run_info
-
-create or alter procedure sys_timestamp_to_ansi (a_dts timestamp default 'now')
-returns ( ansi_dts varchar(15) ) as
-begin
-    ansi_dts =
-        cast(extract( year from a_dts)*10000 + extract(month from a_dts) * 100 + extract(day from a_dts) as char(8))
-         || '_'
-         || substring(cast(cast(1000000 + extract(hour from a_dts) * 10000 + extract(minute from a_dts) * 100 + extract(second from a_dts) as int) as char(7)) from 2);
-    suspend;
-end
-
-^ -- sys_timestamp_to_ansi
 
 set term ;^
 set list on;

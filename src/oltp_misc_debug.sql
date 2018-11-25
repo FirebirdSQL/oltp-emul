@@ -48,6 +48,7 @@ commit;
 
 recreate table zdoc_list(
    id bigint
+  ,worker_id smallint
   ,optype_id bigint
   ,agent_id bigint
   ,state_id bigint
@@ -96,6 +97,7 @@ recreate table zinvnt_turnover_log(
 
 recreate table zqdistr(
    id dm_idb
+  ,worker_id smallint
   ,doc_id dm_idb
   ,ware_id dm_idb
   ,snd_optype_id dm_idb
@@ -119,6 +121,7 @@ create index zqdistr_ware_sndop_rcvop on zqdistr(ware_id, snd_optype_id, rcv_opt
 
 recreate table zqstorned(
    id dm_idb
+  ,worker_id smallint
   ,doc_id dm_idb
   ,ware_id dm_idb
   ,snd_optype_id dm_idb
@@ -143,6 +146,7 @@ create index zqstorned_rcv_id on zqstorned(rcv_id); -- confirmed 16.09.2014, see
 
 recreate table zpdistr(
    id dm_idb
+  ,worker_id smallint
   ,agent_id dm_idb
   ,snd_optype_id dm_idb
   ,snd_id dm_idb
@@ -156,6 +160,7 @@ create index zpdistr_id on zpdistr(id); -- NON unique!
 
 recreate table zpstorned(
    id dm_idb
+  ,worker_id smallint
   ,agent_id dm_idb
   ,snd_optype_id dm_idb
   ,snd_id dm_idb
@@ -1148,6 +1153,7 @@ as
     declare snd_id bigint;
     declare rcv_id bigint;
     declare doc_id bigint;
+    declare worker_id smallint; -- 12.08.2018
     declare ware_id bigint;
     declare optype_id bigint;
     declare agent_id bigint;
@@ -1277,6 +1283,7 @@ begin
     for
         select
             id
+            ,worker_id
             ,optype_id
             ,agent_id
             ,state_id
@@ -1291,6 +1298,7 @@ begin
         where h.id = :a_doc_list_id or :a_doc_list_id is null
         into
             :id
+            ,:worker_id
             ,:optype_id
             ,:agent_id
             ,:state_id
@@ -1306,6 +1314,7 @@ begin
         in autonomous transaction do
         insert into zdoc_list(
             id
+            ,worker_id
             ,optype_id
             ,agent_id
             ,state_id
@@ -1319,6 +1328,7 @@ begin
         )
         values(
             :id
+            ,:worker_id
             ,:optype_id
             ,:agent_id
             ,:state_id
@@ -1401,6 +1411,7 @@ begin
         select
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1420,6 +1431,7 @@ begin
         into
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1439,6 +1451,7 @@ begin
         insert into zqdistr (
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1458,6 +1471,7 @@ begin
         values(
             :id
             ,:doc_id
+            ,:worker_id
             ,:ware_id
             ,:snd_optype_id
             ,:snd_id
@@ -1487,6 +1501,7 @@ begin
         select
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1505,6 +1520,7 @@ begin
         into
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1524,6 +1540,7 @@ begin
         insert into zqstorned(
             id
             ,doc_id
+            ,worker_id
             ,ware_id
             ,snd_optype_id
             ,snd_id
@@ -1543,6 +1560,7 @@ begin
         values(
             :id
             ,:doc_id
+            ,:worker_id
             ,:ware_id
             ,:snd_optype_id
             ,:snd_id
@@ -1571,6 +1589,7 @@ begin
     for
         select
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1580,6 +1599,7 @@ begin
         from pdistr
         into
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1591,6 +1611,7 @@ begin
         in autonomous transaction do
         insert into zpdistr(
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1602,6 +1623,7 @@ begin
         )
         values(
             :id
+            ,:worker_id
             ,:agent_id
             ,:snd_optype_id
             ,:snd_id
@@ -1623,6 +1645,7 @@ begin
     for
         select
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1634,6 +1657,7 @@ begin
         from pstorned
         into
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1647,6 +1671,7 @@ begin
         in autonomous transaction do
         insert into zpstorned(
             id
+            ,worker_id
             ,agent_id
             ,snd_optype_id
             ,snd_id
@@ -1660,6 +1685,7 @@ begin
         )
         values(
             :id
+            ,:worker_id
             ,:agent_id
             ,:snd_optype_id
             ,:snd_id
