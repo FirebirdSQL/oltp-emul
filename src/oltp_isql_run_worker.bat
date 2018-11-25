@@ -436,44 +436,44 @@ if %max_cps% GTR 0 (
 
     @set /a k=k+1
 
-    if %sleep_max% GTR 0 (
-        if %sid% GTR 1 (
-            if !sleep_min! GEQ !sleep_max! (
-                set /a sleep_min=1
-            )
-            call :sho "SID=%sid%. Point before execution packet !k!." %sts%
-            call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
 
-            set msg_suff=Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds
-            if %max_cps% GTR 0 (
-                call :sho "Parameter 'max_cps'=%max_cps% connections per second. !msg_suff!" %sts%
-            ) else (
-                call :sho "Parameter 'warm_time'=%warm_time% minutes. !msg_suff!" %sts%
-            )
-
-            @rem -- ############################################################
-            @rem -- ###    p a u s e      u s i n g      S H E L L    c m d  ###
-            @rem -- ############################################################
-            @rem -- //t:nn -- Maximum time a script is permitted to run
-            copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-            set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-            call :sho "Command: !run_cmd!" %sts%
-            cmd /c !run_cmd! 1>>%sts% 2>&1
-            @rem cscript //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp >nul;
-
-            call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
-            del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-
-        ) else (
-            @rem 26.10.2018. If SID=1 will get client error and this message in STDERR:
-            @rem     Statement failed, SQLSTATE = 08004
-            @rem     connection rejected by remote interface
-            @rem -- then no report will exist after test finish!
-            @rem See mailbox pz@..., subj: "OLTP-EMUL, heavy workload testing", sent to dimitr et al at 26.10.2018 17:13
-            call :sho "SID=1. SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." %sts%
+    if %sid% GTR 1 (
+        if !sleep_min! GEQ !sleep_max! (
+            set /a sleep_min=1
         )
+        call :sho "SID=%sid%. Point before execution packet !k!." %sts%
+        call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
+
+        set msg_suff=Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds
+        if %max_cps% GTR 0 (
+            call :sho "Parameter 'max_cps'=%max_cps% connections per second. !msg_suff!" %sts%
+        ) else (
+            call :sho "Parameter 'warm_time'=%warm_time% minutes. !msg_suff!" %sts%
+        )
+
+        @rem ################################################################
+        @rem ###    p a u s e      u s i n g      C S C R I P T   //t:NNN  ##
+        @rem ################################################################
+        @rem //t:nn -- Maximum time a script is permitted to run
+        @rem NB: we have to copy script to separate file for each SID otherwise strange error will raise in many of launching sessions:
+        @rem "CScript Error: Loading script ... failed (The process cannot access ... used by another process.)"
+
+        copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+        set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+        call :sho "Command: !run_cmd!" %sts%
+        cmd /c !run_cmd! 1>>%sts% 2>&1
+
+        call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
+        del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+
+    ) else (
+        @rem 26.10.2018. If SID=1 will get client error and this message in STDERR:
+        @rem     Statement failed, SQLSTATE = 08004
+        @rem     connection rejected by remote interface
+        @rem -- then no report will exist after test finish!
+        @rem See mailbox pz@..., subj: "OLTP-EMUL, heavy workload testing", sent to dimitr et al at 26.10.2018 17:13
+        call :sho "SID=1. SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." %sts%
     )
-    @rem if %sleep_max% GTR 0
 
     for /f "usebackq tokens=*" %%a in ('%log%') do set size=%%~za
     if .%size%.==.. set size=0

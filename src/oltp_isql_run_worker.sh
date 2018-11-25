@@ -205,55 +205,45 @@ packet=1
 while :
 do
 
-  if [ $sleep_max -gt 0 ]; then
-      if [ $sid -gt 1 ]; then
+  if [ $sid -gt 1 ]; then
 
-          sho "SID=$sid. Point before execution packet $packet. Evaluate required delay before attempt to make attachment." $sts 
+      sho "SID=$sid. Point before execution packet $packet. Evaluate required delay before attempt to make attachment." $sts 
           
-          min_delay=1
-          if [ $max_cps -gt 0 ] ; then
-              if [ $winq -gt $max_cps ]; then
-                  min_delay=$(( 1 + $sid / $max_cps ))
-                  max_delay=$(( 1 + $sid / $max_cps ))
-              else
-                  max_delay=30
-              fi
-              sho "SID=$sid. Use parameter 'max_cps'=$max_cps connections per second for evaluating." $sts
+      min_delay=1
+      if [ $max_cps -gt 0 ] ; then
+          if [ $winq -gt $max_cps ]; then
+              min_delay=$(( 1 + $sid / $max_cps ))
+              max_delay=$(( 1 + $sid / $max_cps ))
           else
-              if [ $warm_time -eq 0 ]; then
-                  max_delay=30
-              else
-                  min_delay=30
-                  max_delay=$(( 60*$warm_time+30 ))
-              fi
-              sho "SID=$sid. Use parameter 'warm_time'=$warm_time minutes for evaluating." $sts
+              max_delay=30
           fi
-          if [ $min_delay -eq $max_delay ]; then
-              random_delay=$min_delay
-              msg_suff="Fixed delay for $min_delay seconds"
-          else
-              random_delay=$(( $min_delay+ ( RANDOM % (1+$max_delay-$min_delay) ) ))
-              msg_suff="Random delay for $random_delay seconds from scope $min_delay ... $max_delay"
-          fi
-          sho "SID=$sid. $msg_suff" $sts
-
-#          if [ $warm_time -gt 0 ]; then
-#              random_delay=$(( 60 + ( RANDOM % ((1+$warm_time)*60) ) ))
-#              sho "SID=$sid. Formula: 60 + ( RANDOM mod ((1 + warm_time)*60) ). Result: random_delay=$random_delay seconds." $sts
-#          else
-#              random_delay=$(( 1 + (RANDOM % 10) ))
-#              sho "SID=$sid. Formula: (( 1 + (RANDOM mod 10) )), config parameter warm_time is zero. Result: random_delay=$random_delay seconds." $sts
-#          fi
-
-          sleep $random_delay
-          sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $sts
+          sho "SID=$sid. Use parameter 'max_cps'=$max_cps connections per second for evaluating." $sts
       else
-          # 26.10.2018. If SID=1 will get client error and this message in STDERR:
-          #     Statement failed, SQLSTATE = 08004
-          #     connection rejected by remote interface
-          # -- then no report will exist after test finish!
-          sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $sts
+          if [ $warm_time -eq 0 ]; then
+              max_delay=30
+          else
+              min_delay=30
+              max_delay=$(( 60*$warm_time+30 ))
+          fi
+          sho "SID=$sid. Use parameter 'warm_time'=$warm_time minutes for evaluating." $sts
       fi
+      if [ $min_delay -eq $max_delay ]; then
+          random_delay=$min_delay
+          msg_suff="Fixed delay for $min_delay seconds"
+      else
+          random_delay=$(( $min_delay+ ( RANDOM % (1+$max_delay-$min_delay) ) ))
+          msg_suff="Random delay for $random_delay seconds from scope $min_delay ... $max_delay"
+      fi
+      sho "SID=$sid. $msg_suff" $sts
+
+      sleep $random_delay
+      sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $sts
+  else
+      # 26.10.2018. If SID=1 will get client error and this message in STDERR:
+      #     Statement failed, SQLSTATE = 08004
+      #     connection rejected by remote interface
+      # -- then no report will exist after test finish!
+      sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $sts
   fi
 
   if [ -s $log ]; then
