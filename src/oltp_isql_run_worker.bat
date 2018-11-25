@@ -76,8 +76,9 @@ if .1.==.0. (
     echo fb     = %fb%
     echo tmpdir = !tmpdir!
 )
+
 @rem sid    = 1
-@rem winq   = 1
+@rem winq   = 10
 @rem fb     = 25
 @rem conn_pool_support = 1
 @rem sql    = c:\temp\logs.oltp25\sql\tmp_random_run.sql
@@ -385,19 +386,51 @@ call :sho "Start ISQL #%sid% of total %winq%." %sts%
 
 if .%sid%.==.1. (
     call :sho "SID=1. This ISQL session will create reports after test finish." %sts%
-    call :getRandom gen_vbs
 )
 
-call :getRandom gen_vbs
+
+@rem ########################|  S M O O T H    W O R K L O A D   G R O W T H  |##########################
+@rem # Make smooth workload increasing. ISQl with sid=1...%winq% must perform attachments NOT INSTANTLY #
+@rem # otherwise some of them will receive TCP-related failures which end with:                         #
+@rem #     Statement failed, SQLSTATE = 08004                                                           #
+@rem #     connection rejected by remote interface                                                      #
+@rem ####################################################################################################
+
+@rem Create temporary VBS * FOR_EACH * launching ISQL otherWise lot of strange errors will occured in MS script host:
+@rem "CScript Error: Loading script ... failed (The process cannot access the file because it is being used by another process. )"
+call :getRandom gen_vbs %sid%
 
 set /a random_delay=1
 set /a min_delay=1
-if %warm_time% EQU 0 (
-    set /a max_delay=10
+if %max_cps% GTR 0 (
+    if %winq% GTR %max_cps% (
+        set /a min_delay = 1 + %sid% / %max_cps%
+        set /a max_delay = 1 + %sid% / %max_cps%
+
+        if .1.==.0. (
+        (
+            call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
+            echo sid=%sid%, max_cps=%max_cps%
+            echo min_delay=!min_delay!
+            echo max_delay=!max_delay!
+            echo random_delay=!random_delay!
+            ) >>%tmp%
+            type %tmp%
+            pause
+        )
+
+    ) else (
+        set /a max_delay = 30
+    )
 ) else (
-    set /a min_delay=30
-    set /a max_delay=60*%warm_time%+30
+    if %warm_time% EQU 0 (
+        set /a max_delay=30
+    ) else (
+        set /a min_delay=30
+        set /a max_delay=60*%warm_time%+30
+    )
 )
+
 
 :start
 
@@ -409,18 +442,27 @@ if %warm_time% EQU 0 (
                 set /a sleep_min=1
             )
             call :sho "SID=%sid%. Point before execution packet !k!." %sts%
-            call :getRandom get_rnd %sid% %min_delay% %max_delay% random_delay
-            call :sho "Parameter 'warm_time'=%warm_time% minutes. Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds." %sts%
+            call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
+
+            set msg_suff=Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds
+            if %max_cps% GTR 0 (
+                call :sho "Parameter 'max_cps'=%max_cps% connections per second. !msg_suff!" %sts%
+            ) else (
+                call :sho "Parameter 'warm_time'=%warm_time% minutes. !msg_suff!" %sts%
+            )
 
             @rem -- ############################################################
             @rem -- ###    p a u s e      u s i n g      S H E L L    c m d  ###
             @rem -- ############################################################
-            set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp
+            @rem -- //t:nn -- Maximum time a script is permitted to run
+            copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+            set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
             call :sho "Command: !run_cmd!" %sts%
-            cmd /c !run_cmd! 1>nul
+            cmd /c !run_cmd! 1>>%sts% 2>&1
             @rem cscript //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp >nul;
 
             call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
+            del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
 
         ) else (
             @rem 26.10.2018. If SID=1 will get client error and this message in STDERR:
@@ -814,7 +856,7 @@ if %warm_time% EQU 0 (
 
     call :wait4all
 
-    call :getRandom del_vbs
+    call :getRandom del_vbs %sid%
 
     
     @rem #######################################################################################################################
@@ -3128,44 +3170,47 @@ endlocal & goto:eof
     set sid=%2
     set from_min=%3
     set upto_max=%4
-    set vbs=!tmpdir!\getRandomInt.tmp.vbs
-    set tmp=!tmpdir!\getRandomInt.%sid%.tmp
+    @rem set vb4sid_file=!tmpdir!\sql\getRandomInt.vbs.%sid%.tmp
+    @rem set result_file=!tmpdir!\sql\getRandomInt.dat.%sid%.tmp
+    set vb4sid_file=!tmpdir!\sql\tmp_sid_%sid%_rndInt.vbs.tmp
+    set result_file=!tmpdir!\sql\tmp_sid_%sid%_rndInt.dat.tmp
 
     if /i .!mode!.==.gen_vbs. (
-        if exist %vbs% del %vbs%
+        if exist %vb4sid_file% del %vb4sid_file%
         (
             echo ' Generated auto by %~f0, do NOT edit.
             echo ' Used to get random value within scope of two integers.
-            echo ' Usage: cscript ^/^/nologo %vbs% ^<from_minimal^> ^<upto_maximal^>
+            echo ' Usage: cscript.exe ^/^/nologo ^/^/e:vbscript %vb4sid_file% ^<from_minimal^> ^<upto_maximal^>
             echo ' Result: random value within scope, cast as integer.
             echo dim min,max
             echo min=WScript.Arguments.Item(0^)
             echo max=WScript.Arguments.Item(1^)
             echo Randomize
             echo WScript.Echo int( min + (max-min+1^) * Rnd ^)
-        )>>%vbs%
+        )>>%vb4sid_file%
 
         endlocal & goto:eof
 
     ) else if /i .!mode!.==.get_rnd. (
         
         if .1.==.1. (
-            cscript //nologo %vbs% %from_min% %upto_max% >%tmp%
-            endlocal & set /p %~5=<%tmp%
-            del /q %tmp%
+            @rem echo cscript //nologo //e:vbscript %vb4sid_file% %from_min% %upto_max%
+            cscript //nologo //e:vbscript %vb4sid_file% %from_min% %upto_max% >%result_file%
+            endlocal & set /p %~5=<%result_file%
+            del /q %result_file%
         )
 
         if .1.==.0. (
             @rem does NOT work:
             @rem ==============
-            set run_cmd=cscript //nologo %vbs% %from_min% %upto_max%
+            set run_cmd=cscript //nologo %vb4sid_file% %from_min% %upto_max%
             for /f %%a in ('cmd /c !run_cmd!') do (
                set %~5=%%a
             )
         )
 
     ) else if /i .!mode!.==.del_vbs. (
-        if exist %vbs% del %vbs%
+        if exist %vb4sid_file% del %vb4sid_file%
     )
     endlocal
 

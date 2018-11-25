@@ -142,15 +142,6 @@ del %log4tmp% 2>nul
 
 echo. && echo Config parsing finished. Result:
 
-@rem set varlist=fbc,dbnm,tmpdir,is_embed,create_with_fw,create_with_sweep,no_auto_undo
-@rem set varlist=%varlist%,use_mtee,detailed_info,init_docs,init_buff,wait_after_create
-@rem set varlist=%varlist%,wait_for_copy,warm_time,test_time,remove_isql_logs
-@rem set varlist=%varlist%,create_with_split_heavy_tabs,create_with_separate_qdistr_idx
-@rem set varlist=%varlist%,create_with_compound_columns_order,create_with_debug_objects
-@rem set varlist=%varlist%,working_mode,wait_if_not_exists,file_name_this_host_info
-@rem set varlist=%varlist%,used_in_replication,separate_workers,expected_workers
-@rem set varlist=%varlist%,update_conflict_percent,unit_selection_method
-
 set varlist=^
 create_with_compound_columns_order^
 ,create_with_debug_objects^
@@ -172,6 +163,7 @@ set varlist=!varlist!^
 ,init_docs^
 ,is_embed^
 ,make_html^
+,max_cps^
 ,mon_unit_list^
 ,mon_unit_perf
 
@@ -208,12 +200,6 @@ set varlist=!varlist!^
 @rem if NOT .%1.==.25. (
 @rem     set varlist=!varlist!,mon_unit_perf
 @rem )
-
-(
-echo prcent sign varlist=%varlist%
-echo ---------------------------
-echo exclamation varlist=!varlist!
-) >ttt.txt
 
 
 for %%v in (%varlist%) do (
@@ -1288,6 +1274,7 @@ goto :end_of_test
             echo ' Cscript is called via SHELL from %generated_sql%
             echo ' after every COMMIT statement.
             echo ' Sample: shell cscript //e:vbscript //t:%%selected_delay%% !tmpdir!\sql\tmp_longsleep.tmp
+            echo ' Where:  //t:nn - Maximum time a script is permitted to run
             echo WScript.Sleep(900000^)
           )>>!tmpdir!\sql\tmp_longsleep.tmp
       )

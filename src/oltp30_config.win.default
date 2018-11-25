@@ -87,6 +87,19 @@
     working_mode = small_03
 
 
+    # Maximal number connections per second (max allowed rate for new attachments occurrence for making SMOOTH workload growth).
+    # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
+    # is 1500-2000 or more. Otherwise some of ISQL will get TCP-related failure and raise error with text:
+    #     Statement failed, SQLSTATE = 08004
+    #     connection rejected by remote interface
+    # If this parameter will be set to 0 then value of 'warm_time' will be used for evaluating delay before trying
+    # to establish connection. If 'warm_time' is also 0 then delay will be chosen as random value betwee 1 and 30 seconds.
+    # See also comments to parameter 'warm_time'.
+    # Recommended value: 20...30
+
+    max_cps = 25
+
+
     # MINIMAL pause duration between each business operations, in seconds.
     # This parameter has default value 0 and can be commented.
     # Pause duration will be evaluated as random value between $sleep_min and $sleep_max values.
@@ -269,11 +282,16 @@
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR TEST DURATION AND PREMATURE WORK CANCELLATION
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    # Time (in minutes) to warm-up database after initial data population
-    # will finish and before all following operations will be measured:
-    # Recommended value: at least 30 for Firebird 2.5
+
+    # Time (in minutes) to warm-up database after initial data population will finish and before all following operations will be measured.
+    # It is strongly recommended to assign NON zero value to this parameter when your test database has size more than total physical RAM.
+    # Also, this value can be used for evaluating delays in each launching session before it will try to establish attachment
+    # to database - but only when value of 'max_cps' parameter is zero.
+
+    # Recommended value: at least 30.
 
     warm_time = 1
+
 
     # Limit (in minutes) to measure operations before test autostop itself:
     # Recommended value: at least 120

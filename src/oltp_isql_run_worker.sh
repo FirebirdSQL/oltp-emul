@@ -46,16 +46,6 @@ export shdir=$(cd "$(dirname "$0")" && pwd)
 maxlog=25000000
 maxerr=25000000
 
-# ./oltp_isql_run_worker.sh
-# 1   ./oltp30_config.nix
-# 2   /var/tmp/logs.oltp30/sql/tmp_random_run.sql                   <-- SQL script to be performed by every ISQL session
-# 3   /var/tmp/logs.oltp30/oltp30_localhost.localdomain             <-- prefix for temp files name which will be created by every ISQL session
-# 4   143                                                           <-- sid
-# 5   /var/tmp/logs.oltp30/oltp30.report.txt 
-# 6   regular 
-# 7   LI-V3.0.4.33054 
-# 8   nix_cpu24_ram16
-
 cfg=$1
 sql=$2
 prf=$3 # prefix for temp files name which will be created by every ISQL session; based on $HOSTNAME value, sample: '/var/tmp/logs.oltp30/oltp30_some_box.our_firm.ru'
@@ -203,6 +193,11 @@ if [ $sid -eq 1 ]; then
   sho "SID=$sid. Extracted firebird.log BEFORE test: $(ls -l $fblog_beg)" $log
 fi
 
+if [ -z "$sleep_min" ]; then
+    echo Parameter \'sleep_min\' was not defined in config and is assigned to 1.
+    sleep_min=1
+fi
+
 
 sho "ISQL session SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire." $log
 
@@ -212,37 +207,52 @@ do
 
   if [ $sleep_max -gt 0 ]; then
       if [ $sid -gt 1 ]; then
-          if [ -z "$sleep_min" ]; then
-              echo Parameter \'sleep_min\' was not defined in config and is assigned to 1.
-              sleep_min=1
-          fi
 
-          #[[ $sleep_max -gt $sleep_min ]] && random_delay=$(( sleep_min + ( RANDOM % (sleep_max-sleep_min)) )) || random_delay=$sleep_min
-
-          sho "SID=$sid. Point before execution packet $packet. Take random delay before attempt to make attachment." $log 
-          if [ $warm_time -gt 0 ]; then
-              random_delay=$(( 60 + ( RANDOM % ((1+$warm_time)*60) ) ))
-              sho "SID=$sid. Formula: 60 + ( RANDOM mod ((1 + warm_time)*60) ). Result: random_delay=$random_delay seconds." $log
+          sho "SID=$sid. Point before execution packet $packet. Evaluate required delay before attempt to make attachment." $sts 
+          
+          min_delay=1
+          if [ $max_cps -gt 0 ] ; then
+              if [ $winq -gt $max_cps ]; then
+                  min_delay=$(( 1 + $sid / $max_cps ))
+                  max_delay=$(( 1 + $sid / $max_cps ))
+              else
+                  max_delay=30
+              fi
+              sho "SID=$sid. Use parameter 'max_cps'=$max_cps connections per second for evaluating." $sts
           else
-              random_delay=$(( 1 + (RANDOM % 10) ))
-              sho "SID=$sid. Formula: (( 1 + (RANDOM mod 10) )), config parameter warm_time is zero. Result: random_delay=$random_delay seconds." $log
+              if [ $warm_time -eq 0 ]; then
+                  max_delay=30
+              else
+                  min_delay=30
+                  max_delay=$(( 60*$warm_time+30 ))
+              fi
+              sho "SID=$sid. Use parameter 'warm_time'=$warm_time minutes for evaluating." $sts
           fi
+          if [ $min_delay -eq $max_delay ]; then
+              random_delay=$min_delay
+              msg_suff="Fixed delay for $min_delay seconds"
+          else
+              random_delay=$(( $min_delay+ ( RANDOM % (1+$max_delay-$min_delay) ) ))
+              msg_suff="Random delay for $random_delay seconds from scope $min_delay ... $max_delay"
+          fi
+          sho "SID=$sid. $msg_suff" $sts
 
-          #if [[ $packet -eq 1 && $sid -gt 1400 ]]; then
-          #  random_delay=$(( 90 + (($sid - 1400) % 90)  ))
-          #  sho "SID=$sid. Take fixed pause = $random_delay seconds before establish attachment." $log
-          #else
-          #      sho "SID=$sid. Take random pause = $random_delay seconds before establish attachment." $log
-          #fi
+#          if [ $warm_time -gt 0 ]; then
+#              random_delay=$(( 60 + ( RANDOM % ((1+$warm_time)*60) ) ))
+#              sho "SID=$sid. Formula: 60 + ( RANDOM mod ((1 + warm_time)*60) ). Result: random_delay=$random_delay seconds." $sts
+#          else
+#              random_delay=$(( 1 + (RANDOM % 10) ))
+#              sho "SID=$sid. Formula: (( 1 + (RANDOM mod 10) )), config parameter warm_time is zero. Result: random_delay=$random_delay seconds." $sts
+#          fi
 
           sleep $random_delay
-          sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $log
+          sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $sts
       else
           # 26.10.2018. If SID=1 will get client error and this message in STDERR:
           #     Statement failed, SQLSTATE = 08004
           #     connection rejected by remote interface
           # -- then no report will exist after test finish!
-          sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $log
+          sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $sts
       fi
   fi
 

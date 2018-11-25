@@ -52,7 +52,6 @@
     tmpdir = /var/tmp/logs.oltp25
 
 
-
     # Condition for removing or preserving isql logs after test finish.
     # Possible values: always | never | if_no_severe_errors
     # Option 'always' means that ISQL logs in $tmpdir will be removed after test finish regardless any result.
@@ -69,9 +68,9 @@
     remove_isql_logs = if_no_severe_errors
 
 
-#:::::::::::::::::::::::::::::::::::::::::::
+#::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR REPLICATION, WORKLOAD LEVEL AND PAUSES
-#:::::::::::::::::::::::::::::::::::::::::::
+#::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # Test has several settings that define how much work should be done by each business action in average.
     # All of them are considered as separate enumerations: when new ISQL session creates connection, it reads
@@ -87,11 +86,24 @@
     working_mode = small_03
 
 
+    # Maximal number connections per second (max allowed rate for new attachments occurrence for making SMOOTH workload growth).
+    # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
+    # is 1500-2000 or more. Otherwise some of ISQL will get TCP-related failure and raise error with text:
+    #     Statement failed, SQLSTATE = 08004
+    #     connection rejected by remote interface
+    # If this parameter will be set to 0 then value of 'warm_time' will be used for evaluating delay before trying
+    # to establish connection. If 'warm_time' is also 0 then delay will be chosen as random value betwee 1 and 30 seconds.
+    # See also comments to parameter 'warm_time'.
+    # Recommended value: 20...30
+
+    max_cps = 25
+
+
     # MINIMAL pause duration between each business operations, in seconds.
     # This parameter has default value 0 and can be commented.
     # Pause duration will be evaluated as random value between $sleep_min and $sleep_max values.
 
-    sleep_min=0
+    sleep_min=1
 
 
     # MAXIMAL pause duration between each business operations, in seconds.
@@ -104,7 +116,7 @@
     # by 'sleep_ddl' parameter.
     # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
 
-    sleep_max=0
+    sleep_max=10
 
 
     # Name of .sql script with declaration of UDF that will be used for SLEEPING if sleep_max greater than 0.
@@ -270,16 +282,21 @@
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR TEST DURATION AND PREMATURE WORK CANCELLATION
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    # Time (in minutes) to warm-up database after initial data population
-    # will finish and before all following operations will be measured:
-    # Recommended value: at least 30 for Firebird 2.5
 
-    warm_time = 30
+    # Time (in minutes) to warm-up database after initial data population will finish and before all following operations will be measured.
+    # It is strongly recommended to assign NON zero value to this parameter when your test database has size more than total physical RAM.
+    # Also, this value can be used for evaluating delays in each launching session before it will try to establish attachment
+    # to database - but only when value of 'max_cps' parameter is zero.
+
+    # Recommended value: at least 30.
+
+
+    warm_time = 1
 
     # Limit (in minutes) to measure operations before test autostop itself:
     # Recommended value: at least 120
 
-    test_time = 120
+    test_time = 5
 
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.

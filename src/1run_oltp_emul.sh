@@ -2101,6 +2101,7 @@ vars=(
     init_docs
     is_embed
     make_html
+    max_cps
     mon_unit_list
     mon_unit_perf
     no_auto_undo
