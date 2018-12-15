@@ -1,9 +1,9 @@
 Test for emulating OLTP workload on Firebird DBMS. Currently supported FB versions: 2.5, 3.0 and 4.0.
 
-The model of test is based on real business processes of a car-servising enterprise:
+The model of test is based on real business processes of a car-service enterprise:
 1. A customer does order (wants we supply him some set of parts); we also can make order for our purposes;
 2. We gather several customer orders and unite them into single document and send it to supplier;
-3. Supplier send us invoice which can fully or partially satisfy our demands.
+3. Supplier sends us invoice which can fully or partially satisfy our demands.
 4. When we receive invoice its content is added to stock remainders. 
    Parts that were ordered by customer will be immediately reserved for saling.
 5. Further we sale ordered parts and make appropriate write-off from stock.
