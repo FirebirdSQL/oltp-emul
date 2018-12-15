@@ -47,19 +47,43 @@ In case of any questions feel free to contact: p519446@yandex.ru
 
    Open just created copy of configuration file and change settings to be suitable for you.
    Pay attention on following settings:
+
    * 'fbc' - path to isql executable and client library on the host where you will launch ISQL sessions
+
    * 'dbnm' - path and name of database file on server host. Batch scenario (1run_oltp_emul.bat/.sh) can 
       create the database file if you specify it using full path and name of file, but not as existing alias.
       Ensure that path and name of database file contains only ascii characters.
+   
    * 'host', 'port', 'usr' and 'pwd' - values for connecting to database, their meaning is obvious.
+
    * 'tmpdir' - path to the directory where test will create temporary files for storing ISQL session logs etc.
+
    * 'init_docs' - how many documents should be created in the database before test start real workload.
+
    * 'warm_time' and 'test_time' - how long database should be warmed-up and duration of measured workload, in minutes.
+
+   * 'sleep_min', 'sleep_max'  - how long every attachment should be PAUSED between transactions for making workload
+      more realistic. Assigning zero to 'sleep_max' will suppress any pauses and new transaction will be started 
+      immediately after previous one finished.
+
+   * 'sleep_ddl' - SQL script that contains declaration of UDF that will be called for PAUSES. 
+      This script is OPTIONAL: when commented then pauses will be implemented by SHELL call (from ISQL execution context).
+      Name of SHELL command depends on OS: it will be cscript.exe + .vbs on Windows or 'sleep' command on POSIX, but in any
+      case this will add more workload on operating system when bulk of ISQL sessions are in work.
+      It is recommended to use UDF invocation for making pauses, and you can use your own UDF or provided by this test.
+      The latter is stored in compressed binary:
+        Windows: .\util\udf64\SleepUDF.dll.zip 
+        POSIX: ./util/udf64/SleepUDF.so.bz2. 
+      Extract these UDFs:
+        7zip -x -tzip .\util\udf64\SleepUDF.dll.zip 
+        bzip2 -dk ./util/udf64/SleepUDF.so.bz2
+      - and put .dll /.so into UDF subfolder from your Firebird home directory.
+     
    * 'wait_for_copy' - should test scenario make pause after test database will be filled-up with required number
      of documents. Value = 1 will save your time if you plan to launch test again later: make a copy of database
      that will be created and restore from it on 2nd, 3rd etc launches.
 
-   For the first time you can assign to 'init_docs' some small value, e.g. 500 or 1000.
+   For the first time you can assign to 'init_docs' some small value, e.g. 3000 or 5000.
    Test will start with populating data up to <init_docs> value and after this number of documents will be reached, 
    two phases will begin to perform:
    1) database warm-up during <warm_time> minutes;

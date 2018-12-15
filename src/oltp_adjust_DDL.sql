@@ -132,10 +132,12 @@ begin
     -- we have to ensure that field PERF_SPLIT_0.ID will be always NOT null!
     sql_sttm = v_lf || 'set term ^;'
        || v_lf || 'create or alter trigger trg_v_perf_log active before insert on v_perf_log as'
+       || v_lf || '    declare v_dts_beg timestamp;'
     ;
     if ( a_perf_log_split_cnt >= 2 ) then
     begin
-       sql_sttm = sql_sttm || v_lf || '    declare c smallint;'
+       sql_sttm = sql_sttm 
+           || v_lf || '    declare c smallint;'
        ;
     end
     sql_sttm = sql_sttm 
@@ -144,6 +146,19 @@ begin
     ;
     suspend;
 
+    -- 10.12.2018
+    sql_sttm = 
+           v_lf || '    if ( rdb$get_context(''USER_SESSION'',''PERF_WATCH_BEG'') is null ) then'
+        || v_lf || '    begin'
+        || v_lf || '        select p.dts_beg from perf_log p where p.unit = ''perf_watch_interval'' order by dts_beg+0 desc rows 1 into v_dts_beg;'
+        || v_lf || '        rdb$set_context( ''USER_SESSION'',''PERF_WATCH_BEG'', v_dts_beg );'
+        || v_lf || '    end'
+        || v_lf || '    if ( cast(''now'' as timestamp) < cast( rdb$get_context(''USER_SESSION'',''PERF_WATCH_BEG'') as timestamp) ) then '
+        || v_lf || '        -- We can SKIP from logging in perf_log table if current timestamp belongs to PREPARING phase or warm-up database.'
+        || v_lf || '        exit;'
+    ;    
+    suspend;
+    
     -- ########################################################################################
     -- new value for ID field must be always NOT null, regardless of a_perf_log_split_cnt value
     -- ########################################################################################
