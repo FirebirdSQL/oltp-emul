@@ -317,9 +317,8 @@ do
 
   crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
   crashes_cnt=$(grep -i -c -e "$crash_pattern" $err)
-  #crashes_cnt=$(grep -i -c "elapsed time" $log)
   if [ $crashes_cnt -gt 5 ] ; then
-      sho "SID=$sid. Connection problem found $crashes_cnt times, pattern = $crash_pattern. Session has finished its job." $sts
+      sho "SID=$sid. Connection problem detected at least $crashes_cnt times, pattern = $crash_pattern. Session has finished its job." $sts
       ###################################################
       # ....................  e x i t ...................
       ###################################################
@@ -328,6 +327,20 @@ do
       sho "SID=$sid. No FB craches detected during last package was run." $sts
   fi
 
+  # 18.12.2018
+  # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error // token unkown et al
+  # 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+  # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
+  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000"
+  syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
+  if [ $syntax_err_cnt -gt 0 ] ; then
+      sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      break
+  fi
+  
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
 
   cancel_test=0
@@ -668,9 +681,10 @@ EOF
 		Preformance in DETAILS:
 		=======================
 		Get performance report with detaliation per units, for last test_time=$test_time minutes of workload.
-		"CNT_ALL" = total number of any level actions (business and internal) that were launched,
-		"CNT_OK"  = total number of any level actions that finished SUCCESSFULLY,
-		"OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and avg time of actions from CNT_OK.
+		Fields:
+		  CNT_ALL = total number of any level actions (business and internal) that were launched,
+		  CNT_OK  = total number of any level actions that finished SUCCESSFULLY,
+		  OK_MIN_MS, OK_MAX_MS, OK_AVG_MS = min, max and avg time of actions from CNT_OK.
 	EOF
 
 	cat <<- "EOF" >$psql
@@ -752,6 +766,47 @@ EOF
 			rm -f $psql
 
 		fi # fb is 30 or higher 
+    elif [ $mon_unit_perf -eq 2 ]; then
+		cat <<- EOF >>$plog
+			
+			Monitoring data: metadata cache size
+			====================================
+			Get report about metadata cache, attachments and statements memory usage.
+			NOTE. Config parameter 'mon_unit_perf' must have value 2 for this report.
+			Fields:
+			  PAGE_CACHE_MEMO_USED            = page cache total size, bytes:
+			  METADATA_CACHE_MEMO_USED        = metadata cache, bytes;
+			  METADATA_CACHE_PERCENT_OF_TOTAL = ratio between metadata cache and sum of metadata cache and page cache;
+			  TOTAL_ATTACHMENTS_CNT           = total number of attachments, regardless of state;
+			  ACTIVE_ATTACHMENTS_CNT          = number of attachments with mon$state = 1;
+			  RUNNING_STATEMENTS_CNT          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
+			  STALLED_STATEMENTS_CNT          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
+			  MEMO_USED_BY_ATTACHMENTS        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
+			  MEMO_USED_BY_TRANSACTIONS       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
+			  MEMO_USED_BY_STATEMENTS         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
+		EOF
+		cat <<- "EOF" >$psql
+			set list on;
+			set term ^;
+			execute block returns(" " dm_info) as
+			begin
+			    " " = ascii_char(10) || ( select p.page_cache_info from srv_get_page_cache_info p ) ;
+			    suspend;
+			end
+			^
+			set term ;^
+			set list off;
+			select d.*
+			from srv_mon_cache_dynamic d;
+			commit;
+		EOF
+		cat $psql >> $plog
+		
+		s1=$(date +%s)
+		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+		# Add timestamps of start and finish and how long last ISQL was:
+		log_elapsed_time $s1, $plog
+		rm -f $psql
     else
 		cat <<- EOF >>$plog
 		

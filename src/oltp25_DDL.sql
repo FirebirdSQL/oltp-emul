@@ -1195,6 +1195,48 @@ create index mon_log_table_stats_tn_unit on mon_log_table_stats(table_name, unit
 create index mon_log_table_stats_dts on mon_log_table_stats(dts); -- 26.09.2015, for SP srv_mon_stat_per_tables
 commit;
 
+-- 16.12.2018
+recreate table mon_memory_consumption(
+    stat_type varchar(20)
+    ,sys_memo_used bigint
+    ,usr_memo_used bigint
+    ,active_attachments_cnt smallint
+    ,active_transactions_cnt smallint
+    ,running_statements_cnt int
+    ,stalled_statements_cnt int
+    ,rowset bigint -- for grouping records that related to the same measurement
+    ,id dm_idb
+    ,dts timestamp default 'now'
+    --,sec int --  datediff(second from current_date-1 to current_timestamp ) sec
+    --,add_info dm_info
+    ,constraint pk_mon_memory_consumption primary key(id)
+);
+
+create descending index mon_memo_rowset_desc on mon_memory_consumption(rowset);
+create index mon_memo_dts on mon_memory_consumption(dts);
+commit;
+
+--31.12.2018
+recreate table mon_cache_memory (
+    pg_buffers int
+    ,pg_size int
+    ,pg_cache_type varchar(10)
+    ,page_cache_size bigint
+    ,meta_cache_size bigint
+    ,memo_used_att bigint
+    ,memo_used_trn bigint
+    ,memo_used_stm bigint
+    ,total_attachments_cnt smallint
+    ,active_attachments_cnt smallint
+    ,page_cache_operating_stm_cnt smallint
+    ,data_transfer_paused_stm_cnt smallint
+    ,id dm_idb
+    ,dts timestamp default 'now'
+    ,elap_ms int -- duration of gathering mon$ info, milliseconds
+    ,constraint pk_mon_cache_memory primary key(id)
+);
+commit;
+
 --------------------------------------------------------------------------------
 -- # # # # #                 F O R E I G N    K E Y S                  # # # # #
 --------------------------------------------------------------------------------
@@ -1910,6 +1952,57 @@ begin
         suspend;
 end
 ^
+
+create or alter procedure sys_stamp_exception (
+    a_exc_name rdb$exception_name, -- name of exception that was just raised
+    a_custom_msg rdb$message default null -- message with concrete details (if any)
+)
+returns(
+    result type of column rdb$exceptions.rdb$message
+)
+ as
+    declare exc_prefix varchar(255);
+    declare msg_max_octet_len int;
+begin
+    -- 20.12.2018: add useful info (current_timestamp, connection and transaction id) to exception message 
+    -- before sending to client side. Must be called with passing name of currently raising exception.
+    if ( rdb$get_context('USER_SESSION', 'MSG_MAX_OCTET_LEN') is null ) then
+        begin
+            -- Obtain max allowed octet_length for exception text: get field length of rdb$exceptions.rdb$message.
+            -- For all versions of FB up to 4.0 it is 1023 octets, but it will be better avoid hard coding of it.
+            select c.rdb$bytes_per_character * f.rdb$field_length as field_octet_len
+            from rdb$relation_fields rf
+            join rdb$fields f on rf.rdb$field_source = f.rdb$field_name
+            join rdb$character_sets c on f.rdb$character_set_id = c.rdb$character_set_id
+            where
+                rf.rdb$relation_name = upper('rdb$exceptions')
+                and rf.rdb$field_name = upper('rdb$message')
+            into msg_max_octet_len; -- 1023 for FB 2.5, 3.0 and 4.0
+            rdb$set_context('USER_SESSION', 'MSG_MAX_OCTET_LEN', msg_max_octet_len);
+        end
+    else
+        msg_max_octet_len = cast(rdb$get_context('USER_SESSION', 'MSG_MAX_OCTET_LEN') as int);
+
+    exc_prefix = replace(cast('now' as timestamp),' ','T')
+        || ' ATT_' || coalesce( current_connection, '<?>')
+        || ' TRA_' || coalesce( current_transaction, '<?>')
+    ;
+
+    result = a_custom_msg;
+    if ( result is null ) then
+        select trim(rdb$message)
+        from rdb$exceptions 
+        where upper(rdb$exception_name) = upper( :a_exc_name ) 
+        into result;
+
+    if ( octet_length(result) + octet_length(exc_prefix) + 1 >= msg_max_octet_len ) then
+        result = left(result, msg_max_octet_len - (octet_length(exc_prefix) + 1) );
+
+    result = exc_prefix || ' ' || result ; -- max allowed octet_length is 32765; otherwise: SQLSTATE = 54000
+    suspend;
+end
+^ -- sys_stamp_exception
+
 
 create or alter procedure sp_halt_on_error(
     a_char char(1) default '1',
@@ -2848,7 +2941,8 @@ begin
     then
         begin
            execute procedure sp_halt_on_error('2', -1, current_transaction, :v_need_to_stop);
-           exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
+           -- exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
+           exception ex_test_cancellation ( select result from sys_stamp_exception('ex_test_cancellation') );
         end
 end
 
@@ -2972,7 +3066,7 @@ as
     declare id_max double precision;
     declare v_rows int;
     declare id_random bigint;
-    declare msg dm_info;
+    declare v_detailed_exc_text dm_info;
     declare v_info dm_info;
     declare v_this dm_dbobj = 'sp_get_random_id';
     declare v_ctxn dm_ctxnv;
@@ -3085,17 +3179,18 @@ begin
 
         if ( result is null and coalesce(a_raise_exc, 1) = 1 ) then
             begin
-        
+
                 v_info = 'view: '||:a_view_for_search;
                 if ( id_min is NOT null ) then
                    v_info = v_info || ', id_min=' || id_min || ', id_max='||id_max;
                 else
                    v_info = v_info || ' - EMPTY';
-        
+
                 v_info = v_info ||', id_rnd='||coalesce(id_random,'<null>');
-        
+
                 -- 19.07.2014: 'no id>=@1 in @2 found within scope @3 ... @4'
-                exception ex_can_not_select_random_id;
+                v_detailed_exc_text = 'no id >= ' || coalesce(id_random,'<?>') || ' in ' || a_view_for_search || ' found within scope ' || coalesce(id_min,'<?>') || ' ... ' || coalesce(id_max,'<?>');
+                exception ex_can_not_select_random_id ( select result from sys_stamp_exception('ex_can_not_select_random_id', :v_detailed_exc_text) );
 
             end
         else
@@ -5387,6 +5482,7 @@ create or alter procedure srv_find_qd_qs_mism(
     declare v_rcv_optype_id dm_idb;
     declare v_rows_handled int;
     declare v_worker_id type of dm_ids;
+    declare v_rows int = 0; -- 18.12.2018
 
     declare c_qd_qs_orphans cursor for ( -- used after deletion of doc: search for orphans in qd & qs
         -- deciced neither add index on qdistr.doc_id nor modify qdistr PK and set its key = {id, doc_id} (performance)
@@ -5485,6 +5581,13 @@ begin
                 if ( row_count = 0 ) then leave;
                 v_rows_handled = v_rows_handled + 1;
 
+                -- Added 18.12.2018
+                v_rows = v_rows + 1;
+                if ( mod(v_rows, 100) = 0 ) then
+                    -- Check whether test can continue: if request to stop exists
+                    -- then raises ex`ception to stop this session ASAP.
+                    execute procedure sp_check_to_stop_work;
+
                 select first 1 'v_qdistr' as src, qd.doc_id, qd.snd_id, qd.id
                 from v_qdistr_source qd
                 where
@@ -5497,6 +5600,8 @@ begin
                     and qd.rcv_optype_id = :v_rcv_optype_id
                     -- This is mandatory otherwise get lot of different docs for the same {ware,snd_optype_id,rcv_optype_id}:
                     and qd.snd_id = :v_dd_id
+                    -- Added only 18.12.2018 :(
+                    and qd.worker_id is not distinct from :v_worker_id
                 into v_qd_qs_orphan_src, v_qd_qs_orphan_doc, v_qd_qs_orphan_sid, v_qd_qs_orphan_id;
 
                 if ( v_qd_qs_orphan_id is null ) then -- run 2nd check only if there are NO row in QDistr
@@ -5534,6 +5639,13 @@ begin
                 into v_dd_id, v_ware_id, v_dd_qty, v_qd_sum, v_qs_sum;
                 -- e.dd_id, e.qty, e.qd_cnt, coalesce(sum(qs.snd_qty),0) as qs_cnt
                 if (row_count = 0) then leave;
+
+                -- Added 18.12.2018
+                v_rows = v_rows + 1;
+                if ( mod(v_rows, 100) = 0 ) then
+                    -- Check whether test can continue: if request to stop exists
+                    -- then raises ex`ception to stop this session ASAP.
+                    execute procedure sp_check_to_stop_work;
 
                 v_rows_handled = v_rows_handled + v_qd_sum + v_qs_sum;
                 v_all_qty_sum = v_all_qty_sum + v_dd_qty; -- total AMOUNT in ALL rows of document
@@ -6891,6 +7003,23 @@ end
 
 ^ -- pdistr_bi
 
+create or alter trigger mon_memory_consumption_bi for mon_memory_consumption
+active before insert position 0 as
+begin
+    new.id = coalesce(new.id, gen_id(g_common,1));
+end
+
+^ -- mon_memory_consumption_bi
+
+create or alter trigger mon_cache_memory_bi for mon_cache_memory
+active before insert position 0 as
+begin
+    new.id = coalesce(new.id, gen_id(g_common,1));
+end
+
+^ -- mon_memory_consumption_bi
+
+
 create or alter trigger pstorned_bi for pstorned
 active before insert position 0 as
 begin
@@ -8170,6 +8299,7 @@ returns(
 ) as
     declare r_max int;
     declare v_last_recalc_idx_dts timestamp;
+    declare v_dts_beg timestamp;
     declare v_last_recalc_idx_minutes_ago int;
     declare v_this dm_dbobj = 'srv_random_unit_choice';
     declare c_unit_for_mon_query dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of thios SP!
@@ -8193,6 +8323,20 @@ begin
 --    order by g.dts_beg desc rows 1
 --    into v_last_recalc_idx_dts;
 
+    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG') is null ) then
+    begin
+        select p.dts_beg from perf_log p where p.unit = 'perf_watch_interval' order by dts_beg+0 desc rows 1 into v_dts_beg;
+        rdb$set_context( 'USER_SESSION','PERF_WATCH_BEG', v_dts_beg );
+    end
+
+    if ( cast('now' as timestamp) < cast( rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) ) then 
+    begin
+        -- 31.12.2018 We have to SKIP from removal or changing doc state 'backward'
+        -- on PREPARING phase, i.e. since 0th to <warm_time> minute of total test time.
+        -- REASON: lot of garbage will be accumulated otherwise, database "useful size" grows too slowly.
+        a_included_kinds = 'creation,state_next';
+        a_excluded_kinds = 'removal';
+    end
 
 --    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG')is not null ) then -- see SP_CHECK_TO_STOP_WORK
 --        v_last_recalc_idx_dts = maxvalue(v_last_recalc_idx_dts, cast(rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) );

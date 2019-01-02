@@ -18,7 +18,7 @@
     # fbc = $FB30_HOME/bin
     # fbc = /opt/firebird.30/bin
 
-    fbc  = /opt/firebird/bin
+    fbc  = /opt/fb30/bin
 
     # Alias or full path and file name of database.
     # If you want this database be created by test itself, specify it as
@@ -30,7 +30,7 @@
     # dbnm = /var/db/fb30/oltp30.fdb
     # dbnm = c:/mix/firebird/oltptest/oltp30.fdb
 
-    dbnm = /home/bases/oltp30.fdb
+    dbnm = /var/db/oltp30.fdb
 
 
     # Parameters for remote connection and authentication.
@@ -213,12 +213,28 @@
 
     detailed_info = 0
 
-    # Do we add query to mon$ tables before and after each application unit 
-    # in generated sql scenario (1=yes, 0=no) ? 
-    # NOTE. More detailed analysis with detalization down to separate stored procedures
-    # can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
+    # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
+    # When 0 then monitor tables are not queried.
+    # When 1 then EVERY session will take two snapshots before and after execution of selected unit.
+    # More detailed analysis with detalization down to separate stored procedures can be achieved
+    # by updating setting 'mon_unit_list'.
+    # When 2 then only ONE session is dedicated to gather monitoring data. It will call special
+    # stored procedure 'srv_fill_mon_memo_consumption' every 'mon_query_interval'-th second.
+    # NOTE: pauses for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined.
 
     mon_unit_perf = 0
+
+
+    # Actual only when 'mon_unit_perf' = 2: number of seconds between calls to SP that gathers monitoring
+    # data for all working attachments.
+    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
+    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script with UDF
+    # declaration that implements delay.
+    # Actual duration of delay, in seconds, will be evaluated as minimal of 'mon_query_interval'
+    # and test_time*60 divided by 20.
+
+    mon_query_interval = 60
+
 
 
     # List of top-level units (see 'business_ops' table) which performance statistics we want 
@@ -295,7 +311,7 @@
     # Limit (in minutes) to measure operations before test autostop itself:
     # Recommended value: at least 120
 
-    test_time = 180
+    test_time = 120
 
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
@@ -358,7 +374,7 @@
     # be added there at the end-point of building process. If this record is found, test will use 
     # existing database and following parameters will be IGNORED.
 
-    wait_after_create = 1
+    wait_after_create = 0
 
     # Number of documents, total of all types, for initial data population.
     # Command scenario will compare number of existing document with this
@@ -489,7 +505,7 @@
     # CHANGE this value to some useful info about host location, 
     # hardware specifics, FB instance etc.
 
-    file_name_this_host_info = nix
+    file_name_this_host_info = $HOSTNAME
 
 
     # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console

@@ -18,7 +18,7 @@
     # fbc = !FB30_HOME!\bin
     # fbc = c:\firebird_30\bin
 
-    fbc  = C:\FB\30sC\bin\
+    fbc  = C:\soft\fb30\bin
 
     # Alias or full path and file name of database.
     # If you want this database be created by test itself, specify it as
@@ -30,7 +30,7 @@
     #
     # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
 
-    dbnm = C:\FBTESTING\OLTP2017\testdb\OLTP30.FDB
+    dbnm = C:\FBTESTING\OLTP-EMUL\testdb\oltp30.fdb
 
 
     # Parameters for remote connection and authentication.
@@ -104,7 +104,7 @@
     # This parameter has default value 0 and can be commented.
     # Pause duration will be evaluated as random value between $sleep_min and $sleep_max values.
 
-    sleep_min=0
+    sleep_min=5
 
 
     # MAXIMAL pause duration between each business operations, in seconds.
@@ -120,7 +120,7 @@
     #    by 'sleep_ddl' parameter.
     # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
 
-    sleep_max=10
+    sleep_max=20
 
 
     # Name of .sql script with declaration of UDF that will be used for SLEEPING if sleep_max greater than 0.
@@ -215,12 +215,30 @@
 
     detailed_info = 0
 
-    # Do we add query to mon$ tables before and after each application unit 
-    # in generated sql scenario (1=yes, 0=no) ? 
-    # NOTE. More detailed analysis with detalization down to separate stored procedures
-    # can be achieved by updating setting TRACED_UNITS in the script oltp_main_filling.sql.
+
+    # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
+    # When 0 then monitor tables are not queried.
+    # When 1 then EVERY session will take two snapshots before and after execution of selected unit.
+    # More detailed analysis with detalization down to separate stored procedures can be achieved
+    # by updating setting 'mon_unit_list'.
+    # When 2 then only ONE session is dedicated to gather monitoring data. It will call special
+    # stored procedure 'srv_fill_mon_memo_consumption' every 'mon_query_interval'-th second.
+    # NOTE: pauses for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined.
 
     mon_unit_perf = 0
+
+
+    # Actual only when 'mon_unit_perf' = 2: number of seconds between calls to SP that gathers monitoring
+    # data for all working attachments.
+    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
+    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script with UDF
+    # declaration that implements delay.
+    # Actual duration of delay, in seconds, will be evaluated as minimal of 'mon_query_interval'
+    # and test_time*60 divided by 20.
+
+    mon_query_interval = 60
+
+
 
     # List of top-level units (see 'business_ops' table) which performance statistics we want 
     # to be logged by querying  mon$ tables. Logging is done by SP srv_log_mon_for_traced_units.
@@ -290,13 +308,13 @@
 
     # Recommended value: at least 30.
 
-    warm_time = 1
+    warm_time = 10
 
 
     # Limit (in minutes) to measure operations before test autostop itself:
     # Recommended value: at least 120
 
-    test_time = 5
+    test_time = 120
 
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
@@ -360,7 +378,7 @@
     # be added there at the end-point of building process. If this record is found, test will use 
     # existing database and following parameters will be IGNORED.
 
-    wait_after_create = 1
+    wait_after_create = 0
 
     # Number of documents, total of all types, for initial data population.
     # Command scenario will compare number of existing document with this
@@ -369,7 +387,7 @@
     # 1. For benchmark purposes - at least 30000.
     # 2. For regular running on scheduled basis - at least 10000.
 
-    init_docs = 500
+    init_docs = 30000
 
     # Number of pages for usage during init data population ("-c" switch for ISQL).
     # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
@@ -385,7 +403,7 @@
     # this database to 'origin' state. This can save time because of avoiding need
     # to create <init_docs> again:
 
-    wait_for_copy = 1
+    wait_for_copy = 0
 
 
     # Do we want to create some DEBUG objects (tables, views and procedures)
@@ -495,7 +513,7 @@
     # CHANGE this value to some useful info about host location, 
     # hardware specifics, FB instance etc.
 
-    file_name_this_host_info = no_host_info
+    file_name_this_host_info = !COMPUTERNAME!
 
 
     # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console

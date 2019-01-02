@@ -203,58 +203,73 @@ begin
     
     -- Aux SP for detect FB architecture.
 
-    select a.mon$server_pid, a.mon$remote_protocol
-    from mon$attachments a
-    where a.mon$attachment_id = current_connection
-    into cur_server_pid, att_protocol;
+    -- ::: NOTE ::: 
+    -- This SP establishes new attachment using ES/EDS mechanism in order to detect whether FB works is Classic mode.
+    -- If current FB instance does support connections pool then this additional attachment will exist after this SP 
+    -- finish, i.e. it will be kept opened by engine. Despite that connections pool appeared only in 4.0, one of special 
+    -- build of Firebird 2.5 also has it. This engine (2.5, special build) will leave such attachment alive even when
+    -- its parent connection will be closed, moreover - even when LAST attachment will be gone. In order to kill all
+    -- such attachments one need to issue: ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL (see this command in .bat and .sh),
 
-    if ( att_protocol is null ) then
-        fb_arch = 'Embedded';
-    else if ( upper(current_user) = upper('SYSDBA')
-              and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
-              and exists(select * from mon$attachments a 
-                         where a.mon$remote_protocol is null
-                               and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
-                        ) 
-            ) then
-        fb_arch = 'SuperServer';
-    else
-        begin
-            v_test_sttm =
-                'select a.mon$server_pid + 0*(select 1 from rdb$database)'
-                ||' from mon$attachments a '
-                ||' where a.mon$attachment_id = current_connection';
 
-            select i.mon$page_fetches
-            from mon$io_stats i
-            where i.mon$stat_group = 0  -- db_level
-            into v_fetches_beg;
-        
-            execute statement v_test_sttm
-            on external
-                 'localhost:' || rdb$get_context('SYSTEM', 'DB_NAME')
-            as
-                 user a_connect_with_usr
-                 password a_connect_with_pwd
-                 role left('R' || replace(uuid_to_char(gen_uuid()),'-',''),31)
-            into ext_server_pid;
-        
-            in autonomous transaction do
-            select i.mon$page_fetches
-            from mon$io_stats i
-            where i.mon$stat_group = 0  -- db_level
-            into v_fetches_end;
-        
-            fb_arch = iif( cur_server_pid is distinct from ext_server_pid, 
-                           'Classic', 
-                           iif( v_fetches_beg is not distinct from v_fetches_end, 
-                                'SuperClassic', 
-                                'SuperServer'
-                              ) 
-                         );
-        end
+    fb_arch = rdb$get_context('USER_SESSION', 'SERVER_MODE');
 
-    fb_arch = fb_arch || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
+    if ( fb_arch is null ) then
+    begin
+        select a.mon$server_pid, a.mon$remote_protocol
+        from mon$attachments a
+        where a.mon$attachment_id = current_connection
+        into cur_server_pid, att_protocol;
+
+        if ( att_protocol is null ) then
+            fb_arch = 'Embedded';
+        else if ( upper(current_user) = upper('SYSDBA')
+                  and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
+                  and exists(select * from mon$attachments a 
+                             where a.mon$remote_protocol is null
+                                   and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
+                            ) 
+                ) then
+            fb_arch = 'SuperServer';
+        else
+            begin
+                v_test_sttm =
+                    'select a.mon$server_pid + 0*(select 1 from rdb$database)'
+                    ||' from mon$attachments a '
+                    ||' where a.mon$attachment_id = current_connection';
+
+                select i.mon$page_fetches
+                from mon$io_stats i
+                where i.mon$stat_group = 0  -- db_level
+                into v_fetches_beg;
+            
+                execute statement v_test_sttm
+                on external
+                     'localhost:' || rdb$get_context('SYSTEM', 'DB_NAME')
+                as
+                     user a_connect_with_usr
+                     password a_connect_with_pwd
+                     role left('R' || replace(uuid_to_char(gen_uuid()),'-',''),31)
+                into ext_server_pid;
+            
+                in autonomous transaction do
+                select i.mon$page_fetches
+                from mon$io_stats i
+                where i.mon$stat_group = 0  -- db_level
+                into v_fetches_end;
+            
+                fb_arch = iif( cur_server_pid is distinct from ext_server_pid, 
+                               'Classic', 
+                               iif( v_fetches_beg is not distinct from v_fetches_end, 
+                                    'SuperClassic', 
+                                    'SuperServer'
+                                  ) 
+                             );
+            end
+
+        fb_arch = trim(fb_arch) || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
+        rdb$set_context('USER_SESSION', 'SERVER_MODE', fb_arch);
+    end
 
     suspend;
 
@@ -308,9 +323,6 @@ begin
             on p.unit=b.unit
         order by p.dts_beg desc
         rows 1
-        -- 14.10.2018 do NOT ever use decs index on dts_beg !!
-        -- MUST BE: PLAN SORT (JOIN (B NATURAL, P PERF_SPLIT_0 INDEX (PERF_SPLIT_0_UNIT), ... ))
-
     ) y
     into last_launch_beg;
 
@@ -516,7 +528,7 @@ end
 ^ -- srv_mon_perf_total
 
 create or alter procedure srv_mon_perf_dynamic(
-    a_intervals_number smallint default 10,
+    a_intervals_number smallint default 20,
     a_last_hours smallint default 3,
     a_last_mins smallint default 0)
 returns (
@@ -544,7 +556,7 @@ begin
     -- of inefficient plan. Input parameters are injected inside DT.
     -- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
 
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
+    a_intervals_number = iif( a_intervals_number <= 0, 20, a_intervals_number);
     a_last_hours = abs( a_last_hours );
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
@@ -807,11 +819,12 @@ begin
     delete from tmp$perf_mon where 1=1;
 
     insert into tmp$perf_mon(
-         dts_beg                     -- 1
+         rollup_level
+        ,dts_beg                    --  1
         ,dts_end
         ,unit
         ,cnt_all
-        ,cnt_ok                       -- 5
+        ,cnt_ok                     --  5
         ,cnt_err
         ,err_prc
         ,ok_min_ms
@@ -866,7 +879,11 @@ begin
         group by
             pg.unit
     )
-    select :v_report_beg, :v_report_end, c.*
+    select 
+        null ----------------- rollup_level
+       ,:v_report_beg
+       ,:v_report_end
+       ,c.*
     from c;
 
     insert into tmp$perf_mon(
@@ -976,9 +993,13 @@ begin
     a_last_mins = coalesce(a_last_mins, 0);
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
-    delete from tmp$perf_mon where 1=1;
-    -- call to fill tmp$perf_mon with ONLY aggregated data:
+    delete from tmp$perf_mon where 1=1; -- will be fulfilled in SP srv_mon_perf_detailed
+
     select count(*) from srv_mon_perf_detailed(:a_last_hours, :a_last_mins, 0) into v_dummy;
+    
+    -- result: tmp$perf_mon is fulfilled now with aggregated result of query:
+    -- select sum(...), sum(...) from v_perf_log pg where <timestamp filter> group by pg.unit
+
 
     for
         select
@@ -1062,7 +1083,7 @@ begin
     for
         select p.fb_gdscode, e.fb_mnemona, p.unit, count(*) cnt, min(p.dts_beg) dts_min, max(p.dts_beg) dts_max
         from v_perf_log p
-        LEFT -- !! some exceptions can missing in fb_errors !!
+        LEFT -- ::: NB ::: some exceptions can missing in fb_errors when it becomes obsolete
             join fb_errors e on p.fb_gdscode = e.fb_gdscode
         where
             p.dts_beg >= :v_last_job_start_dts
@@ -1078,7 +1099,7 @@ end
 ^ -- srv_mon_exceptions
 
 create or alter procedure srv_mon_perf_trace (
-    a_intervals_number smallint default 10,
+    a_intervals_number smallint default 20,
     a_last_hours smallint default 3,
     a_last_mins smallint default 0
 )
@@ -1104,7 +1125,7 @@ begin
     -- and also values of speed (fetches and marks per second) instead of
     -- absolute their values.
 
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
+    a_intervals_number = iif( a_intervals_number <= 0, 20, a_intervals_number);
     a_last_hours = abs( a_last_hours );
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
@@ -1125,7 +1146,8 @@ begin
                 where p.unit = 'perf_watch_interval'
                 order by dts_beg desc rows 1
             ) x
-            join (
+            cross join 
+            (
                 select
                     dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
                     ,p.dts_beg as last_job_finish_dts
@@ -1136,13 +1158,13 @@ begin
                         p.*
                         , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
                         , :a_intervals_number as intervals_number
-                    from perf_log p
+                    from business_ops b
+                    LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
+                        on p.unit=b.unit
+                    order by p.dts_beg desc
+                    rows 1
                 ) p
-                -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-                order by p.dts_beg desc
-                rows 1
-            ) y on 1=1
+            ) y
         )
         ,d as(
             select
@@ -1222,7 +1244,7 @@ end
 ^ -- srv_mon_perf_trace
 
 create or alter procedure srv_mon_perf_trace_pivot (
-    a_intervals_number smallint default 10,
+    a_intervals_number smallint default 20,
     a_last_hours smallint default 3,
     a_last_mins smallint default 0
 )
@@ -1253,6 +1275,8 @@ returns (
 ) as
 begin
 
+    -- ::: NB ::: This SP is called from temply created .sql in oltp_isql_run_worker.bat 
+
     -- Report based on result of parsing TRACE log which was started by
     -- ISQL session #1 when config parameter trc_unit_perf = 1.
     -- Data for each business operation are displayed separately because
@@ -1261,7 +1285,7 @@ begin
     -- and also values of speed (fetches and marks per second) instead of
     -- absolute their values.
 
-    a_intervals_number = iif( a_intervals_number <= 0, 10, a_intervals_number);
+    a_intervals_number = iif( a_intervals_number <= 0, 20, a_intervals_number);
     a_last_hours = abs( a_last_hours );
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
@@ -1273,7 +1297,7 @@ begin
             -- Record with p.unit = 'perf_watch_interval' is added in
             -- oltp_isql_run_worker.bat before FIRST isql will be launched
             select
-                maxvalue( x.last_added_watch_row_dts, y.first_trace_statd_start_dts ) as first_job_start_dts
+                maxvalue( x.last_added_watch_row_dts, y.first_trace_start_dts ) as first_job_start_dts
                 ,y.last_job_finish_dts
                 ,y.intervals_number
             from (
@@ -1282,9 +1306,10 @@ begin
                 where p.unit = 'perf_watch_interval'
                 order by dts_beg desc rows 1
             ) x
-            join (
+            cross join
+            (
                 select
-                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_trace_statd_start_dts
+                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_trace_start_dts
                     ,p.dts_beg as last_job_finish_dts
                     ,p.intervals_number
                 from
@@ -1293,13 +1318,13 @@ begin
                         p.*
                         , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
                         , :a_intervals_number as intervals_number
-                    from perf_log p
+                    from business_ops b
+                    LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
+                        on p.unit=b.unit
+                    order by p.dts_beg desc
+                    rows 1
                 ) p
-                -- nb: do NOT use inner join here (bad plan with sort)
-                where exists(select 1 from business_ops b where b.unit=p.unit order by b.unit)
-                order by p.dts_beg desc
-                rows 1
-            ) y on 1=1
+            ) y
         )
         ,d as(
             select
@@ -1327,7 +1352,7 @@ begin
                 ,min(d.sec_for_one_interval) as sec_for_one_interval
             from trace_stat t
             join business_ops b on t.unit = b.unit
-            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS trace_statd test run!
+            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from trace sessions that relate to THIS test run!
             where t.success = 1
             group by 1,2,3
         )
@@ -1462,6 +1487,88 @@ end
 
 ^ -- srv_mon_idx
 
+create or alter procedure srv_get_page_cache_info
+returns (
+    page_cache_info dm_info
+) as
+begin
+   
+    -- ::: NB ::: This SP is called from .bat / .sh only
+    -- 02.01.2019. Called only when config parameter 'mon_unit_perf' is 2: report about memory consumption
+    -- by metadata cache size, active attachments and statements in 'running' and 'stalled' state.
+    -- NB: all records from table 'mon_cache_memory' are DELETED before every new test run, see 1run_oltp_emul.bat/.sh
+
+    for
+        select
+            'Page cache type: ' || trim(pg_cache_type)
+            || ', buffers: ' || m.pg_buffers || ' ' || trim(iif( pg_cache_type containing 'shared', ' for all connections', ' per each connection'))
+            || ', with total size: ' || m.page_cache_size
+        from mon_cache_memory m
+        order by m.dts desc
+        rows 1
+    into
+        page_cache_info
+    do
+        suspend;
+end
+^ -- srv_get_page_cache_info
+
+create or alter procedure srv_mon_cache_dynamic
+returns (
+     measurement_timestamp timestamp
+    ,measurement_elapsed_ms int
+    ,page_cache_memo_used bigint
+    ,metadata_cache_memo_used bigint
+    ,metadata_cache_percent_of_total numeric(5,3)
+    ,total_attachments_cnt int
+    ,active_attachments_cnt int
+    ,running_statements_cnt int -- page_cache_operating_stm_cnt
+    ,stalled_statements_cnt int -- data_transfer_paused_stm_cnt
+    ,memo_used_by_attachments bigint
+    ,memo_used_by_transactions bigint
+    ,memo_used_by_statements bigint
+) as
+begin
+
+    -- 02.01.2019. Called only when config parameter 'mon_unit_perf' is 2: report about memory consumption
+    -- by metadata cache size, active attachments and statements in 'running' and 'stalled' state.
+    -- NB: all records from table 'mon_cache_memory' are DELETED before every new test run, see 1run_oltp_emul.bat/.sh
+
+    for
+        select
+            m.dts
+            ,m.elap_ms
+            ,m.page_cache_size
+            ,m.meta_cache_size
+            ,100.000 * m.meta_cache_size / (m.meta_cache_size + m.page_cache_size)
+            ,m.total_attachments_cnt
+            ,m.active_attachments_cnt
+            ,m.page_cache_operating_stm_cnt
+            ,m.data_transfer_paused_stm_cnt
+            ,m.memo_used_att
+            ,m.memo_used_trn
+            ,m.memo_used_stm
+        from mon_cache_memory m
+        order by m.id
+    into
+         measurement_timestamp
+        ,measurement_elapsed_ms
+        ,page_cache_memo_used
+        ,metadata_cache_memo_used
+        ,metadata_cache_percent_of_total
+        ,total_attachments_cnt
+        ,active_attachments_cnt
+        ,running_statements_cnt -- page_cache_operating_stm_cnt
+        ,stalled_statements_cnt -- data_transfer_paused_stm_cnt
+        ,memo_used_by_attachments
+        ,memo_used_by_transactions
+        ,memo_used_by_statements
+    do
+        suspend;
+end
+^ -- srv_mon_cache_dynamic
+
+--############################################
 create or alter procedure srv_get_report_name(
      a_format varchar(20) default 'regular' -- 'regular' | 'benchmark'
     ,a_build varchar(50) default '' -- WI-V3.0.0.32136 or just '32136'
@@ -1529,7 +1636,7 @@ begin
     select
          max(iif( mcode='SEPARATE_WORKERS',            iif( svalue=1,             'sepw_1',     'sepw_0'), null ))
         ,max(iif( mcode='UNIT_SELECTION_METHOD',       iif( svalue = 'random',    'rndUnitSel', 'predictSel' ), null ))
-        ,max(iif( mcode='USED_IN_REPLICATION',         iif( svalue=1,             'repl_1',     'repl_0'), null ))
+        ,max(iif( mcode='USED_IN_REPLICATION',         iif( svalue=1,             'repl_1',     'repl_0' ), null ))
     from (
         select s.mcode, s.svalue
         from settings s
@@ -1592,7 +1699,8 @@ begin
         -- ###########################################
         -- ###   f o r m a t  =  'r e g u l a r'   ###
         -- ###########################################
-        -- 20151102_2219_score_06578_build_32136_ss30__0h30m__10_att_fw_off.txt 
+        -- 20190117_2219_score_06578_bld_33333_ss30__0h30m__10_att_fw_off_repl_1.txt 
+        -- 20190121_2219_score_06578_bld_34444_ss30__0h30m__10_att_fw__on_repl_0.txt 
         report_file =
             start_at
             || '_' || coalesce( v_test_finish_state, overall_perf )
@@ -1601,7 +1709,7 @@ begin
             || '_' || load_time
             || '_' || load_att
             || '_' || fw_setting
-            || '_' || v_sep_workers
+            -- excluded 02.01.19, not needed: || '_' || v_sep_workers
             -- excluded 31.10.18, not needed: || '_' || v_unit_select
             || '_' || v_repl_involv
         ;

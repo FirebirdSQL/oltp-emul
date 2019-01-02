@@ -460,6 +460,9 @@ if %max_cps% GTR 0 (
 
         copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
         set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+        @rem                                               ^
+        @rem                                               |
+        @rem                                          Maximum time a script is permitted to run
         call :sho "Command: !run_cmd!" %sts%
         cmd /c !run_cmd! 1>>%sts% 2>&1
 
@@ -520,7 +523,8 @@ if %max_cps% GTR 0 (
         %run_isql% 2>&1 1>>%log% | mtee /t /+ %err% >nul
     ) else (
         %run_isql% 1>>%log% 2>>%err%
-        @rem -- 4debug, when STDERR need to be near STDOUT -- %run_isql% 1>>%log% 2>&1
+        @rem -- 4debug, when STDERR need to be near STDOUT -- 
+        @rem temply 17.12.2018 %run_isql% 1>>%log% 2>&1
     )
     @rem ####################################################################################
 
@@ -676,9 +680,36 @@ if %max_cps% GTR 0 (
     )
     @rem end of "if .%sid%.==.1. if .%trc_unit_perf%.==.1."
 
+    @rem -------------------------------------------------------------------------
+    @rem c h e c k    t h a t   n o    s y n t a x    e r r o r s    o c c u r e d
+    @rem -------------------------------------------------------------------------
+
+    @rem 18.12.2018
+    @rem 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
+    @rem 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+    set syntax_msg1="SQLSTATE = 42000"
+    set syntax_msg2="SQLSTATE = 42S22"
+    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! %err% >%tmp%
+    if NOT errorlevel 1 (
+        (
+          echo At least one syntax/compile error found during SQL script execution.
+          for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! %err% ^| find /i /c "SQLSTATE"') do (
+              echo Total number of errors: %%x
+          )
+          echo.
+          echo Details see in file: %err%. Job terminated.
+          echo.
+        ) >%tmp%
+        type %tmp%
+        type %tmp%>>%sts%
+        goto end
+
+    )
+
     @rem ------------------------------------------------
     @rem c h e c k    n u m b e r    o f    c r a s h e s
     @rem ------------------------------------------------
+
 
     @rem 27.05.2016 Check whether server crashed during this round:
     @rem count number of lines 'error reading / writing from/to connection'
@@ -690,9 +721,6 @@ if %max_cps% GTR 0 (
 
     findstr /i /c:!crash_msg1! /c:!crash_msg2! %err% | find /i /c "SQLSTATE" >%tmp%
 
-    @rem set crash_msg1="Elapsed time"
-    @rem findstr /i /c:!crash_msg1! %log% | find /i /c !crash_msg1! >%tmp%
-
     for /f "delims=" %%x in (%tmp%) do set /a crashes_cnt=%%x
     if !crashes_cnt! gtr 5 (
         (
@@ -702,7 +730,7 @@ if %max_cps% GTR 0 (
           echo Details see in file: %err%
           echo.
         ) >%tmp%
-        type %tmp%
+        type %tmp%>>%log%
         type %tmp%>>%sts%
         goto fb_lot_of_crashes
     ) else (
@@ -711,7 +739,7 @@ if %max_cps% GTR 0 (
         ) else (
             set msg=!time!. Detected !crashes_cnt! problems with connection. It's less than configurable limit. Test will be continued.
         )
-        echo !msg!
+        echo !msg!>>%log%
         echo !msg!>>%sts%
     )
 
@@ -1480,8 +1508,8 @@ if %max_cps% GTR 0 (
       echo %msg%:
       echo.
       echo Get performance report with detaliation per units, for last 3 hours of activity.
-      echo "CNT_ALL" = total number of events when unit started,
-      echo "CNT_OK"  = total number of events when unit finished successfully.
+      echo "CNT_ALL" = total number of records for units start;
+      echo "CNT_OK"  = total number of records for successful units finish;
       echo "OK_MIN_MS", "OK_MAX_MS", "OK_AVG_MS" = min, max and average elapsed time of 
       echo successfully finished transactions which involved this unit in work.
     ) >> %log4all%
@@ -1535,110 +1563,192 @@ if %max_cps% GTR 0 (
     @rem --------------------------------------------------------------------------
 
     if .%mon_unit_perf%.==.1. (
-      set msg=Monitoring data, per application UNITS
-      echo !date! !time!. Generating report "!msg!"...
-      (
-        echo.
-        echo %msg%:
-        echo.
-        echo Get report about gathered MONITOR tables data, detalization per UNITS.
-        echo NOTE: source view for this report will be created only when config
-        echo parameter 'mon_unit_perf' has value 1.
-      ) >> %log4all%
 
-      if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+        set msg=Monitoring data, per application UNITS
+        echo !date! !time!. Generating report "!msg!"...
+        (
+          echo.
+          echo #####################################################################
+          echo ###    m o n i t o r i n g     d a t a     p e r     u n i t s    ###
+          echo #####################################################################
+        ) >> %log4all%
+        (
+          echo.
+          echo !msg!:
+          echo.
+          echo Get report about gathered MONITOR tables data, detalization per UNITS.
+          echo NOTE: source view for this report will be created only when config
+          echo parameter 'mon_unit_perf' has value 1.
+        ) >> %log4all%
 
-      (
-          echo set width unit 31;
-          echo select z.*
-          echo from rdb$database
-          echo left join srv_mon_stat_per_units z on 1=1;
-          echo commit;
-      ) > %rpt%
+        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
 
-      type %rpt% >>%log4all%
-      set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-
-      set t1=!time!
-
-      %run_repo% 1>>%log4all% 2>&1
-
-      set t2=!time!
-      set tdiff=0
-      call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-      echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
-
-      if .%make_html%.==.1. (
-          set t1=!time!
-          call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-          set t2=!time!
-          set tdiff=0
-          call :timediff "!t1!" "!t2!" tdiff
-          echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-          call :add_html_text tmp_file htm_file
-      )
-      del %rpt% 2>nul
-  
-      if NOT .%fb%.==.25. (
-          set msg=Monitoring data, per TABLES and application UNITS
-          echo !date! !time!. Generating report "!msg!"...
-   
-          (
-            echo.
-            echo %msg%:
-            echo.
-            echo Get report about gathered MONITOR tables data, detalization  per __TABLES__ and units.
-            echo NOTE: source view for this report will be created only when config
-            echo parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
-          ) >> %log4all%
-         
-          if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4tabs"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
-
-          (
+        (
             echo set width unit 31;
-            echo set width table_name 31;
-            echo select z.* 
+            echo select z.*
             echo from rdb$database
-            echo left join srv_mon_stat_per_tables z on 1=1;
+            echo left join srv_mon_stat_per_units z on 1=1;
             echo commit;
-          ) > %rpt%
+        ) > %rpt%
 
-          type %rpt% >>%log4all%
-          set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-          set t1=!time!
+        type %rpt% >>%log4all%
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
-          %run_repo% 1>>%log4all% 2>&1
+        set t1=!time!
 
-          set t2=!time!
-          set tdiff=0
-          call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-          echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+        %run_repo% 1>>%log4all% 2>&1
 
-          if .%make_html%.==.1. (
-              set t1=!time!
-              call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-              set t2=!time!
-              set tdiff=0
-              call :timediff "!t1!" "!t2!" tdiff
-              echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-              call :add_html_text tmp_file htm_file
-          )
-          del %rpt% 2>nul
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
 
-      )
+        if .%make_html%.==.1. (
+            set t1=!time!
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff
+            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+            call :add_html_text tmp_file htm_file
+        )
+        del %rpt% 2>nul
+    
+        if NOT .%fb%.==.25. (
+            set msg=Monitoring data, per TABLES and application UNITS
+            echo !date! !time!. Generating report "!msg!"...
+     
+            (
+              echo.
+              echo ######################################################################
+              echo ###    m o n i t o r i n g     d a t a     p e r     t a b l e s   ###
+              echo ######################################################################
+            ) >> %log4all%
+            (
+              echo.
+              echo %msg%:
+              echo.
+              echo Get report about gathered MONITOR tables data, detalization  per __TABLES__ and units.
+              echo NOTE: source view for this report will be created only when config
+              echo parameter 'mon_unit_perf' has value 1. Avaliable only for FB 3.0.
+            ) >> %log4all%
+           
+            if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4tabs"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
 
+            (
+              echo set width unit 31;
+              echo set width table_name 31;
+              echo select z.* 
+              echo from rdb$database
+              echo left join srv_mon_stat_per_tables z on 1=1;
+              echo commit;
+            ) > %rpt%
+
+            type %rpt% >>%log4all%
+            set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+            set t1=!time!
+
+            %run_repo% 1>>%log4all% 2>&1
+
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+            echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+            if .%make_html%.==.1. (
+                set t1=!time!
+                call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+                set t2=!time!
+                set tdiff=0
+                call :timediff "!t1!" "!t2!" tdiff
+                echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+                call :add_html_text tmp_file htm_file
+            )
+            del %rpt% 2>nul
+
+        )
+        @rem "if NOT .%fb%.==.25."
+
+    ) else if .%mon_unit_perf%.==.2. (
+
+        set msg=Monitoring metadata cache size
+        echo !date! !time!. Generating report "!msg!"...
+        (
+          echo.
+          echo ################################################################################
+          echo ###    m o n i t o r i n g:    m e t a d a t a     c a c h e     s i z e     ###
+          echo ################################################################################
+        ) >> %log4all%
+
+        (
+          echo.
+          echo !msg!:
+          echo.
+          echo Get report about metadata cache, attachments and statements memory usage.
+          echo.
+          echo PAGE_CACHE_MEMO_USED            = page cache total size, bytes:
+          echo METADATA_CACHE_MEMO_USED        = metadata cache, bytes;
+          echo METADATA_CACHE_PERCENT_OF_TOTAL = ratio between metadata cache and sum of metadata cache and page cache;
+          echo TOTAL_ATTACHMENTS_CNT           = total number of attachments, regardless of state;
+          echo ACTIVE_ATTACHMENTS_CNT          = number of attachments with mon$state = 1;
+          echo RUNNING_STATEMENTS_CNT          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
+          echo STALLED_STATEMENTS_CNT          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
+          echo MEMO_USED_BY_ATTACHMENTS        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
+          echo MEMO_USED_BY_TRANSACTIONS       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
+          echo MEMO_USED_BY_STATEMENTS         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
+          echo.
+
+        ) >> %log4all%
+
+        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+
+        (
+            echo.
+            echo set heading off;
+            @rem "Page cache type: dedicated, buffers: 256 per each connection, with total size: 20971520"
+            echo select p.page_cache_info from srv_get_page_cache_info p;
+            echo set heading on;
+            echo select d.*
+            echo from srv_mon_cache_dynamic d;
+            echo commit;
+        ) > %rpt%
+
+        type %rpt% >>%log4all%
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+        set t1=!time!
+
+        %run_repo% 1>>%log4all% 2>&1
+
+        set t2=!time!
+        set tdiff=0
+        call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+
+        if .%make_html%.==.1. (
+            set t1=!time!
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff
+            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
+            call :add_html_text tmp_file htm_file
+        )
+        del %rpt% 2>nul
+    
     ) else (
 
-      set msg=Config param. mon_unit_perf=%mon_unit_perf%, data from MON$ tables were NOT gathered.
-      (
-        echo.
-        echo %msg%:
-        echo.
-      ) >> %log4all%
- 
-      if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+        set msg=Config param. mon_unit_perf=%mon_unit_perf%, data from MON$ tables were NOT gathered.
+        (
+          echo.
+          echo %msg%:
+          echo.
+        ) >> %log4all%
+   
+        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
 
     )
+    @rem .%mon_unit_perf%.==.1.  or ==.2. or ==.0.
 
 
     @rem ------------------------------------------------------------------------------

@@ -95,6 +95,7 @@ as
     declare v_find_using_desc_index dm_sign;
     declare v_this dm_dbobj = 'sp_fill_shopping_cart';
     declare v_info dm_info = '';
+    declare v_detailed_exc_text dm_info; -- 19.12.2018
 
     declare c_take_random_ware cursor for (
         select p.id_selected
@@ -300,7 +301,11 @@ begin
         close c_take_random_ware;
 
     if ( row_cnt = 0 ) then 
-        exception ex_no_rows_in_shopping_cart using( v_source_for_random_id ); -- 'shopping_cart is empty, check source ''@1'''
+    begin
+        --exception ex_no_rows_in_shopping_cart using( v_source_for_random_id ); -- 'shopping_cart is empty, check source ''@1'''
+        v_detailed_exc_text = 'shopping_cart is empty; info: ' || coalesce(v_info, '<?>'); -- check source ' || coalesce(v_source_for_random_id,'<?>') ||''
+        exception ex_no_rows_in_shopping_cart ( select result from sys_stamp_exception('ex_no_rows_in_shopping_cart', :v_detailed_exc_text) );
+    end
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
@@ -4773,6 +4778,238 @@ begin
 end
 
 ^ -- srv_mon_stat_per_tables
+
+create or alter procedure srv_fill_mon_memo_consumption
+returns (
+    elapsed_ms int)
+as
+    declare dts_beg timestamp;
+    declare v_info dm_info;
+    declare v_rowset bigint;
+    declare v_this dm_dbobj = 'srv_fill_mon_memo_consumption';
+begin
+    -- 16.12.2018
+    if ( fn_remote_process() NOT containing 'IBExpert'
+         and
+         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
+       ) then
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
+        suspend;
+        --###
+        exit;
+        --###
+    end
+    -- Check that table `ext_stoptest` (external text file) is EMPTY,
+    -- otherwise raises e`xception to stop test:
+    execute procedure sp_check_to_stop_work;
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(1, v_this);
+
+    dts_beg  = 'now';
+    v_rowset = gen_id(g_common,1);
+    insert into mon_memory_consumption(
+        stat_type -- varchar(20)
+        ,sys_memo_used
+        ,usr_memo_used
+        ,active_attachments_cnt
+        ,active_transactions_cnt
+        ,running_statements_cnt
+        ,stalled_statements_cnt
+        ,rowset
+        --,sec --  datediff(second from current_date-1 to current_timestamp ) sec
+    )
+    select
+         decode( stat_gr, 1,'attachments', 2,'transactions', 3,'statements', 'UNKNOWN' ) as stat_type
+        ,sys_memo_used
+        ,usr_memo_used
+        ,active_attachments_cnt
+        ,active_transactions_cnt
+        ,running_statements_cnt
+        ,stalled_statements_cnt
+        ,:v_rowset
+        --,datediff(second from current_date-1 to current_timestamp ) 
+    from (
+        select
+            u.stat_gr
+           ,sum( iif( u.mon$system_flag = 1, m.mon$max_memory_used, 0) ) sys_memo_used
+           ,sum( iif( u.mon$system_flag is distinct from 1, m.mon$max_memory_used, 0) ) usr_memo_used
+           ,sum( iif( u.stat_gr = 1 and u.state = 1, 1, null ) ) active_attachments_cnt
+           ,sum( iif( u.stat_gr = 2 and u.state = 1, 1, null ) ) active_transactions_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 1, 1, null ) ) running_statements_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 2, 1, null ) ) stalled_statements_cnt
+        from mon$memory_usage m
+        join
+        (
+            select 1 as stat_gr, a.mon$stat_id as stat_id, a.mon$system_flag, a.mon$attachment_id as att_id, a.mon$state as state
+            from mon$attachments a union all
+            select 2,            t.mon$stat_id, 0, t.mon$attachment_id, t.mon$state
+            from mon$transactions t union all
+            select 3,            s.mon$stat_id, 0, s.mon$attachment_id, s.mon$state
+            from mon$statements s
+        )  u
+        on
+            m.mon$stat_id = u.stat_id and
+            m.mon$stat_group = u.stat_gr
+        -- do NOT: we want to measure TOTAL memory consumption, including ALL attachments: where u.att_id != current_connection
+        group by u.stat_gr
+    );
+
+    elapsed_ms = datediff(millisecond from dts_beg to cast('now' as timestamp));
+
+    v_info='done for ' || elapsed_ms || ' ms';
+    -- ::: nb ::: do NOT use the name 'ADD_INFO', it is reserved to common app unit result!
+    rdb$set_context( 'USER_SESSION','MON_INFO', v_info ); -- to be displayed in log of 1run_oltp_emul.bat
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(0, v_this, null, v_info );
+
+    suspend;
+
+when any do
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'gds='||gdscode );
+        execute procedure sp_add_to_abend_log(
+            '',
+            gdscode,
+            '',
+            v_this,
+            fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+
+end
+^ -- srv_fill_mon_memo_consumption
+
+-- 31.12.2018
+create or alter procedure srv_fill_mon_cache_memory
+returns (
+    v_elapsed_ms integer)
+as
+    declare v_dts_beg timestamp;
+    declare v_info dm_info;
+    declare v_dbkey dm_dbkey;
+    declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
+begin
+    -- 16.12.2018
+    if ( fn_remote_process() NOT containing 'IBExpert'
+         and
+         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
+       ) then
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
+        suspend;
+        --###
+        exit;
+        --###
+    end
+    -- Check that table `ext_stoptest` (external text file) is EMPTY,
+    -- otherwise raises e`xception to stop test:
+    execute procedure sp_check_to_stop_work;
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(1, v_this);
+
+    v_dts_beg  = 'now';
+
+    -- Result of subtraction: (m.memo_used_att - (memo_used_trn + memo_used_stm)) equals to:
+    -- 1) when pg_cache_type='dedicated' (SC, CS) then SUM of page cache and metadata cache
+    -- 2) when pg_cahce_type='shared' (SS) then only metadata cache
+    insert into mon_cache_memory (
+        pg_buffers
+        ,pg_size
+        ,pg_cache_type -- 'dedicated' (SC/CS) or 'shared' (SS); just for info
+        ,page_cache_size
+        ,meta_cache_size
+        ,memo_used_att
+        ,memo_used_trn
+        ,memo_used_stm
+        ,total_attachments_cnt
+        ,active_attachments_cnt
+        ,page_cache_operating_stm_cnt
+        ,data_transfer_paused_stm_cnt
+    )
+    select
+        d.mon$page_buffers pg_buffers
+        ,d.mon$page_size pg_size
+        ,iif(m.memo_database = 0, 'dedicated', 'shared') pg_cache_type
+        ,d.mon$page_buffers * d.mon$page_size * iif( m.memo_database = 0, total_attachments_cnt, 1 ) as page_cache_size
+        ,m.memo_used_att - (memo_used_trn + memo_used_stm) - iif( m.memo_database = 0, d.mon$page_buffers * d.mon$page_size * total_attachments_cnt, 0)  as meta_cache_size
+        ,m.memo_used_att
+        ,m.memo_used_trn
+        ,m.memo_used_stm
+        ,m.total_attachments_cnt
+        ,m.active_attachments_cnt
+        ,m.page_cache_operating_stm_cnt
+        ,m.data_transfer_paused_stm_cnt
+    from (
+        select
+            sum( iif( u.stat_gr = 0, m.mon$memory_used, 0) ) memo_database -- SC/CS: 0; SS: >0
+           ,sum( iif( u.stat_gr = 1, m.mon$memory_used, 0) ) memo_used_att
+           ,sum( iif( u.stat_gr = 2, m.mon$memory_used, 0) ) memo_used_trn
+           ,sum( iif( u.stat_gr = 3, m.mon$memory_used, 0) ) memo_used_stm
+           ,sum( iif( u.stat_gr = 1, 1, 0 ) ) total_attachments_cnt
+           ,sum( iif( u.stat_gr = 1 and u.state = 1, 1, 0 ) ) active_attachments_cnt
+           ,sum( iif( u.stat_gr = 2 and u.state = 1, 1, 0 ) ) active_transactions_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 1, 1, 0 ) ) page_cache_operating_stm_cnt --  server_side_run_stm_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 2, 1, 0 ) ) data_transfer_paused_stm_cnt -- data_transf_run_stm_cnt
+        from mon$memory_usage m
+        join
+        (
+            select 0 as stat_gr, m.mon$stat_id as stat_id, null as att_id, null as state
+            from mon$memory_usage m
+            where m.mon$stat_group =0
+            UNION ALL
+            select 1 as stat_gr, a.mon$stat_id as stat_id, a.mon$attachment_id as att_id, a.mon$state as state
+            from mon$attachments a
+            UNION ALL
+            select 2,            t.mon$stat_id, t.mon$attachment_id, t.mon$state
+            from mon$transactions t
+            UNION ALL
+            select 3,            s.mon$stat_id, s.mon$attachment_id, s.mon$state
+            from mon$statements s
+        )  u
+        on
+            m.mon$stat_id = u.stat_id and
+            m.mon$stat_group = u.stat_gr
+    ) m
+    cross join mon$database d
+    returning rdb$db_key into v_dbkey;
+
+    v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
+
+    update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
+    where rdb$db_key = :v_dbkey;
+
+    v_info='done for ' || v_elapsed_ms || ' ms';
+    -- ::: nb ::: do NOT use the name 'ADD_INFO', it is reserved to common app unit result!
+    rdb$set_context( 'USER_SESSION','MON_INFO', v_info ); -- to be displayed in log of 1run_oltp_emul.bat
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(0, v_this, null, v_info );
+
+    suspend;
+
+when any do
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'gds='||gdscode );
+        execute procedure sp_add_to_abend_log(
+            '',
+            gdscode,
+            '',
+            v_this,
+            fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+end
+^ -- srv_fill_mon_cache_memory
 
 set term ;^
 commit;

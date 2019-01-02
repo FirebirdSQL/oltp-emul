@@ -984,6 +984,8 @@ cat <<- EOF
 EOF
   fi
 
+
+
 #          if /i .!mode!.==.run_test. (
 #              echo         5. Make detailed info after each Tx: ^|%nfo%^|
 #              echo         6. Units selection method:           ^|%unit_selection_method%^|
@@ -1026,58 +1028,90 @@ EOF
 
  for (( i=1; i<=$lim; i++ ))
  do
-    
-    [[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
-    echo "----------------- mode = $mode, iter # $i -----------------------">>$sql
-    echo>>$sql
 
-    #[[ $i = 1 ]] && echo commit\;>>$sql
+    [[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
 
     if [ $i = 1 ]; then
-      echo commit\;>>$sql
+	cat <<-EOF >>$sql
+		commit;
+	EOF
     else
       if [ $sleep_max -gt 0 ] ; then
 	    cat <<-EOF >>$sql
-             --...................................................................
-             -- Take delay between transactions. Argument for 'sleep' command/UDF must be in SECONDS.
-             set list on;
+		-- ...............................
+		-- Take delay between transactions
+		-- ...............................
+		set list on;
 		EOF
 
 	     if [ ! -z "$sleep_udf" ] ; then
 		cat <<- EOF >>$sql
-                  set transaction read only read committed;
-	          set term ^;
-	          execute block returns( " " varchar(128) ) as
-	              declare v_lf char(1);
-	              declare taken_pause_in_seconds int;
-	          begin
-	              v_lf = ascii_char(10);
-	              taken_pause_in_seconds = cast( $sleep_min + rand() * ($sleep_max - $sleep_min) as int);
-	              rdb\$set_context('USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds );
-		      " " = v_lf || cast('now' as timestamp) || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: ' || taken_pause_in_seconds || '. Use UDF ''$sleep_udf''.';
-	              suspend;
-	          end^
-	          set term ^;
+		set transaction read only read committed;
+		set term ^;
+		execute block returns( " " varchar(128) ) as
+		  declare v_lf char(1);
+		  declare taken_pause_in_seconds int;
+		  declare SECONDS_IN_MINUTE smallint = 60;
+		begin
+		    v_lf = ascii_char(10);
+		    " " = v_lf || cast('now' as timestamp);
+		    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
+		        begin
+		            -- $mon_query_interval: see config parameter 'mon_query_interval'
+		            -- ($warm_time + $test_time) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
+		            taken_pause_in_seconds = minvalue( $mon_query_interval, maxvalue(1, $warm_time + $test_time) * SECONDS_IN_MINUTE / 20 ); 
+		            " " = " " || '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause ' || taken_pause_in_seconds || ' s.';
+		            -- 15.12.2018 18:23:23.333. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause NNN s.
+		        end
+		    else
+		        begin
+		            taken_pause_in_seconds = cast( $sleep_min + rand() * ($sleep_max - $sleep_min) as int);
+		            " " = " " || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: ' || taken_pause_in_seconds || '. Use UDF ''$sleep_udf''.';
+		        end
+		    rdb\$set_context('USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds );
+		    suspend;
+		end^
+		set term ^;
 
-	          -- ############################################################
-	          -- ###    p a u s e      u s i n g      U D F     c a l l   ###
-	          -- ############################################################
-	          set term ^;
-	          execute block returns(actual_delay_in_seconds numeric(12,3) ) as
-	              declare c int;
-	          begin
-	                c = cast( rdb\$get_context('USER_TRANSACTION', 'TAKE_PAUSE') as int);
-	                c = c  * $sleep_mul; -- 14.11.2018: UDF can accept arg as number of PART of seconds, e.g. MILLISECONDS.
-			c = $sleep_udf( c );
-			actual_delay_in_seconds = c * 1.000 / $sleep_mul;
-			suspend;
-			rdb\$set_context('USER_TRANSACTION', 'TAKE_PAUSE', null );
-	          end
-	          ^
-	          set term ^;
+		-- ############################################################
+		-- ###    p a u s e      u s i n g      U D F     c a l l   ###
+		-- ############################################################
+		set term ^;
+		execute block returns(actual_delay_in_seconds numeric(12,3) ) as
+		    declare t timestamp;
+		    declare d int;
+		    declare c int;
+		begin
+		    t = 'now';
+		    c = cast( rdb\$get_context('USER_TRANSACTION', 'TAKE_PAUSE') as int);
+		    --- c = c  * $sleep_mul; -- 14.11.2018: UDF can accept arg as number of PART of seconds, e.g. MILLISECONDS.
+		    --- c = $sleep_udf( c );
+		    while (c > 0) do
+		    begin
+		        -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+		        -- oOo C A L L     U D F   F O R    S L E E P  oOo
+		        -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+		        d = $sleep_udf( $sleep_mul ); -- here we wait only 1 second: we have to BREAK from this loop ASAP when test is prematurely cancelled.
+		
+		        execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
+		
+		        c = c - 1;
+		        when any do
+		        begin
+		            rdb\$set_context('USER_SESSION','SELECTED_UNIT', 'TEST_WAS_CANCELLED');
+		            exception;
+		        end
+		    end
+		    --- actual_delay_in_seconds = c * 1.000 / $sleep_mul;
+		    actual_delay_in_seconds = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
+		    suspend;
+		    rdb\$set_context('USER_TRANSACTION', 'TAKE_PAUSE', null );
+		end^
+		set term ;^
 		EOF
 
-	     else
+	     else # Config parameter 'sleep_udf' is UNDEFINED (commented)
+
 	        [[ $sleep_max -gt $sleep_min ]] && random_delay=$(( sleep_min + RANDOM % (sleep_max-sleep_mmin) )) || random_delay=$sleep_min
 		cat <<-EOF >>$sql
 		    set transaction read write read committed lock timeout 1; -- need for sp_pause: it DOES write operation into fixed table 'tpause'.
@@ -1096,33 +1130,116 @@ EOF
                     shell sleep $random_delay;
 		    --select * from sp_pause( $random_delay, '$usr', '$pwd' );
 		EOF
-	     fi
+	     fi # 'sleep_udf' defined ? --> yes / no
 
 	    cat <<-EOF >>$sql
-             set term ^;
-             execute block returns( " " varchar(128) ) as
-		declare v_lf char(1);
-             begin
-                v_lf = ascii_char(10);
-                " " = v_lf || cast('now' as timestamp) || '. Point AFTER delay finish.';
-                suspend;
-             end^
-             set term ;^
-             commit; ------------------------ [ 2 ]
-             set list off;
-             --...................................................................
+		set term ^;
+		execute block returns( " " varchar(128) ) as
+		    declare v_lf char(1);
+		begin
+		v_lf = ascii_char(10);
+		    " " = v_lf || cast('now' as timestamp) || '. Point AFTER delay finish.';
+		    suspend;
+		end^
+		set term ;^
+		commit; ------------------------ [ 2a ]
+		set list off;
+
 		EOF
       else 
             # ......................... config parameter sleep_max = 0
-	    cat <<-EOF >>$sql
-
-             -- Delay between transactions is DISABLED.
-             -- To enable delays set value of 'sleep_max' parameter to some value greater than 0.
-             -- Also one may to define SQL script that will declare UDF for pauses - see parameter 'sleep_ddl'
+		cat <<-EOF >>$sql
+		-- Delay between transactions that perform business operations is DISABLED.
+		-- To enable delays set value of 'sleep_max' parameter to some value greater than 0.
+		-- Pauses will be done either via 'shell sleep NN' invocation or using UDF call.
+		-- The latter requires existense of appropriate binary .so and SQL script with UDF
+		-- declaration.
+		-- Configuration parameter 'sleep_ddl' must be uncommented and have to point on this SQL script.
 
 		EOF
-      fi
-    fi
+#QQQ
+            if [ $mon_unit_perf -eq 2 ]; then
+		cat <<-EOF >>$sql
+			-- 16.12.2018. Config parameter 'mon_unit_perf' = 2.
+			-- Statistics from mon$ tables is gathered in the session N1.
+			-- Delay must be done here if current session has number = 1.
+
+		EOF
+                if [ $test_time -ge 10 ]; then
+			cat <<-EOF >>$sql
+			-- Because of depening on session number, it can be implemented only using UDF call:
+			-- we can not make SHELL call from PSQL "if/else" code branches.
+				EOF
+                    if [ ! -z "$sleep_udf" ] ; then
+			cat <<-EOF >>$sql
+			-- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
+			-- oOo    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  oOo
+			-- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
+			set transaction read only read committed;
+			set list on;
+			set term ^;
+			execute block returns( session1_delay_before_mon_query numeric(12,3) ) as
+			    declare c int;
+			    declare d int;
+			    declare t timestamp;
+			    declare SECONDS_IN_MINUTE smallint = 60;
+			begin
+			    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
+			    begin
+			        -- CONSTANT DELAY:
+			        -- $mon_query_interval: see config parameter 'mon_query_interval'
+			        -- ($warm_time + $test_time) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
+			        c = minvalue( $mon_query_interval, maxvalue(1, $warm_time + $test_time) * SECONDS_IN_MINUTE / 20 );
+			        t = 'now';
+			        while (c > 0) do
+			        begin
+			            -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+			            -- oOo C A L L     U D F   F O R    S L E E P  oOo
+			            -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+			            d = $sleep_udf( $sleep_mul ); -- here we wait only 1 second: we have to BREAK from this loop ASAP when test is prematurely cancelled.
+			
+			            execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
+			
+			            c = c - 1;
+			            when any do
+			            begin
+			                rdb\$set_context('USER_SESSION','SELECTED_UNIT', 'TEST_WAS_CANCELLED');
+			                exception;
+			            end
+			        end
+			        session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
+			        suspend;
+			    end
+			end
+			^
+			set term ;^
+			commit; ------------------------ [ 2b ]
+			set list off;
+			EOF
+                    else # sleep_udf is UNDEFINED
+			cat <<-EOF >>$sql
+			-- * WARNING * mon_unit_perf = 2: config parameter 'sleep_ddl' must be UNCOMMENTED 
+			-- and has to point on existing SQL script that defined UDF declaration for delays.
+			EOF
+                    fi # $sleep_udf is defined ? --> yes / no
+                else # test_time LESS than 10 minutes --> too short time for pauses
+			cat <<-EOF >>$sql
+			-- PAUSE IS SKIPPED: TEST LASTS TOO SHORTLY: $test_time minutes.
+			-- Increase value of config parameter 'test_time' at least to 10.
+			EOF
+                fi # $test_time -ge 10 / -lt 10
+            fi # $mon_unit_perf -eq 2
+#ZZZ
+      fi # config parameter sleep_max -gt 0 --> yes / no
+	cat <<- EOF >>$sql
+		
+			-- .........................................................
+			--     s t a r t     i t e r    $i    o f    $lim
+			-- .........................................................
+			
+	EOF
+
+    fi # iter i = 1 or all subsequent --> yes / no
     
     [[ $unit_selection_method = "random" ]] && eb_title="RANDOM" || eb_title="PREDICTABLE"
     cat <<- EOF >>$sql
@@ -1142,9 +1259,7 @@ EOF
 		begin
 	EOF
 	
-
-      #if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-      if  [ "$mode" = "init_pop" ] ; then
+    if  [ "$mode" = "init_pop" ] ; then
         # When database is filled up by initial data one need only to:
         # 1. Add NEW documents or
         # 2. Change state of existing docs
@@ -1174,7 +1289,6 @@ EOF
 		EOF
       fi # $mode='init_pop'
  
-      #if echo $mode | grep -i "^run_test$" > /dev/null ; then
       if  [ "$mode" = "run_test" ] ; then
         cat <<-EOF >>$sql
 			  if ( NOT exists( select * from sp_stoptest ) ) then
@@ -1183,41 +1297,64 @@ EOF
 			      if [ $separate_workers -eq 1 ] ; then
                                  [[ $fb = "25" ]] && sel_worker_expr="(select worker_id from fn_other_rand_worker)" || sel_worker_expr="fn_other_rand_worker()"
         cat <<-EOF >>$sql
-			          if ( rand() * 100 <= $update_conflict_percent ) then
-			          begin
-			             -- 17.09.2018: temply change current ISQL window sequential number for increasing update-conflicts
-			             rdb\$set_context( 'USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', $sel_worker_expr );
-			          end
+			        if ( rand() * 100 <= $update_conflict_percent ) then
+			        begin
+			            -- 17.09.2018: temply change current ISQL window sequential number for increasing update-conflicts
+			            rdb\$set_context( 'USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', $sel_worker_expr );
+			        end
 		EOF
 			      fi
 
+	# 16.12.2018
+	cat <<-EOF >>$sql
+		        v_unit = null;
+		        if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 ) then
+		        begin
+		              if ( rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') is null ) then
+		              begin
+		                     rdb\$set_context( 'USER_SESSION', 'ENABLE_MON_QUERY',
+		                                      ( select s.svalue from settings s where working_mode = upper('common') and mcode = upper('enable_mon_query') )
+		                                    );
+		              end
+		              if ( rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
+		              begin
+		                  -- When config parameter 'mon_unit_perf' = 2 then we gather mon$ data by SINGLE attachment rather than by every running session.
+		                  -- It was decided to gather mon$ info by ISQL worker N1 and estimate affect on overall performance, see discuss with dimitr.
+		                  -- For this purpose we call the same SP every time:
+		                  v_unit = 'SRV_FILL_MON_CACHE_MEMORY' ;
+		              end
+		        end
+		        if ( v_unit is null ) then
+		        begin
+	EOF
+
 	if  [ "$unit_selection_method" = "random" ] ; then
         cat <<-EOF >>$sql
-			      select p.unit
-			      from srv_random_unit_choice(
-			         ''
-			         ,''
-			         ,''
-			         ,''
-			      ) p
-			      into v_unit;
-			    end
+			          select p.unit
+			          from srv_random_unit_choice(
+			             ''
+			             ,''
+			             ,''
+			             ,''
+			          ) p
+			          into v_unit;
 		EOF
 	else
         cat <<-EOF >>$sql
-			      select p.unit
-			      from srv_predictable_unit_choice p
-			      into v_unit;	
-			    end
+			          select p.unit
+			          from srv_predictable_unit_choice p
+			          into v_unit;
 		EOF
 	fi
 	
         cat <<-EOF >>$sql
-			  else -- select * from sp_stoptest DOES exist
-			    v_unit = 'TEST_WAS_CANCELLED';
+			          end -- ( v_unit is null )
+			      end -- NOT exists( select * from sp_stoptest )
+			  else -- "select * from sp_stoptest" DOES return something --> we have to CANCEL test
+			      v_unit = 'TEST_WAS_CANCELLED';
 	EOF
 
-      fi # # $mode='run_test'
+    fi # # $mode='run_test'
       
       cat <<- EOF >>$sql
 			  -- This will be shown in .log of working SQL script:
@@ -1227,7 +1364,6 @@ EOF
 			set term ;^
 		EOF
 
-    #if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
     if  [ "$mode" = "run_test" ] ; then
       if [ $mon_unit_perf = 1 ]; then
         cat <<- "EOF" >>$sql
@@ -1239,7 +1375,7 @@ EOF
 			    declare v_dummy bigint;
 			begin
 			    rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', 
-					      datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+					      datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
 					    );
 			    -- define context var which will identify rowset field
 			    -- in mon_log and mon_log_table_stats:
@@ -1261,7 +1397,7 @@ EOF
 			    -- are filled with counters BEFORE application unit call.
 			    -- Field "mult" in these tables is now negative: -1
 			    rdb$set_context('USER_SESSION','MON_GATHER_0_END',
-					      datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+					      datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
 					    );
 			end
 			^
@@ -1427,7 +1563,7 @@ EOF
 			    declare v_dummy bigint;
 			begin
 			    rdb\$set_context('USER_SESSION','MON_GATHER_1_BEG', 
-			            datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+			            datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
 			    );
 			    -- Gather mon$ tables BEFORE run app unit.
 			    -- Add second row to GTT tmp\$mon_log - statistics on 'per unit' basis.
@@ -1445,7 +1581,7 @@ EOF
 			    )
 			    into v_dummy;
 			    rdb\$set_context('USER_SESSION','MON_GATHER_1_END', 
-			            datediff(millisecond from cast('01.01.2015 00:00:00' as timestamp) to cast('now' as timestamp) ) 
+			            datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
 			    );
 			    -- add pair of rows with aggregated differences of mon$
 			    -- counters from GTT to fixed tables
@@ -1496,8 +1632,8 @@ EOF
 			     lpad( minutes_since_start, 7, ' ')
 			     as est_overall_at_minute_since_beg
 		EOF
-		if [ $mon_unit_perf = 1 ]; then
-        	cat <<- EOF >>$sql
+		if [ $mon_unit_perf -eq 1 ]; then
+			cat <<- EOF >>$sql
 				    -- this variable will be defined in SP srv_fill_mon:
 				    -- :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 				    -- ::: NB ::: rdb_get_context('USER_SESSION', 'ENABLE_MON_QUERY') must be '1' 
@@ -1511,8 +1647,12 @@ EOF
 				     as mon_gathering_time_ms
 				    ,rdb\$get_context('USER_SESSION','TRACED_UNITS') as traced_units
 			EOF
+		elif [ $mon_unit_perf -eq 2 ]; then
+			cat <<- EOF >>$sql
+				    ,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''' as mon_logging_info
+			EOF
 		else
-        	cat <<- EOF >>$sql
+			cat <<- EOF >>$sql
 				    ,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
 			EOF
 		fi
@@ -1520,9 +1660,6 @@ EOF
 		    ,rdb\$get_context('USER_SESSION','WORKING_MODE') as workload_type
 		    ,rdb\$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
 		    ,rdb\$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as qmism_verify_bitset
-		EOF
-		
-		cat <<- EOF >>$sql
 			from (
 			  select
 			    gen_id( g_success_counter, 0 ) as success_ops_count
@@ -1558,6 +1695,7 @@ EOF
     fi # mode = 'run_test'
 
 	cat <<- "EOF" >>$sql
+
 		-- Output results of application unit run:
 		set width msg 20;
 		select
@@ -1579,6 +1717,7 @@ EOF
 		    ,rdb$get_context('USER_SESSION', 'RUN_RESULT') as msg
 		    ,rdb$get_context('USER_SESSION','ADD_INFO') as add_info
 		from rdb$database;
+
 	EOF
 
     #if echo $mode | grep -i "^init_pop$" > /dev/null ; then
@@ -1611,7 +1750,8 @@ EOF
 		       -- ############################################################################################
 		       -- ###   c a n c e l     t h i s     S Q L    s c r i p t,    r e t u r n     t o     s h e l l
 		       -- ############################################################################################
-		       exception ex_test_cancellation;
+		       --exception ex_test_cancellation;
+		       exception ex_test_cancellation ( select result from sys_stamp_exception('ex_test_cancellation') );
 		    end
 		    -- REMOVE data from context vars, they will not be used more
 		    -- in this iteration:
@@ -1879,16 +2019,16 @@ launch_preparing() {
     # Generating script to be used by working isqls.
     # ##########################################################################
     if [ 1 -eq 1 ]; then
-        gen_working_sql run_test $tmpsql 500 $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
+        gen_working_sql run_test $tmpsql 300 $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
         #                  1        2      3         4            5            6           7        8          9
     else
-        gen_working_sql run_test $tmpsql  10  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
+        gen_working_sql run_test $tmpsql  30  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
         #                  1        2      3         4            5            6           7        8          9
         echo
         echo ..... DEBUG ....  Routine: $FUNCNAME
         echo RETURN INITIAL NUMBER OF EXEC BLOCKS TO 300. IT WAS CHANGED FOR DEBUG PURPUCES. PRESS ANY KEY...
         echo
-        pause
+        pause Press any key...
     fi
     #                  1        2     3       4             5             6
     # ##########################################################################
@@ -2043,6 +2183,7 @@ if [ "$3" == "nostop" ];then
 fi
 export can_stop
 
+
 export cfg=./oltp$fb"_config.nix"
 [[ -s $cfg ]] && echo "Config file '$cfg' found and not empty." || msg_nocfg $cfg
 
@@ -2064,6 +2205,7 @@ do
         echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
     fi
 done<$cfg
+
 
 # Remove trailing slash from variables which store PATHs:
 fbc=${fbc%/}
@@ -2145,7 +2287,26 @@ if [ $sleep_max -gt 0 ]; then
         echo
         exit 1
     fi
-    if [ -s "$sleep_ddl" ]; then
+fi
+
+if [ $mon_unit_perf -eq 2 ]; then
+   if [ -z "$sleep_ddl" ]; then
+         echo -e "CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'sleep_ddl' must be UNCOMMENTED."
+         echo -e "It must point to existing SQL script that declares UDF for delays from .so file avaliable to engine."
+         pause Press any key to FINISH this script. . .
+         exit 1
+   fi
+
+   if [ -z "$mon_query_interval" ]; then
+         echo -e "CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'mon_query_interval' must be UNCOMMENTED."
+         echo -e "Its value must be greater than zero and means duration of delay between receiving monitoring snapshots, in seconds."
+         pause Press any key to FINISH this script. . .
+         exit 1
+   fi
+fi
+
+# NOTE, 16.12.2018: we have to use UDF even when sleep_max=0 but mon_unit_perf = 2:
+if [ -s "$sleep_ddl" ]; then
         #grep -i -e "declare[[:space:]]*external[[:space:]]*function" "$sleep_ddl" >/tmp/tmp_oltp_emul.tmp
         # declare external function sleep
         arr=($(grep -i -e "declare[[:space:]]*external[[:space:]]*function" "$sleep_ddl"))
@@ -2154,7 +2315,7 @@ if [ $sleep_max -gt 0 ]; then
         ###   p a r s i n g     n a m e     o f     U D F      f o r      p a u s e s   ###
         ###################################################################################
         sleep_udf=${arr[3]}
-        
+
         if [ -z "$sleep_udf" ]; then
             echo
             echo SQL script "$sleep_ddl" must contain line with UDF declaration that starts with:
@@ -2167,13 +2328,15 @@ if [ $sleep_max -gt 0 ]; then
             echo
             echo Parsed UDF for pauses, its name: \'$sleep_udf\'
         fi
-    else
+else
         echo
         echo -e "SQL script with UDF declaration: '$sleep_ddl' - either empty or does not exist."
         echo
         #exit 1
-    fi
 fi
+
+# fi << old pos for  $sleep_max -gt 0
+
 
 echo  Done.
 
@@ -2283,38 +2446,31 @@ cat <<-EOF >>$tmpchk
     drop table tmp\$$rndname;
     -- At this point one may be sure that FB really has enough rights to create files for GTT data.
     commit;
-    set bail off;
-    ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-EOF
+    quit;
 
-# for STANDARD build of Firebird (which does NOT support connection pool)
-# last statement will issue:
-# ===
-#   Statement failed, SQLSTATE = 42000
-#   Dynamic SQL Error
-#   -SQL error code = -104
-#   -Token unknown - line ..., column ...
-#   -CONNECTIONS
-# ==
+    -- # 22.12.2018 removed from here, will be done in separate .sql after DB repbuild!
+    -- #set bail off;
+    -- #set heading off;
+    -- #set list off;
+    -- #select current_timestamp || ' - point before clear connections pool' as msg from rdb\$database;
+    -- #set echo on;
+    -- #ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
+    -- #set echo off;
+    -- #select current_timestamp || ' - point after clear connections pool' as msg from rdb\$database;
+EOF
 
 run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
 display_intention "Check whether DB is avaliable and has all needed objects." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
-
-conn_pool_support=0
-if grep -q -i "SQLSTATE = 42000" $tmperr && grep -q -i "Token unknown" $tmperr ; then
-    echo This build does not support CONNECTIONS POOL.
-else
-    conn_pool_support=1
-    catch_err $tmperr "Problem detected with access to '$host/$port:$dbnm'" 0
-fi
 
 # We must stop this .sh only in case when database has unsupported ODS or offline etc.
 # We must CONTINUE if $tmpchk finished with error like 'table semaphores not found'.
 
 rebuild_was_invoked=0
 
-if  grep -q -i "SQLSTATE = 08001" $tmperr  grep -q -i "Error while trying to open" $tmperr; then
+#if  grep -q -i "SQLSTATE = 08001" $tmperr  grep -q -i "Error while trying to open" $tmperr; then
+
+if grep -q -i "Error while trying to open" $tmperr; then
  
     if [[ $wait_if_not_exists = 1 && $can_stop = 1 ]]; then
 	cat <<- EOF
@@ -2335,57 +2491,96 @@ if  grep -q -i "SQLSTATE = 08001" $tmperr  grep -q -i "Error while trying to ope
     rebuild_was_invoked=1
 else
 
-  badmsg=$(grep -i "Is a directory\|unavailable database\|not a valid\|unsupported on-disk\|read-only\|shutdown" $tmperr | wc -l)
-  
-  [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database exists and online"
+    badmsg=$(grep -i "Is a directory\|unavailable database\|not a valid\|unsupported on-disk\|read-only\|shutdown" $tmperr | wc -l)
 
-  # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
-  ########################################################################################################
-  db_build_finished_ok=0
-  if [ -s $tmperr ];then
-    echo Script that verifies finish of DB building process is NOT EMPTY.
-    echo Name of script: $tmpclg
-    echo Name of errlog: $tmperr
-    cat $tmperr
-  else
-    # open log and parse it as config with 'param = value' string:
-    echo No errors detected when run $tmpchk
-    echo Obtain results from its log $tmpclg
-    if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then    
-        db_build_finished_ok=1
+    [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database exists and online"
+
+    # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
+    ########################################################################################################
+    db_build_finished_ok=0
+    if [ -s $tmperr ];then
+        echo Script that verifies finish of DB building process is NOT EMPTY.
+        echo Name of script: $tmpclg
+        echo Name of errlog: $tmperr
+        cat $tmperr
+    else
+        # open log and parse it as config with 'param = value' string:
+        echo No errors detected when run $tmpchk
+        echo Obtain results from its log $tmpclg
+        if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then    
+            db_build_finished_ok=1
+        fi
     fi
-  fi
 
-  echo db_build_finished_ok=\|$db_build_finished_ok\|
-  echo -e -n Result:' ' && [[ $db_build_finished_ok -eq 1 ]] && echo database is READY for work. || echo database needs to be REBUILT.
+    echo db_build_finished_ok=\|$db_build_finished_ok\|
+    echo -e -n Result:' ' && [[ $db_build_finished_ok -eq 1 ]] && echo database is READY for work. || echo database needs to be REBUILT.
 
-  if [ $db_build_finished_ok -eq 0 ]; then
-      echo
-      echo -e Database: \>$dbnm\< -- DOES exist but
-      echo process of creation its objects was not completed.
-      echo
-      if [[ $wait_if_not_exists = 1 && $can_stop = 1 ]]; then
-          echo -e '################################################################################'
-          echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
-          echo -e '################################################################################'
-          pause
-      fi
+    if [ $db_build_finished_ok -eq 0 ]; then
+        echo
+        echo -e Database: \>$dbnm\< -- DOES exist but
+        echo process of creation its objects was not completed.
+        echo
+        if [[ $wait_if_not_exists = 1 && $can_stop = 1 ]]; then
+            echo -e '################################################################################'
+            echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+            echo -e '################################################################################'
+            pause
+        fi
 
-      # ....................... b u i l d    d b    o b j e c t s .............
-      db_build
+        # ....................... b u i l d    d b    o b j e c t s .............
+        db_build
 
-      #else # $db_build_finished_ok = 1
-      # moved below, common block
-      rebuild_was_invoked=1
+        #else # $db_build_finished_ok = 1
+        # moved below, common block
+        rebuild_was_invoked=1
 
-  fi # $db_build_finished_ok = 0 or 1
-
+    fi # $db_build_finished_ok = 0 or 1
 
 fi # grep "Error while trying to open" $tmperr ==> true or false
 
 # ********************
 # *** COMMON BLOCK ***
 # ********************
+
+
+# /////////////////////////// check whether connections pool is supported /////////////////
+cat <<-EOF >$tmpchk
+    set bail off;
+    set heading off;
+    set list off;
+    select current_timestamp || ' - point before clear connections pool' as msg from rdb\$database;
+    set echo on;
+    ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
+    set echo off;
+    select current_timestamp || ' - point after clear connections pool' as msg from rdb\$database;
+EOF
+
+# for STANDARD build of Firebird (which does NOT support connection pool)
+# last statement will issue:
+# ===
+#   Statement failed, SQLSTATE = 42000
+#   Dynamic SQL Error
+#   -SQL error code = -104
+#   -Token unknown - line ..., column ...
+#   -CONNECTIONS
+# ==
+
+run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
+display_intention "Check whether this FB has support connections pool." "$run_isql" "$tmpclg" "$tmperr"
+$run_isql 1>$tmpclg 2>$tmperr
+
+conn_pool_support=0
+if grep -q -i "SQLSTATE = 42000" $tmperr && grep -q -i "Token unknown" $tmperr ; then
+    echo This build does not support CONNECTIONS POOL.
+    tail -15 $tmperr
+else
+    conn_pool_support=1
+    catch_err $tmperr "At least one error occured when querying connections pool data at '$host/$port:$dbnm'" 0
+    tail -15 $tmpclg | grep -i "connections pool"
+    echo This build DOES support connections pool.
+fi
+# //////////////////////////////////////////////////////////////////////////////////////////
+
 
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 # :::   S y n c h r o n i z e    t a b l e    'S E T T I N G S'    w i t h    c o n f i g    :::
@@ -2394,6 +2589,21 @@ fi # grep "Error while trying to open" $tmperr ==> true or false
 rm -f $tmpchk
 echo Synchronize SETTINGS table with current values from config
 sync_settings_with_conf $fb $tmpchk
+
+cat <<-"EOF" >>$tmpchk
+    -- 02.01.2019: delete all records in mon_cache_memory table
+    -- that could remain there after interrupted previous run:
+    set list on;
+    select 'ZAP table mon_cache_memory, start at ' || cast('now' as timestamp) as msg from rdb$database;
+    commit;
+    set transaction NO wait;
+    set count on;
+    delete from mon_cache_memory;
+    set count off;
+    commit;
+    select 'ZAP table mon_cache_memory, finish at ' || cast('now' as timestamp) as msg from rdb$database;
+    set list off;
+EOF
 
 run_isql="$fbc/isql $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
 
@@ -2451,7 +2661,12 @@ catch_err $tmperr "Could not update DDL according to current value of 'used_in_r
 # Value will be adjusted after test call of sleep UDF that must present in the script "$sleep_ddl" from config:
 sleep_mul=1
 
-if [[ $sleep_max -gt 0 &&  -s "$sleep_ddl" ]]; then
+#if [[ $sleep_max -gt 0 &&  -s "$sleep_ddl" ]]; then
+
+# NOTE: we have to declare UDF and evaluate sleep_mul even when sleep_max = 0 - it can be required
+# to use UDF for delays between every calls of SP 'SRV_FILL_MON_CACHE_MEMORY' when  mon_unit_perf = 2
+# (this will be done in dedicated isql session N1)
+if [ -s "$sleep_ddl" ]; then
     #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     #:::   d e c l a r e      e x t e r n a l     S l e e p  U D F   :::
     #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -2466,7 +2681,7 @@ if [[ $sleep_max -gt 0 &&  -s "$sleep_ddl" ]]; then
         sleep_mul=$( grep -i "multiplier_for_sleep_arg" $tmpclg | awk '{print $2}' )
     fi
 else
-    sho "Parameter 'sleep_max' is 0 and/or script 'sleep_ddl' does not exist. Script will work without UDF usage." $log4all   
+    sho "Script defined by parameter 'sleep_ddl' does not exist. Sessions will work without UDF usage." $log4all   
 fi
 
 rm -f $tmpclg $tmperr $tmpchk
@@ -2613,9 +2828,11 @@ fi
 if [ $sleep_max -gt 0 ]; then
     launch_preparing $sql $sleep_min $sleep_max $sleep_udf $sleep_mul
 else
-    launch_preparing $sql
+    # before 16.12.18: launch_preparing $sql
+    launch_preparing $sql $sleep_min $sleep_max $sleep_udf $sleep_mul
 fi
 #####################
+
 
 # 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
 #    all working ISQL sessions by adding single character + LF into this file.
@@ -2666,7 +2883,6 @@ msg="$(date +'%Y.%m.%d %H:%M:%S'). Now wait for all ISQL sessions will finish th
 echo $msg
 echo $msg>>$log4all
 echo>>$log4all
-
 
 if [ 1 -eq 0 ]; then
     echo "./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info AMP"
