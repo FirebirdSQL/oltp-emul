@@ -15,6 +15,7 @@
     # Trailing backslash is optional.
     # Allows referencing to existing OS environment variable by using exclamation sign.
     # Samples:
+    # fbc = !FB30_HOME!
     # fbc = c:\soft\firebird_30
 
     fbc  = C:\MIX\firebird\fb30

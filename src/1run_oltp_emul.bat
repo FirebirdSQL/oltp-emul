@@ -588,7 +588,6 @@ if NOT .%sleep_ddl%.==.. (
             echo that allow SKIP usage of UDF now: mon_unit_perf=%mon_unit_perf%, sleep_max=%sleep_max%
         ) >>%tmpclg%
         call :bulksho %tmpclg% %log4tmp%
-
         set sleep_ddl=
     )
 )
