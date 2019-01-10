@@ -193,15 +193,6 @@ set varlist=!varlist!^
 ,warm_time^
 ,working_mode
 
-
-@rem if .%is_embed%.==.0. (
-@rem     set varlist=%varlist%,usr,pwd,host,port
-@rem )
-@rem if NOT .%1.==.25. (
-@rem     set varlist=!varlist!,mon_unit_perf
-@rem )
-
-
 for %%v in (%varlist%) do (
     if "!%%v!"=="" (
         set msg=### MISSED: %%v ###
@@ -572,9 +563,34 @@ set sleep_mul=1
 @rem NOTE: we have to declare UDF and evaluate sleep_mul even when sleep_max = 0 - it can be required
 @rem to use UDF for delays between every calls of SP 'SRV_FILL_MON_CACHE_MEMORY' when  mon_unit_perf = 2
 @rem (this will be done in dedicated isql session N1)
+
+set must_decl_udf=0
 if NOT .%sleep_ddl%.==.. (
-    call :declare_sleep_UDF %sleep_ddl% sleep_udf sleep_mul
-    call :sho "Return from declare_sleep_UDF routine: sleep_udf=!sleep_udf!, sleep_mul=!sleep_mul!" %log4tmp%
+    if %mon_unit_perf% EQU 2 (
+        set must_decl_udf=1
+    ) else (
+        if %sleep_max% GTR 0 (
+            set must_decl_udf=1
+        )
+    )
+    if !must_decl_udf! EQU 1 (
+        (
+            echo NOTE: config parameters mon_unit_perf=%mon_unit_perf%, sleep_max=%sleep_max% - require check
+            echo that UDF declared in script 'sleep_ddl'=%sleep_ddl% is OK.
+        ) >>%tmpclg%
+        call :bulksho %tmpclg% %log4tmp%
+
+        call :declare_sleep_UDF %sleep_ddl% sleep_udf sleep_mul
+        call :sho "Return from declare_sleep_UDF routine: sleep_udf=!sleep_udf!, sleep_mul=!sleep_mul!" %log4tmp%
+    ) else (
+        (
+            echo NOTE: config parameter 'sleep_ddl' is forcedly assigned to EMPTY string because of other parameters
+            echo that allow SKIP usage of UDF now: mon_unit_perf=%mon_unit_perf%, sleep_max=%sleep_max%
+        ) >>%tmpclg%
+        call :bulksho %tmpclg% %log4tmp%
+
+        set sleep_ddl=
+    )
 )
 
 
@@ -2634,9 +2650,9 @@ goto:eof
     set dbauth=%6
     set create_with_split_heavy_tabs=%7
     if .%fb%.==.25. (
-      set vers_family=25
+        set vers_family=25
     ) else (
-      set vers_family=30
+        set vers_family=30
     )
 
     @rem Remove enclosing double quotes from value ofr dbauth: "-user ... -pas ..."   ==>  -user ... -pas ...
@@ -2728,7 +2744,17 @@ goto:eof
     set msg=Temply change Forced Writes to OFF while building DB. Change Sweep Interval to config settings.
     echo %msg% & echo %msg%>>%log4tmp%
 
-    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" async %create_with_sweep%
+    (
+        echo Routine 'make_db_objects'. Point-1 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
+        echo.    1 tmpdir=!tmpdir!
+        echo.    2 fbc=!fbc
+        echo.    3 dbconn=!dbconn!
+        echo.    4 dbauth="!dbauth!"
+        echo.    5 create_with_fw=async
+        echo.    6 create_with_sweep=!create_with_sweep!
+    )>>%log4tmp%
+
+    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" async !create_with_sweep!
 
     del %tmperr% 2>nul
     del %tmpsql% 2>nul
@@ -2892,7 +2918,17 @@ goto:eof
     echo.
     set msg=Restoring Forced Writes attribute to required value from config.
     echo %msg% & echo %msg%>>%log4tmp%
-    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw% %create_with_sweep%
+
+    (
+        echo Routine 'make_db_objects'. Point-2 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
+        echo.    1 tmpdir=!tmpdir!
+        echo.    2 fbc=!fbc
+        echo.    3 dbconn=!dbconn!
+        echo.    4 dbauth="!dbauth!"
+        echo.    5 create_with_fw=!create_with_fw!
+        echo.    6 create_with_sweep=!create_with_sweep!
+    )>>%log4tmp%
+    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" !create_with_fw! !create_with_sweep!
 
     endlocal
 
@@ -3442,6 +3478,17 @@ goto:eof
     del %tmplog% 2>nul
     del %tmperr% 2>nul
 
+
+    (
+        echo Routine 'run_init_pop'. Point-1 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
+        echo.    1 tmpdir=!tmpdir!
+        echo.    2 fbc=!fbc
+        echo.    3 dbconn=!dbconn!
+        echo.    4 dbauth="!dbauth!"
+        echo.    5 create_with_fw=async
+    )>>%log4tmp%
+
+
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem  T E M P L Y    S E T    F O R C E D   W R I T E S   =   O F F
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -3647,13 +3694,23 @@ goto:eof
     del %tmplog% 2>nul
     del %tmperr% 2>nul
 
+    (
+        echo Routine 'run_init_pop'. Point-2 before call :change_db_attr tmpdir fbc dbconn "dbauth" current_fw
+        echo.    1 tmpdir=!tmpdir!
+        echo.    2 fbc=!fbc
+        echo.    3 dbconn=!dbconn!
+        echo.    4 dbauth="!dbauth!"
+        echo.    5 current_fw=!current_fw!
+    )>>%log4tmp%
+
+
 
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem  R E S T O R E   I N I T    S T A T E    O F     F O R C E D   W R I T E S
     @rem  :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     @rem --- wrong! --- call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %create_with_fw%
-    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" %current_fw%
+    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" !current_fw!
 
     
     @rem If we are here than no more init docs should be created
@@ -3732,6 +3789,15 @@ goto:eof
     set new_sweep=%6
     if .%6.==.. set new_sweep=-1
 
+    (
+        echo arg_1 tmpdir=!tmpdir!
+        echo arg_2 fbc=!fbc!
+        echo arg_3 dbconn=!dbconn!
+        echo arg_4 tmpdir=dbauth=!dbauth!
+        echo arg_5 new_fw=!new_fw!
+        echo arg_6 new_sweep=!new_sweep! // optional
+    ) >> %log4tmp%
+
     set tmplog=%tmpdir%\change_db_attr.log
     set tmperr=%tmpdir%\change_db_attr.err
     call :repl_with_bound_quotes %tmplog% tmplog
@@ -3768,9 +3834,9 @@ goto:eof
         echo  Ok. && echo %time%. Done. >> %log4tmp%
 
         echo|set /p=Run fbsvcmgr for temporarily change FW attribute to %new_fw%...
-        echo %time%. Run: %run_cmd% action_properties dbname %dbnm% prp_write_mode prp_wm_%new_fw% 2^>%tmperr% >>%log4tmp%
+        echo %time%. Run: %run_cmd% action_properties dbname %dbnm% prp_write_mode prp_wm_!new_fw! 2^>%tmperr% >>%log4tmp%
 
-        %run_cmd% action_properties dbname %dbnm% prp_write_mode prp_wm_%new_fw% 1>%tmplog% 2>%tmperr%
+        %run_cmd% action_properties dbname %dbnm% prp_write_mode prp_wm_!new_fw! 1>%tmplog% 2>%tmperr%
 
         (
             for /f "delims=" %%a in ('type %tmplog%') do echo STDLOG: %%a
@@ -3780,15 +3846,15 @@ goto:eof
         call :catch_err run_cmd !tmperr! n/a failed_fbsvc
         echo  Ok. && echo %time%. Done. >> %log4tmp%
 
-        if not .%new_sweep%.==.-1. (
+        if not .!new_sweep!.==.-1. (
             @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
             @rem :::    A d j u s t i n g     S w e e p   I n t e r v a l    t o     c o n f i g    s e t t i n g   :::
             @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
             echo|set /p=Changing attribute Sweep Interval to required value from config...
 
-            echo %time%. Run: %run_cmd% action_properties dbname %dbnm% prp_sweep_interval %new_sweep% 2^>%tmperr% >>%log4tmp%
-            %run_cmd% action_properties dbname %dbnm% prp_sweep_interval %new_sweep% 2>%tmperr%
+            echo %time%. Run: %run_cmd% action_properties dbname %dbnm% prp_sweep_interval !new_sweep! 2^>%tmperr% >>%log4tmp%
+            %run_cmd% action_properties dbname %dbnm% prp_sweep_interval !new_sweep! 2>%tmperr%
 
             call :catch_err run_cmd !tmperr! n/a failed_fbsvc
 
