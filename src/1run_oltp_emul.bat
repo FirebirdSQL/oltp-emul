@@ -33,6 +33,9 @@ if /i .%3.==.nostop. set can_stop=0
 echo %date% %time% - starting %~f0
 echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 
+set INIT_SHELL_DIR="%cd%"
+cd /d %~dp0
+
 set cfg=oltp%fb%_config.win
 
 set isc_user=
@@ -5056,6 +5059,9 @@ exit /b
 
 :final
 @rem http://stackoverflow.com/questions/10534911/how-can-i-exit-a-batch-file-from-within-a-function
+if not .!INIT_SHELL_DIR!.==.. (
+    cd /d !INIT_SHELL_DIR!
+)
 call :haltHelper 2> nul
 
 :end_of_test
