@@ -1217,6 +1217,11 @@ goto :end_of_test
 
 :gen_working_sql
       setlocal
+
+      echo.
+      call :sho "Internal routine: gen_working_sql" %log4tmp%
+      echo.
+
       @rem PUBL: sleep_mul
       @rem call :gen_working_sql  init_pop  %tmp_init_pop_sql%    %init_pkq%   %no_auto_undo%        0        %unit_selection_method%      0          0        %sleep_udf% 
       @rem call :gen_working_sql  run_test  %tmp_run_test_sql%  !jobs_count!   %no_auto_undo%  %detailed_info% %unit_selection_method% %sleep_min% %sleep_max% %sleep_udf% 
@@ -2206,8 +2211,9 @@ goto :end_of_test
           call :sho "Generating finished. Size of script '%generated_sql%', bytes: %%~za" %log4tmp%
       )
 
-  endlocal
-  @rem end of `gen_working_sql`
+    call :sho "Leaving routine: gen_working_sql" %log4tmp%
+    endlocal
+    @rem end of `gen_working_sql`
 
 goto:eof
 
@@ -2259,13 +2265,30 @@ goto:eof
 
 :prepare
     @rem Works Ok: create database 'localhost/3255:c:\TEMP\test fdb 2 5\e 2 1.fdb'; -- remove any quotes from path and file name
+    echo.
+    call :sho "Internal routine: prepare." %log4tmp%
+    echo.
 
     setlocal
 
     call :try_create_db
 
-    call :make_db_objects %fb% !tmpdir! !fbc! !dbnm! !dbconn! "!dbauth!" %create_with_split_heavy_tabs%
+    (
+        echo Routine 'prepare'. Point before call :make_db_objects fb tmpdir fbc dbnm dbconn dbauth create_with_split_heavy_tabs
+        echo.    1 fb=%fb%
+        echo.    2 tmpdir=!tmpdir!
+        echo.    3 fbc=!fbc!
+        echo.    4 dbnm=!dbnm!
+        echo.    5 dbconn=!dbconn!
+        echo.    6 dbauth="!dbauth!"
+        echo.    7 create_with_split_heavy_tabs=%create_with_split_heavy_tabs%
+    )>>%log4tmp%
 
+    call :make_db_objects %fb% !tmpdir! !fbc! !dbnm! !dbconn! "!dbauth!" %create_with_split_heavy_tabs%
+    @rem                    1     2       3     4       5          6                 7
+
+    call :sho "Leaving routine: prepare." %log4tmp%
+   
     endlocal
 goto:eof
 
@@ -2345,6 +2368,9 @@ goto:eof
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
 
 :chk_conn_pool_support
+    echo.
+    call :sho "Internal routine: chk_conn_pool_support." %log4tmp%
+    echo.
     setlocal
 
     @rem PUBL: tmpdir, fbc, %dbconn% %dbauth%, %log4tmp%
@@ -2415,8 +2441,8 @@ goto:eof
         del %%f
     )
 
+    call :sho "Leaving routine: chk_conn_pool_support." %log4tmp%
     endlocal & set "%~1=%result%"
-
 
 goto:eof
 
@@ -2427,7 +2453,7 @@ goto:eof
     set result=%1
     set result=!result: =*!
     set result=!result:"=|!
-    endlocal&set "%~2=%result%"
+    endlocal & set "%~2=%result%"
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
@@ -2437,9 +2463,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=!time! Internal routine: try_create_db.
-    echo %msg% & echo %msg% >>%log4tmp%
-
+    call :sho "Internal routine: try_create_db." %log4tmp%
     echo.
     @rem If we are here than database is absent. Suggest to create it but only in case when
     @rem %dbnm% contains slashes (forwarding for LInux and backward for WIndows)
@@ -2575,6 +2599,8 @@ goto:eof
     del !tmplog! 2>nul
     del !tmperr! 2>nul
 
+    call :sho "Leaving routine: try_create_db." %log4tmp%
+
     endlocal
 
 goto:eof
@@ -2636,8 +2662,7 @@ goto:eof
     setlocal
     
     echo.
-    set msg=!time! Internal routine: make_db_objects.
-    echo %msg% & echo %msg% >>%log4tmp%
+    call :sho "Internal routine: make_db_objects." %log4tmp%
     echo.
 
     @rem call :make_db_objects %fb% !tmpdir! !fbc! !dbname! !dbconn! "!dbauth!" %create_with_split_heavy_tabs%
@@ -2671,6 +2696,21 @@ goto:eof
     set isql_exe=!fbc!\isql.exe
     call :repl_with_bound_quotes %isql_exe% isql_exe
 
+    (
+        echo Routine 'make_db_objects'.
+        echo.    arg_1 fb=%fb%
+        echo.    arg_2 tmpdir=!tmpdir!
+        echo.    arg_3 fbc=!fbc!
+        echo.    arg_4 dbnm=!dbnm!
+        echo.    arg_5 dbconn=!dbconn!
+        echo.    arg_6 dbauth="!dbauth!"
+        echo.    arg_7 create_with_split_heavy_tabs=!create_with_split_heavy_tabs!
+        echo.    NOTE:
+        echo.    initial: isql_exe=!fbc!\isql.exe -- before repl_with_bound_quotes
+        echo.    current: isql_exe=!isql_exe! -- after repl_with_bound_quotes
+    )>>%log4tmp%
+
+
     del !tmplog! 2>nul
     del !tmperr! 2>nul
     del !tmpsql! 2>nul
@@ -2683,10 +2723,6 @@ goto:eof
         echo set width engine 20;
         echo select 'engine='^|^|rdb$get_context('SYSTEM','ENGINE_VERSION'^) as engine
         echo from rdb$database;
-        echo --set list on;
-        echo --select * from mon$database;
-        echo --select * from mon$attachments;
-        echo --show version;
         echo quit;
     )>>%tmpsql%
 
@@ -2746,7 +2782,7 @@ goto:eof
     (
         echo Routine 'make_db_objects'. Point-1 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
         echo.    1 tmpdir=!tmpdir!
-        echo.    2 fbc=!fbc
+        echo.    2 fbc=!fbc!
         echo.    3 dbconn=!dbconn!
         echo.    4 dbauth="!dbauth!"
         echo.    5 create_with_fw=async
@@ -2921,13 +2957,15 @@ goto:eof
     (
         echo Routine 'make_db_objects'. Point-2 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
         echo.    1 tmpdir=!tmpdir!
-        echo.    2 fbc=!fbc
+        echo.    2 fbc=!fbc!
         echo.    3 dbconn=!dbconn!
         echo.    4 dbauth="!dbauth!"
         echo.    5 create_with_fw=!create_with_fw!
         echo.    6 create_with_sweep=!create_with_sweep!
     )>>%log4tmp%
     call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" !create_with_fw! !create_with_sweep!
+
+    call :sho "Leaving routine: make_db_objects." %log4tmp%
 
     endlocal
 
@@ -3273,6 +3311,10 @@ goto:eof
 
     del !tmpclg! 2>nul
 
+    call :sho "Leaving routine: show_db_and_test_params." %log4tmp%
+    
+    endlocal
+
 goto:eof
 @rem end of: show_db_and_test_params
 
@@ -3283,9 +3325,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=!time! Internal routine: count_existing_docs.
-    echo !msg! 
-    echo !msg! >>%log4tmp%
+    call :sho "Internal routine: count_existing_docs." %log4tmp%
     echo.
     
     @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
@@ -3371,6 +3411,8 @@ goto:eof
     @rem Assign values to output arguments 'existing_docs' 'engine' and 'log_tab':
     @rem call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
     @rem                              1       2      3         4           5           6           7       8
+
+    call :sho "Leaving routine: count_existing_docs." %log4tmp%
 
     endlocal & set "%~6=%existing_docs%" & set "%~7=%engine%" & set "%~8=%log_tab%"
 
@@ -3481,7 +3523,7 @@ goto:eof
     (
         echo Routine 'run_init_pop'. Point-1 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep
         echo.    1 tmpdir=!tmpdir!
-        echo.    2 fbc=!fbc
+        echo.    2 fbc=!fbc!
         echo.    3 dbconn=!dbconn!
         echo.    4 dbauth="!dbauth!"
         echo.    5 create_with_fw=async
@@ -3696,7 +3738,7 @@ goto:eof
     (
         echo Routine 'run_init_pop'. Point-2 before call :change_db_attr tmpdir fbc dbconn "dbauth" current_fw
         echo.    1 tmpdir=!tmpdir!
-        echo.    2 fbc=!fbc
+        echo.    2 fbc=!fbc!
         echo.    3 dbconn=!dbconn!
         echo.    4 dbauth="!dbauth!"
         echo.    5 current_fw=!current_fw!
@@ -3757,6 +3799,8 @@ goto:eof
     
     )
 
+    call :sho "Leaving routine: run_init_pop." %log4tmp%
+
     endlocal
 
 goto:eof    
@@ -3768,9 +3812,7 @@ goto:eof
 :change_db_attr
     setlocal
     echo.
-    set msg=!time! Internal routine: change_db_attr.
-    echo !msg! 
-    echo !msg! >>%log4tmp%
+    call :sho "Internal routine: change_db_attr." %log4tmp%
     echo.
 
     @rem call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" async [%create_with_sweep%]
@@ -3789,12 +3831,12 @@ goto:eof
     if .%6.==.. set new_sweep=-1
 
     (
-        echo arg_1 tmpdir=!tmpdir!
-        echo arg_2 fbc=!fbc!
-        echo arg_3 dbconn=!dbconn!
-        echo arg_4 tmpdir=dbauth=!dbauth!
-        echo arg_5 new_fw=!new_fw!
-        echo arg_6 new_sweep=!new_sweep! // optional
+        echo.   arg_1 tmpdir=!tmpdir!
+        echo.   arg_2 fbc=!fbc!
+        echo.   arg_3 dbconn=!dbconn!
+        echo.   arg_4 tmpdir=dbauth=!dbauth!
+        echo.   arg_5 new_fw=!new_fw!
+        echo.   arg_6 new_sweep=!new_sweep! // optional
     ) >> %log4tmp%
 
     set tmplog=%tmpdir%\change_db_attr.log
@@ -3900,6 +3942,7 @@ goto:eof
     del %tmplog% 2>nul
     del %tmperr% 2>nul
 
+    call :sho "Leaving routine: change_db_attr." %log4tmp%
     endlocal
 goto:eof
 
@@ -3943,7 +3986,7 @@ goto:eof
 
 :check_for_prev_build_err
     echo.
-    echo !time! Internal routine: check_for_prev_build_err.
+    call :sho "Internal routine: check_for_prev_build_err." %log4tmp%
     echo.
     setlocal
 
@@ -4023,6 +4066,9 @@ goto:eof
         echo RESULT: no errors found that could rest from previous building database objects.
         echo File %tmperr% not found or is empty.
     )
+
+    call :sho "Leaving routine: check_for_prev_build_err." %log4tmp%
+    
     endlocal & set "%~3=%build_was_cancelled%"
 goto:eof
 
@@ -4033,9 +4079,7 @@ goto:eof
     setlocal
 
     echo.
-    set msg=!time! Internal routine: show_time_limits.
-    echo !msg! 
-    echo !msg! >>%log4tmp%
+    call :sho "Internal routine: show_time_limits." %log4tmp%
     echo.
 
     @rem call :show_time_limits !tmpdir! !fbc! !dbconn! "!dbauth!" log4all
@@ -4178,6 +4222,10 @@ goto:eof
     del %tmplog% 2>nul
     del %tmperr% 2>nul
 
+    call :sho "Leaving routine: show_time_limits." %log4tmp%
+
+    endlocal
+
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
@@ -4185,6 +4233,9 @@ goto:eof
 
 :adjust_sep_wrk_count 
 
+    echo.
+    call :sho "Internal routine: adjust_sep_wrk_count." %log4tmp%
+    echo.
     @rem  Use file: $shdir/oltp_adjust_DDL.sql
     @rem  1. GENERATE temporary script "$tmpadj" which will contain dynamically generated DDL statements
     @rem     for PERF_SPLIT_nn tables
@@ -4221,6 +4272,8 @@ goto:eof
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
         del %%f
     )
+    call :sho "Leaving routine: adjust_sep_wrk_count." %log4tmp%
+    endlocal
 
 goto:eof
 
@@ -4228,6 +4281,9 @@ goto:eof
 
 :adjust_replication
 
+    echo.
+    call :sho "Internal routine: adjust_replication." %log4tmp%
+    echo.
     @rem  Use file: $shdir/oltp_replication_DDL
     @rem # 1. GENERATE temporary script "tmp_adjust_for_replication.sql" which will contain dynamically generated DDL
     @rem     statements for creating/dropping indices, according to current value of 'used_in_replication' parameter
@@ -4269,6 +4325,10 @@ goto:eof
         del %%f
     )
 
+    call :sho "Leaving routine: adjust_replication." %log4tmp%
+    endlocal
+
+
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
@@ -4278,6 +4338,10 @@ goto:eof
     @rem PUBL: %log4tmp%
     @rem call :declare_sleep_UDF %sleep_ddl% sleep_udf sleep_mul
     @rem NB: sleep_udf sleep_mul are passed by ref, will be assigned HERE.
+
+    echo.
+    call :sho "Internal routine: declare_sleep_UDF." %log4tmp%
+    echo.
 
     setlocal
     set sleep_ddl=%1
@@ -4296,7 +4360,9 @@ goto:eof
     call :repl_with_bound_quotes %isql_exe% isql_exe
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i %sleep_ddl%
     cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
-    call :catch_err run_isql !tmperr! n/a
+
+    call :catch_err run_isql !tmperr! n/a  failed_udf_decl
+    @rem                1       2      3         4
 
     for /f "tokens=2-2" %%a in ('findstr /i /c:"EXT_FUNCTION_NAME" !tmpclg!') do (
         set sleep_udf=%%a
@@ -4311,6 +4377,10 @@ goto:eof
 
     call :sho "Success. UDF name for delays: !sleep_udf!. Multiplier to get delay in SECONDS: !sleep_mul!" !log4tmp!
 
+    echo.
+    call :sho "Leaving routine: declare_sleep_UDF." %log4tmp%
+    echo.
+
     endlocal & set "%~2=%sleep_udf%" & set "%~3=%sleep_mul%"
 
 goto:eof
@@ -4321,6 +4391,10 @@ goto:eof
 :sync_settings_with_conf
     @rem %fb% %log4tmp%
     @rem PUBL: fbc, dbconn, dbauth, tmpdir
+
+    echo.
+    call :sho "Internal routine: sync_settings_with_conf." %log4tmp%
+    echo.
 
     setlocal
 
@@ -4367,10 +4441,18 @@ goto:eof
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
         del %%f
     )
+    echo.
+    call :sho "Leaving routine: sync_settings_with_conf." %log4tmp%
+    echo.
+    endlocal
 
 goto:eof
 
 :sync_settings_generate_sql
+    echo.
+    call :sho "Internal routine: sync_settings_generate_sql." %log4tmp%
+    echo.
+
     setlocal
     set fb=%1
     @rem SQL script where we have to *ADD* text, i.e. do NOT truncate it to zero-length!
@@ -4451,6 +4533,7 @@ goto:eof
         echo set list off;
     ) >> !tmpsql!
 
+    call :sho "Leaving routine: sync_settings_generate_sql." %log4tmp%
     endlocal
 goto:eof
 @rem end of sync_settings_with_conf
@@ -4704,6 +4787,10 @@ goto:eof
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
 
 :gen_batch_for_stop
+
+    echo.
+    call :sho "Internal routine: gen_batch_for_stop." %log4tmp%
+    echo.
     @rem call gen_batch_for_stop 1stoptest.tmp info
     setlocal
 
@@ -4783,21 +4870,21 @@ goto:eof
         echo.
     )
 
+    call :sho "Leaving routine: gen_batch_for_stop." %log4tmp%
     endlocal
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
 
 :getfblst
+
     echo.
-    set msg=!time! Internal routine: getfblst.
+    call :sho "Internal routine: getfblst." %log4tmp%
+    echo.
 
     @rem call :getfblst %fb% fbc
     @rem                 ^    ^-------- this will be defined here: path to FB binaries on local machine.
     @rem                 +------------- first arg. to batch, relates to FB version: 25 or 30
-
-    echo !msg! 
-    echo.
 
     setlocal
 
@@ -4864,6 +4951,8 @@ goto:eof
     )
     del %qrx% 2>nul
     del %lst% 2>nul
+
+    call :sho "Leaving routine: getfblst." %log4tmp%
 
     endlocal & set "%~2=%result%"
 
@@ -4943,6 +5032,14 @@ goto:eof
 :failed_show_time
     echo FAILED to run script which tries to add 'signal' record into log that will be
     echo used to evaluate planning finish time.
+goto:eof
+
+:failed_udf_decl
+    echo ###  Config parameter 'sleep_ddl' points to file '!sleep_ddl!' which
+    echo ###  must be SQL script with declaration of UDF that can implement delay.
+    echo ###  Appropriate binary (.ddl)^ must be stored in any directory that could be
+    echo ###  accessed by 'firebird' account according to value of firebird.conf parameter 
+    echo ###  UDFaccess. Usually it is enough to put .dll into %%FIREBIRD_HOME%%\UDF folder.
 goto:eof
 
 :trim
