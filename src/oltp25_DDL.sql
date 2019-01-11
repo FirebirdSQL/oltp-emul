@@ -6477,6 +6477,12 @@ create or alter view v_max_id_ord_sup as
 -- #############################################
 
 create or alter view v_random_find_clo_res as
+-- plan in 2.5 (checked 11.01.2019):
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (Q INDEX (QDISTR_WARE_SOP_ROP_WKR_SND))
+-- PLAN (D INDEX (FK_DOC_DATA_DOC_LIST))
+-- 7PLAN (H INDEX (DOC_LIST_WORKER_OPTYPE))
 -- 08.09.2015: remove join from here, reduce number of IRs at ~1.5x
 -- ################################################################################
 -- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
@@ -6485,6 +6491,91 @@ create or alter view v_random_find_clo_res as
     select h.id
     from doc_list h
     where h.optype_id = 1000
+        -- 12.08.2018: sequential number of ISQL session that queries this view.
+        -- This filter is added with purpose to reduce number of lock-conflict errors:
+        and h.worker_id is not distinct from (select result from fn_this_worker_seq_no)
+        and exists(
+            select *
+            from doc_data d where d.doc_id = h.id
+            and exists(
+                select *
+                from qdistr q
+                where
+                    q.ware_id = d.ware_id
+                    and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
+                    and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
+                    and q.snd_id = d.id
+                    -- 12.08.2018: sequential number of ISQL session that queries this view.
+                    -- This filter is added with purpose to reduce number of lock-conflict errors:
+                    and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
+                -- prevent from building bitmap, 3.0 only:
+                --order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+            )
+            --order by d.doc_id -- prevent from building bitmap, 3.0 only
+        )
+;
+
+-------------------------------------------------------------------------------
+
+create or alter view v_min_id_clo_res as
+-- plan in 2.5 (checked 11.01.2019):
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (Q INDEX (QDISTR_WARE_SOP_ROP_WKR_SND))
+-- PLAN (D INDEX (FK_DOC_DATA_DOC_LIST))
+-- PLAN (H ORDER PK_DOC_LIST INDEX (DOC_LIST_WORKER_OPTYPE))
+-- ################################################################################
+-- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
+-- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
+-- ################################################################################
+select h.id
+from doc_list h
+-- >>> this inner join had extremely POOR performance! >>> join doc_data d on h.id = d.doc_id
+where h.optype_id = 1000
+    -- 12.08.2018: sequential number of ISQL session that queries this view.
+    -- This filter is added with purpose to reduce number of lock-conflict errors:
+    and h.worker_id is not distinct from (select result from fn_this_worker_seq_no)
+    and exists(
+        select *
+        from doc_data d where d.doc_id = h.id
+        and exists(
+            select *
+            from qdistr q
+            where
+                q.ware_id = d.ware_id
+                and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
+                and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
+                and q.snd_id = d.id
+                -- 12.08.2018: sequential number of ISQL session that queries this view.
+                -- This filter is added with purpose to reduce number of lock-conflict errors:
+                and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
+                -- prevent from building bitmap, 3.0 only:
+                -- do NOT use in 2.5: order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+        )
+        -- prevent from building bitmap, 3.0 only
+        -- do NOT use in 2.5: order by d.doc_id
+    )
+    order by h.id
+    rows 1
+;
+
+-------------------------------------------------------------------------------
+
+create or alter view v_max_id_clo_res as
+-- plan in 2.5 (checked 11.09.2015):
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (FN_THIS_WORKER_SEQ_NO NATURAL)
+-- PLAN (Q INDEX (QDISTR_WARE_SOP_ROP_WKR_SND))
+-- PLAN (D INDEX (FK_DOC_DATA_DOC_LIST))
+-- PLAN (H ORDER DOC_LIST_ID_DESC INDEX (DOC_LIST_WORKER_OPTYPE))
+-- ################################################################################
+-- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
+-- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
+-- ################################################################################
+select h.id
+from doc_list h
+-- >>> this inner join had extremely POOR performance! >>> join doc_data d on h.id = d.doc_id
+where h.optype_id = 1000
     -- 12.08.2018: sequential number of ISQL session that queries this view.
     -- This filter is added with purpose to reduce number of lock-conflict errors:
     and h.worker_id is not distinct from (select result from fn_this_worker_seq_no)
@@ -6503,80 +6594,14 @@ create or alter view v_random_find_clo_res as
                 -- This filter is added with purpose to reduce number of lock-conflict errors:
                 and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
             -- prevent from building bitmap, 3.0 only:
-            --order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+            -- do NOT use in 2.5: order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
         )
-        --order by d.doc_id -- prevent from building bitmap, 3.0 only
+        -- prevent from building bitmap, 3.0 only:
+        -- do NOT use in 2.5: order by d.doc_id
     )
+    order by h.id desc
+    rows 1
 ;
-
--------------------------------------------------------------------------------
-
-create or alter view v_min_id_clo_res as
--- plan in 2.5 (checked 11.09.2015):
---PLAN (Q INDEX (QD_WARE_SNDOP_RCVOP, QD_SNDID))
---PLAN JOIN (H ORDER PK_DOC_LIST, D INDEX (FK_DOC_DATA_DOC_LIST))
--- ################################################################################
--- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
--- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
--- ################################################################################
-select h.id
-from doc_list h
-join doc_data d on h.id = d.doc_id
-where h.optype_id = 1000
--- 12.08.2018: sequential number of ISQL session that queries this view.
--- This filter is added with purpose to reduce number of lock-conflict errors:
-and h.worker_id is not distinct from (select result from fn_this_worker_seq_no)
-and exists(
-    select *
-    from qdistr q
-    where
-        q.ware_id = d.ware_id
-        and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
-        and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
-        and q.snd_id = d.id
-        -- 12.08.2018: sequential number of ISQL session that queries this view.
-        -- This filter is added with purpose to reduce number of lock-conflict errors:
-        and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
-    -- 02.12.2014 wrong in 2.5 (use only in 3.0): order by q.snd_optype_id desc, q.rcv_optype_id desc
-)
-order by h.id
-rows 1
-;
-
--------------------------------------------------------------------------------
-
-create or alter view v_max_id_clo_res as
--- plan in 2.5 (checked 11.09.2015):
---PLAN (Q INDEX (QD_WARE_SNDOP_RCVOP, QD_SNDID))
---PLAN JOIN (H ORDER DOC_LIST_ID_DESC, D INDEX (FK_DOC_DATA_DOC_LIST))
--- ################################################################################
--- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
--- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
--- ################################################################################
-select h.id
-from doc_list h
-join doc_data d on h.id = d.doc_id
-where h.optype_id = 1000
--- 12.08.2018: sequential number of ISQL session that queries this view.
--- This filter is added with purpose to reduce number of lock-conflict errors:
-and h.worker_id is not distinct from (select result from fn_this_worker_seq_no)
-and exists(
-    select *
-    from qdistr q
-    where
-        q.ware_id = d.ware_id
-        and q.snd_optype_id = 1000 -- fn_oper_order_by_customer()
-        and q.rcv_optype_id = 3300 -- fn_oper_retail_reserve()
-        and q.snd_id = d.id
-        -- 12.08.2018: sequential number of ISQL session that queries this view.
-        -- This filter is added with purpose to reduce number of lock-conflict errors:
-        and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
-    -- only in 3.0: order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
-)
-order by h.id desc
-rows 1
-;
-
 -------------------------------------------------------------------------------
 
 create or alter view v_random_find_non_paid_invoice as
