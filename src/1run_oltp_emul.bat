@@ -2868,23 +2868,21 @@ goto:eof
         echo -- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
         echo in "%~dp0oltp_split_heavy_tabs_%create_with_split_heavy_tabs%.sql";
         echo.
-        @rem echo -- 05.10.2018: this script ADDS some DDL statements that should be applied before data filling.
-        @rem echo -- These are DDL for indices on tables DOC_LIST, PDISTR, PSTORNED - depenging on current value of config
-        @rem echo -- parameter 'separate_workers':
-        @rem echo -- 11.11.2018: moved in common block for both build new DB or use existent DB: in "%~dp0oltp_adjust_DDL.sql";
-        @rem echo.
         echo -- Result: previous OUT-command provides redirection of 
         echo -- ^|IN in "%~dp0oltp_split_heavy_tabs_%create_with_split_heavy_tabs%.sql"^|
         echo -- to the new temp file which will be applied on the next step. 
         echo -- Close current output:
         echo out;
         echo.
+
+        @rem result: SQL script '!tmpdir!\oltp_split_heavy_tabs_1_30.tmp' will be created at this point, its name here: !post_handling_out!
+        @rem put here 'echo q_uit;' if d_ebug is needed 
+
+
         echo -- Applying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=%create_with_split_heavy_tabs%':
         echo in !post_handling_out!;
         echo.
-        @rem echo -- Update DDL of tables according to current setting of 'used_in_replication' config parameter:
-        @rem echo -- 11.11.2018: moved in common block for both build new DB or use existent DB: in "%~dp0oltp_replication_DDL.sql";
-        @rem echo.
+
         echo -- Finish building process: insert custom data to lookup tables:
         echo in "%~dp0oltp_data_filling.sql";
 
@@ -2919,11 +2917,10 @@ goto:eof
 
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c !cc_pages! -i %tmpsql%
     echo %time%. Run: %run_isql% 1^>%tmplog% 2^>%tmperr% >>%log4tmp%
-    echo %time%. Please WAIT. . .
 
-    @echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    @echo :::    B u i l d     D a t a b a s e   -   c r e a t e    i t s    o b j e c t s    ::::
-    @echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    echo :::    c r e a t i n g     d a t a b a s e     o b j e c t s    ::::
+    echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     %run_isql% 1>%tmplog% 2>%tmperr%
 
@@ -2937,6 +2934,7 @@ goto:eof
     @rem operation was cancelled in 2.5: SQLSTATE = HY008 or `^C`
     @rem operation was cancelled in 3.0: SQLSTATE = HY008
 
+
     call :catch_err run_isql !tmperr! n/a failed_bld_sql
 
     for /d %%f in (%tmpsql%,%tmplog%,%tmperr%,!post_handling_out!,"%tmpdir%\oltp_split_heavy_tabs_%create_with_split_heavy_tabs%_%fb%.tmp") do (
@@ -2947,15 +2945,16 @@ goto:eof
     )
 
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    echo %time%. Done: database objects have been created SUCCESSFULLY.
+    call :sho "Done: database objects have been created SUCCESSFULLY." %log4tmp%
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
 
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     @rem :::    A d j u s t i n g     F o r c e d     W r i t e s    t o     c o n f i g    s e t t i n g   :::
     @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     echo.
-    set msg=Restoring Forced Writes attribute to required value from config.
-    echo %msg% & echo %msg%>>%log4tmp%
+
+    call :sho "Restoring FORCED WRITES attribute and SWEEP interval to required value from config." %log4tmp%
 
     (
         echo Routine 'make_db_objects'. Point-2 before call :change_db_attr tmpdir fbc dbconn "dbauth" create_with_fw create_with_sweep

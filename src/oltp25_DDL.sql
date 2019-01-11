@@ -6478,6 +6478,10 @@ create or alter view v_max_id_ord_sup as
 
 create or alter view v_random_find_clo_res as
 -- 08.09.2015: remove join from here, reduce number of IRs at ~1.5x
+-- ################################################################################
+-- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
+-- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
+-- ################################################################################
     select h.id
     from doc_list h
     where h.optype_id = 1000
@@ -6511,6 +6515,10 @@ create or alter view v_min_id_clo_res as
 -- plan in 2.5 (checked 11.09.2015):
 --PLAN (Q INDEX (QD_WARE_SNDOP_RCVOP, QD_SNDID))
 --PLAN JOIN (H ORDER PK_DOC_LIST, D INDEX (FK_DOC_DATA_DOC_LIST))
+-- ################################################################################
+-- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
+-- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
+-- ################################################################################
 select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id
@@ -6541,6 +6549,10 @@ create or alter view v_max_id_clo_res as
 -- plan in 2.5 (checked 11.09.2015):
 --PLAN (Q INDEX (QD_WARE_SNDOP_RCVOP, QD_SNDID))
 --PLAN JOIN (H ORDER DOC_LIST_ID_DESC, D INDEX (FK_DOC_DATA_DOC_LIST))
+-- ################################################################################
+-- ### NB DDL of this view will be replaced with code WITHOUT doc_data querying ###
+-- ### if config param 'split_heavy_tabs' = 1, see: oltp_split_heavy_tabs_1.sql ###
+-- ################################################################################
 select h.id
 from doc_list h
 join doc_data d on h.id = d.doc_id

@@ -183,9 +183,29 @@ begin
 
             if ( not v_ddl_qdidx1 = '' ) then execute statement v_ddl_qdidx1;
             if ( not v_ddl_qdidx2 = '' ) then execute statement v_ddl_qdidx2;
-            if ( v_qd_suffix = '1000_3300' ) then -- 13.11.2015: make v_min_id_clo_res much faster
-                execute statement 'create index xqd_1000_3300_doc on xqd_1000_3300(doc_id)';
             
+
+            if ( v_qd_suffix = '1000_3300' ) then
+            begin
+                -- ###########################################################################################################
+                -- ###  c r e a t e      a d d i t i o n a l     i n d i c e s     f o r    v_min_clo_res / v_max_clo_res  ###
+                -- ###########################################################################################################
+                -- initially was 13.11.2015 ("make v_min_id_clo_res much faster"); refactored 11.01.2019: 
+                -- performance of views v_min_id_clo_res and v_max_id_clo_res can be significantly increased underlied query
+                -- will select only from SINGLE table (xqd_1000_3300) and, moreover, will have appropriate index for each view:
+                if ( v_separate_workers = 0 ) then
+                    begin
+                        -- field 'worker_id' yet present there, but always is NULL, so it is useless:
+                        execute statement 'create index xqd_1000_3300_doc_asc on xqd_1000_3300(doc_id)';
+                        execute statement 'create DESCENDING index xqd_1000_3300_doc_dec on xqd_1000_3300(doc_id)';
+                    end
+                else
+                    begin
+                        execute statement 'create index xqd_1000_3300_wkr_doc_asc on xqd_1000_3300(worker_id, doc_id)';
+                        execute statement 'create DESCENDING index xqd_1000_3300_wkr_doc_dec on xqd_1000_3300(worker_id, doc_id)';
+                    end
+            end
+
         end
     end
     if ( v_ddl_qdistr is null ) then
@@ -544,13 +564,22 @@ execute block returns(" " varchar(32765)) as
   declare v_separate_workers smallint;
 
 begin
+   
+    -- Value is defined by config parameter 'separate_workers' = 1 or 0.
+    select s.svalue 
+    from settings s 
+    where s.working_mode = upper('COMMON') and s.mcode = upper('SEPARATE_WORKERS')
+    into v_separate_workers;
+    
     v_lf = ascii_char(10);
 
     
-    " " = 'set bail on;' 
+    " " =    v_lf || 'set bail on;'
+          || v_lf || '-- #########'
           || v_lf || 'execute procedure tmp_init_autogen_qdistr_tables;'
           || v_lf || 'execute procedure tmp_init_autogen_qstorn_tables;'
-          || v_lf || 'commit;';
+          || v_lf || 'commit;'
+    ;
 
     suspend;
 
@@ -560,7 +589,8 @@ begin
     " " = 'alter view v_qdistr_multiply_1 as '; 
     " " = " " || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
     " " = " " || v_lf || 'select * from XQD_1000_1200';
-    " " = " " || v_lf || ';';
+    " " = " " || v_lf || ';'
+    ;
 
     suspend;
 
@@ -568,7 +598,8 @@ begin
     " " = 'alter view v_qdistr_multiply_2 as '; 
     " " = " " || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
     " " = " " || v_lf || 'select * from XQD_1000_3300';
-    " " = " " || v_lf || ';';
+    " " = " " || v_lf || ';'
+    ;
 
     suspend;
 
@@ -1467,32 +1498,200 @@ begin
 
 
     ----------------------------------------------------------------------------------
-    -- 13.11.2015: query to this view can be significantly faster if it is replaced 
-    -- with just single select to xqd_1000_3300 which has index on doc_id:
-    " " =  'alter view v_min_id_clo_res as' || v_lf
-        || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
-        || 'select doc_id as id' || v_lf
-        || 'from xqd_1000_3300' || v_lf
-        || 'order by doc_id' || v_lf
-        || 'rows 1;' || v_lf
+
+    -- DISABLED 11.01.2019! REPLACED WITH MORE APPROPRIATE CODE, SEE BELOW:
+    ----- 13.11.2015: query to this view can be significantly faster if it is replaced 
+    ----- with just single select to xqd_1000_3300 which has index on doc_id:
+    --" " =  'alter view v_min_id_clo_res as' || v_lf
+    --    || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
+    --    || 'select doc_id as id' || v_lf
+    --    || 'from xqd_1000_3300' || v_lf
+    --    || 'order by doc_id' || v_lf
+    --    || 'rows 1;' || v_lf
+    --;
+    --
+    --suspend;
+    --
+    --" " =  'alter view v_random_find_clo_res as' || v_lf
+    --    || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
+    --    || 'select h.id' || v_lf
+    --    || 'from doc_list h' || v_lf
+    --    || 'where h.optype_id = 1000' || v_lf
+    --    || 'and exists(' || v_lf
+    --    || '    select * from xqd_1000_3300 q' || v_lf
+    --    || '    where q.doc_id = h.id' || v_lf
+    --    || ');' || v_lf
+    --;
+    --suspend;
+    --
+    --" " = 'commit;';
+    --suspend;
+
+
+    v_body_line = v_lf
+                || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config parameter "create_with_split_heavy_tabs = 1"' || v_lf
+                || '-- ### Config parameter ''separate_workers'' = 1 --> use search in xqd_1000_3000 using @1 index with key: (@2).' || v_lf
+                || '-- ### Expected plan must contain: Q ORDER/INDEX <name_of_@1_index> // 11.01.2019' || v_lf
     ;
+    if ( v_separate_workers = 1 ) then
+        begin
 
-    suspend;
+            -------------------------------- v _ m i n _ i d  _ c l o _ r e s ------------------------------
+            " " =  v_lf
+                || 'alter view v_min_id_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'COMPOUND_ASCENDING' ), '@2', 'worker_id, doc_id')
+            ;
+            " " = " " || v_lf
+                || 'select doc_id as id' || v_lf
+                || 'from xqd_1000_3300 q' || v_lf
+                || 'where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
+                || '    q.worker_id is not distinct from '
+            ;
+            " " = " "
+                || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
+                        '(select result from fn_this_worker_seq_no)', 
+                        'fn_this_worker_seq_no()' 
+                      ) || v_lf
+                || '-- NB: column "worker_id" must present in "ORDER_BY" clause only for FB 2.5' || v_lf
+                || '-- Otherwise plan will be: SORT ((Q INDEX (...)))' || v_lf
+                || 'order by q.worker_id, q.doc_id' || v_lf
+                || 'rows 1;' || v_lf
+            ;
+            " " = " " || v_lf || 'commit;'
+            ;
+            suspend;
 
-    " " =  'alter view v_random_find_clo_res as' || v_lf
-        || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
-        || 'select h.id' || v_lf
-        || 'from doc_list h' || v_lf
-        || 'where h.optype_id = 1000' || v_lf
-        || 'and exists(' || v_lf
-        || '    select * from xqd_1000_3300 q' || v_lf
-        || '    where q.doc_id = h.id' || v_lf
-        || ');' || v_lf
-    ;
-    suspend;
 
-    " " = 'commit;';
-    suspend;
+            -------------------------------- v _ m a x _ i d  _ c l o _ r e s ------------------------------
+            " " =  v_lf
+                || 'alter view v_max_id_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'COMPOUND_DESCENDING' ), '@2', 'worker_id, doc_id')
+            ;
+            " " = " " || v_lf
+                || 'select doc_id as id' || v_lf
+                || 'from xqd_1000_3300 q' || v_lf
+                || 'where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
+                || '    q.worker_id is not distinct from '
+            ;
+            " " = " "
+                || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
+                        '(select result from fn_this_worker_seq_no)', 
+                        'fn_this_worker_seq_no()' 
+                      )
+            ;
+
+            " " = " " || v_lf
+                || '-- NB: column "worker_id" must present in ''ORDER_BY'' clause only for FB 2.5' || v_lf
+                || '-- Otherwise plan will be: SORT Q INDEX <ascending_index>' || v_lf
+                || '-- i.e. desc index will be ignored.' || v_lf
+                || '-- In FB 3.0 it is enough to specify only ''ORDER BY q.doc_id DESC'' here.'
+            ;
+
+
+            " " = " " || v_lf
+                || 'order by q.worker_id DESC, q.doc_id DESC' || v_lf
+                || 'rows 1;' || v_lf
+            ;
+            " " = " " || v_lf || 'commit;'
+            ;
+            suspend;        
+
+
+            -------------------------------- v _ r a n d o m  _ f i n d _ c l o _ r e s ------------------------------
+            " " =  'alter view v_random_find_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'COMPOUND' ), '@2', 'doc_id')
+            ;
+
+            " " = " " || v_lf
+                || 'select h.id' || v_lf
+                || 'from doc_list h' || v_lf
+                || 'where ' || v_lf
+                || '    h.optype_id = 1000' || v_lf
+                || '    and h.worker_id is not distinct from '
+            ;
+            " " = " "
+                || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
+                        '(select result from fn_this_worker_seq_no)', 
+                        'fn_this_worker_seq_no()' 
+                      )
+            ;
+
+            " " = " " || v_lf
+                || '    and exists(' || v_lf
+                || '        select * from xqd_1000_3300 q' || v_lf
+                || '        where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
+                || '            q.worker_id is not distinct from '
+            ;
+
+            " " = " "
+                || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
+                        '(select result from fn_this_worker_seq_no)', 
+                        'fn_this_worker_seq_no()' 
+                      ) || v_lf
+                || '            and q.doc_id = h.id' || v_lf
+                || '    );' || v_lf
+            ;
+            suspend;
+
+            " " = 'commit;';
+            suspend;
+
+
+        end
+    else --    ______________________________  s e p a r a t e _ w o r k e r s = 0 _________________________
+        begin
+            -------------------------------- v _ m i n _ i d  _ c l o _ r e s ------------------------------
+            " " =  v_lf
+                || 'alter view v_min_id_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN_ASCENDING' ), '@2', 'doc_id')
+            ;
+            " " = " " || v_lf
+                || 'select doc_id as id' || v_lf
+                || 'from xqd_1000_3300 q' || v_lf
+                || 'order by doc_id' || v_lf
+                || 'rows 1;' || v_lf
+            ;
+            " " = " " || v_lf || 'commit;'
+            ;
+            suspend;
+
+
+            -------------------------------- v _ m a x _ i d  _ c l o _ r e s ------------------------------
+            " " =  v_lf
+                || 'alter view v_max_id_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN_DESCENDING' ), '@2', 'doc_id')
+            ;
+            " " = " " || v_lf
+                || 'select doc_id as id' || v_lf
+                || 'from xqd_1000_3300 q' || v_lf
+                || 'order by doc_id DESC' || v_lf
+                || 'rows 1;' || v_lf
+            ;
+            " " = " " || v_lf || 'commit;'
+            ;
+            suspend;
+
+
+            -------------------------------- v _ r a n d o m  _ f i n d _ c l o _ r e s ------------------------------
+            " " =  'alter view v_random_find_clo_res as' || v_lf
+                || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN' ), '@2', 'doc_id')
+                || 'select h.id' || v_lf
+                || 'from doc_list h' || v_lf
+                || 'where ' || v_lf
+                || '    h.optype_id = 1000' || v_lf
+                || 'and exists(' || v_lf
+                || '    select * from xqd_1000_3300 q' || v_lf
+                || '    where q.doc_id = h.id' || v_lf
+                || ');' || v_lf
+            ;
+            " " = " " || v_lf || 'commit;'
+            ;
+            suspend;
+
+
+        end
+
+--and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
 
     ----------------------------------------------------------------------------------
 
@@ -1588,6 +1787,23 @@ set term ;^
 commit;
 
 -- #####################################################################################################################
+
+set term ^;
+execute block as
+begin
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.' ) then
+        execute statement 'drop procedure fn$get$random$id$subst$names';
+    else
+        execute statement 'drop function fn$get$random$id$subst$names';
+end
+^
+set term ;^
+commit;
+
+drop view name$to$substutite$min$id$;
+drop view name$to$substutite$max$id$;
+drop view name$to$substutite$search$;
+commit;
 
 set heading off;
 set list on;
