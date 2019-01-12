@@ -2724,12 +2724,25 @@ begin
                 null
               );
 
+    -- SINCE 12.01.19: v_can_skip_order_clause must be ZERO, i.e. dynamic query that
+    -- is generated in sp_get_random_id *MUST* contain 'ORDER BY ID [desc]' clause.
+    -- Benchmark was done in LI-V3.0.5.33085, for two queries with miscelan. input args:
+    -- 'select id+0 from v_random_find_non_paid_invoice where id <= ? rows 1'
+    --  == vs ==
+    -- 'select id+0 from v_random_find_non_paid_invoice where id <= ? ORDER BY ID DESC rows 1'
+    -- Performance of query *with* 'ORDER BY ID DESC' *mostly* much more better than w/o this clause:
+    -- in most cases it requires only 1 IR and 50-70 fetches
+    -- (rather than hundreds IR and 1000-2000 fetches when select without this clause)
+    -- The same result was for another view: v_random_find_non_paid_realizn.
+    -- NB: this is so only in FB 3.0, and NOT for FB 2.5!
     v_can_skip_order_clause =
         decode( a_payment_oper,
-                fn_oper_pay_from_customer(), 1,
-                fn_oper_pay_to_supplier(),   1,
+                fn_oper_pay_from_customer(), 0,
+                fn_oper_pay_to_supplier(),   0,
                 0
               );
+
+    -- Confirmed 12.01.19: performance better when use DESCEND index rather than ascend.
     v_find_using_desc_index =
         decode( a_payment_oper,
                 fn_oper_pay_from_customer(), 1,
@@ -3737,7 +3750,8 @@ begin
             fetch c_semaphores into v_semaphore_id;
             if ( row_count = 0 ) then
                 exception ex_record_not_found using('semaphores', v_this);
-            update semaphores set id = id where current of c_semaphores;
+            update semaphores set id = id, dts = 'now'
+            where current of c_semaphores;
             leave;
         end
         close c_semaphores;

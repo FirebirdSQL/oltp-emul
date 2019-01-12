@@ -948,9 +948,11 @@ recreate table ware_groups(
 recreate table semaphores(
     id dm_idb constraint pk_semaphores primary key using index pk_semaphores
     ,task dm_name
+    ,dts timestamp default 'now' -- 12.01.2019: where last time this action was done (mostly for srv_recalc_idx_stat)
     ,constraint semaphores_task_unq unique(task) using index semaphores_task_unq
 );
 commit;
+
 
 -- Log for all changes in doc_data.qty (including DELETION of rows from doc_data).
 -- Only INSERTION is allowed to this table for 'common' business operations.
@@ -8335,14 +8337,18 @@ returns(
     n int
 ) as
     declare r_max int;
-    declare v_last_recalc_idx_dts timestamp;
     declare v_dts_beg timestamp;
+    declare v_last_recalc_idx_timestamp timestamp;
     declare v_last_recalc_idx_minutes_ago int;
     declare v_this dm_dbobj = 'srv_random_unit_choice';
-    declare c_unit_for_mon_query dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of thios SP!
+    declare c_unit_for_gather_mon_data dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of this SP!
+    declare c_unit_for_recalc_idx_stat dm_dbobj = 'srv_recalc_idx_stat'; -- do NOT change the name of this SP!
     declare fn_internal_enable_mon_query smallint;
+    declare fn_internal_reind_min_interval int;
 begin
     fn_internal_enable_mon_query = 0; -- always in 2.5;  in 3.0: cast(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') as smallint)
+    fn_internal_reind_min_interval = cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int);
+
     -- refactored 18.07.2014 (for usage in init data pop)
     -- sample: select * from srv_random_unit_choice( '','creation,state_next','','removal' )
     -- (will return first randomly choosen record related to creation of document
@@ -8352,13 +8358,6 @@ begin
     a_included_kinds = coalesce( a_included_kinds, '');
     a_excluded_modes = coalesce( a_excluded_modes, '');
     a_excluded_kinds = coalesce( a_excluded_kinds, '');
-
--- disabled 14.10.2018: perf_log now is replaced with V_pref_log ("unioned" view),
--- and its underlied tables (perf_split_NN) have no index on field 'unit' (due to possible performance issues!)
---    select g.dts_beg
---    from perf_log g where g.unit = 'srv_recalc_idx_stat'
---    order by g.dts_beg desc rows 1
---    into v_last_recalc_idx_dts;
 
     if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG') is null ) then
     begin
@@ -8371,48 +8370,58 @@ begin
         -- 31.12.2018 We have to SKIP from removal or changing doc state 'backward'
         -- on PREPARING phase, i.e. since 0th to <warm_time> minute of total test time.
         -- REASON: lot of garbage will be accumulated otherwise, database "useful size" grows too slowly.
-        a_included_kinds = 'creation,state_next';
+        a_included_kinds = 'creation,state_next,service'; -- 'service' --> we can NOT skip srv_make_invnt_saldo and srv_make_money_saldo !
         a_excluded_kinds = 'removal';
     end
 
---    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG')is not null ) then -- see SP_CHECK_TO_STOP_WORK
---        v_last_recalc_idx_dts = maxvalue(v_last_recalc_idx_dts, cast(rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) );
---
---    v_last_recalc_idx_minutes_ago = coalesce( datediff(minute from v_last_recalc_idx_dts to cast('now' as timestamp)), cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int ) );
+    select coalesce(s.dts, cast('YESTERDAY' as timestamp))
+    from rdb$database
+    left join semaphores s on 1=1
+    where s.task = 'srv_recalc_idx_stat'
+    into v_last_recalc_idx_timestamp;
+
+    -- Value of 'v_last_recalc_idx_minutes_ago'  will be compared with minimal
+    -- threshold for recalc index statistics: fn_internal_reind_min_interval:
+    v_last_recalc_idx_minutes_ago = datediff( minute from v_last_recalc_idx_timestamp to cast('now' as timestamp) );
 
     r_max = rdb$get_context('USER_SESSION', 'BOP_RND_MAX');
     if ( r_max is null ) then
     begin
-        select max( b.random_selection_weight ) from business_ops b into r_max;
+        select max( o.random_selection_weight )
+        from business_ops o
+        -- unit that does recalculation of index statistics
+        -- will be taken in account separately, by comparing
+        -- v_last_recalc_idx_minutes_ago and fn_internal_reind_min_interval()
+        -- ==> we have to EXCLUDE it from this recordset:
+        where o.unit <> :c_unit_for_recalc_idx_stat
+        into r_max;
         rdb$set_context('USER_SESSION', 'BOP_RND_MAX', r_max);
     end
 
     r=rand()*r_max;
     delete from tmp$perf_log p where p.stack = :v_this;
 
+    -- 12.01.2019. We add into tmp$ table for choosing:
+    -- 1) all except unit that recalculates index statistics';
+    -- 2) unit that does idx recalc - BUT ONLY if enough number of minutes passed since it previous launch
+    --    (i.e. value of business_ops.random_selection_weight N/A for this unit!)
     insert into tmp$perf_log(unit, aux1, aux2, stack)
     select o.unit, o.sort_prior, o.random_selection_weight, :v_this
     from business_ops o
     where o.random_selection_weight >= :r
-        and (:fn_internal_enable_mon_query = 1 or o.unit <> :c_unit_for_mon_query) -- do NOT choose srv_fill_mon if mon query disabled
--- disabled 14.10.2018: perf_log now is replaced with V_pref_log ("unioned" view),
--- and its underlied tables (perf_split_NN) have no index on field 'unit' (due to possible performance issues!)
--- Decided to reduce frequency by assigned low value for probability of srv_recalc_idx_stat calls.
---        and ( -- 27.11.2015: skip call of index statistics recalc if it was done not so far:
---                o.unit <> 'srv_recalc_idx_stat'
---                or
---                o.unit = 'srv_recalc_idx_stat'
---                and
---                    :v_last_recalc_idx_minutes_ago
---                    >=
---                    cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int )
---            )
+        and o.unit <> :c_unit_for_recalc_idx_stat
+        and (:fn_internal_enable_mon_query = 1 or o.unit <> :c_unit_for_gather_mon_data) -- do NOT choose srv_fill_mon if mon query disabled
         and (:a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
         and (:a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
         and (:a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
         and (:a_excluded_kinds = '' or :a_excluded_kinds||',' NOT containing trim(o.kind)||',' )
+    UNION ALL
+    select o.unit, o.sort_prior, o.random_selection_weight, :v_this
+    from business_ops o
+    where :v_last_recalc_idx_minutes_ago >= :fn_internal_reind_min_interval and o.unit = :c_unit_for_recalc_idx_stat
     ;
-    c = row_count;
+
+    c = maxvalue(row_count, 1); -- 12.01.2019, mistic! can not understand but somehow row_count can be ZERO here!
     n = cast( 0.5+rand()*(c+0.5) as int );
     n = minvalue(maxvalue(1, n),c);
 

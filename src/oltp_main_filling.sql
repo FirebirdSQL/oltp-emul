@@ -108,7 +108,7 @@ commit;
 -------------------------------------------------------------------------------
 delete from semaphores;
 insert into semaphores(id, task) values(1, 'srv_make_money_saldo');
-insert into semaphores(id, task) values(2, 'srv_recalc_idx_stat');
+insert into semaphores(id, task, dts) values(2, 'srv_recalc_idx_stat', 'YESTERDAY');
 insert into semaphores(id, task) values(3, 'srv_make_invnt_saldo');
 commit;
 
@@ -582,13 +582,17 @@ insert into business_ops(
         unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
 values('srv_make_invnt_saldo',        'service',  'service',     35,                      990,        9990,                           'service: total inventory turnovers');
 
+-- 12.01.2019. Increased frequency for gathering money turnovers from 25 to 33.
 insert into business_ops(
         unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
-values('srv_make_money_saldo',        'service',  'service',     25,                      995,        9991,                           'service: total monetary turnovers');
+values('srv_make_money_saldo',        'service',  'service',     33,                      995,        9991,                           'service: total monetary turnovers');
 
+-- 12.01.2019. Algorithm of selection SP srv_recalc_idx_stat in srv_random_unit_choice has been changed: this routine must be launched **ALWAYS**
+-- when number of minutes since its previous run exceeds config parameter 'recalc_idx_min_interval' (e.g. 30 minutes). Otherwise it should be SKIPPED from selection.
+-- In order to make this possible, new field was added to table 'semaphores' with storing TIMESTAMP of last run.
 insert into business_ops(
         unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
-values('srv_recalc_idx_stat',         'service',  'service',      3,                      997,        9992,                           'service: refresh index statistics');
+values('srv_recalc_idx_stat',         'service',  'service',     99,                      997,        9992,                           'service: refresh index statistics');
 
 
 -- need only to check FB stability against extremely high frequency of MON$-querying:

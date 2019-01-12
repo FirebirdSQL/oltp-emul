@@ -3657,7 +3657,8 @@ begin
             fetch c_semaphores into v_semaphore_id;
             if ( row_count = 0 ) then
                 exception ex_record_not_found;
-            update semaphores set id = id where current of c_semaphores;
+            update semaphores set id = id, dts = 'now'
+            where current of c_semaphores;
             leave;
         end
         close c_semaphores;

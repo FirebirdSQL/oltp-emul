@@ -2661,27 +2661,43 @@ catch_err $tmperr "Could not update DDL according to current value of 'used_in_r
 # Value will be adjusted after test call of sleep UDF that must present in the script "$sleep_ddl" from config:
 sleep_mul=1
 
-#if [[ $sleep_max -gt 0 &&  -s "$sleep_ddl" ]]; then
-
+# 12.01.2019
 # NOTE: we have to declare UDF and evaluate sleep_mul even when sleep_max = 0 - it can be required
 # to use UDF for delays between every calls of SP 'SRV_FILL_MON_CACHE_MEMORY' when  mon_unit_perf = 2
 # (this will be done in dedicated isql session N1)
+must_decl_udf=0
+
 if [ -s "$sleep_ddl" ]; then
-    #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    #:::   d e c l a r e      e x t e r n a l     S l e e p  U D F   :::
-    #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $sleep_ddl"
-    display_intention "Attempt to apply SQL script '$sleep_ddl' that defines UDF for pauses in execution." "$run_isql" "$tmpclg" "$tmperr"
-    $run_isql 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Could not create/update UDF for sleep. Check file $sleep_ddl"
-    if grep -q "multiplier_for_sleep_arg" $tmpclg; then
-        #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-        #:::   a d j u s t     m u l t i p l i e r    t o    i n p u t     f o r   g e t    d e l a y   i n   s e c o n d s  :::
-        #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-        sleep_mul=$( grep -i "multiplier_for_sleep_arg" $tmpclg | awk '{print $2}' )
+
+    if [ $mon_unit_perf -eq 2 ]; then
+        must_decl_udf=1
+    else
+        if [ $sleep_max -gt 0 ]; then
+            must_decl_udf=1
+        fi
+    fi
+
+    if [ $must_decl_udf -eq 1 ]; then
+        #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+        #:::   d e c l a r e      e x t e r n a l     S l e e p  U D F   :::
+        #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+        run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $sleep_ddl"
+        display_intention "Attempt to apply SQL script '$sleep_ddl' that defines UDF for pauses in execution." "$run_isql" "$tmpclg" "$tmperr"
+        $run_isql 1>$tmpclg 2>$tmperr
+        catch_err $tmperr "Could not create/update UDF for sleep. Check file $sleep_ddl"
+        if grep -q "multiplier_for_sleep_arg" $tmpclg; then
+            #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+            #:::   a d j u s t     m u l t i p l i e r    t o    i n p u t     f o r   g e t    d e l a y   i n   s e c o n d s  :::
+            #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+            sleep_mul=$( grep -i "multiplier_for_sleep_arg" $tmpclg | awk '{print $2}' )
+        fi
+    else
+        sho "NOTE: config parameter 'sleep_ddl' is forcedly assigned to EMPTY string because of other parameters" $log4all
+        sho "that allow SKIP usage of UDF now: mon_unit_perf=$mon_unit_perf, sleep_max=$sleep_max" $log4all
+        unset sleep_ddl
     fi
 else
-    sho "Script defined by parameter 'sleep_ddl' does not exist. Sessions will work without UDF usage." $log4all   
+    sho "Script defined by parameter 'sleep_ddl' does not exist. Sessions will work without UDF usage." $log4all
 fi
 
 rm -f $tmpclg $tmperr $tmpchk
@@ -2911,7 +2927,7 @@ do
     # --- do NOT --- sh ./oltp_isql_run_worker.sh . . .
 
     #echo ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}
-    
+
     ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}&
     #                            1      2      3     4      5                   6                   7                8                  9
 done
