@@ -121,7 +121,7 @@
     #    by 'sleep_ddl' parameter.
     # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
 
-    sleep_max=20
+    sleep_max=0
 
 
     # Name of .sql script with declaration of UDF that will be used for SLEEPING if sleep_max greater than 0.
@@ -141,7 +141,6 @@
     # Default value of UDFaccess parameter in Firebird 4.0 became None rather then previous ('Restrict UDF').
     # You have to uncomment it and specify its value to some existing server-side folder.
 
-
     sleep_ddl=.\oltp_sleepUDF_win.sql
 
 
@@ -157,7 +156,7 @@
 
     # Minimal interval in minutes between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics
     # and can take too long time (more than 3-4 minutes per table on database with size ~100Gb).
-    # See SP 'srv_random_unit_choice' for choising algorithm:
+    # See SP 'srv_random_unit_choice' for choising algorithm. Recommended value: not less than 30 minutes.
 
     recalc_idx_min_interval = 30
 
@@ -183,7 +182,7 @@
 
     separate_workers = 1
 
-    # How many ISQL sessions we expect to be launched on server.
+    # How many ISQL sessions we expect to be launched on server. This value is used when database is filled by initial data.
     # It is strongly recommended to choose such value of this parameter that will be close to number of actual launched ISQL sessions.
     # Recommened value: at least 100
     expected_workers = 100
@@ -493,12 +492,12 @@
     # Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
     # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
 
-    run_db_statistics = 1
+    run_db_statistics = 0
 
     # Do we want to include into final report result of database validation (1=yes; 0=no) ?
     # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
 
-    run_db_validation = 1
+    run_db_validation = 0
 
     # Should final report be saved in file with name which contain info about FB, database, test settings ?
     # If no, leave this parameter commented. In that case final report will be always saved with the same name.

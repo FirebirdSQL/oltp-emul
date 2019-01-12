@@ -152,7 +152,7 @@
 
     # Minimal interval in minutes between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics
     # and can take too long time (more than 3-4 minutes per table on database with size ~100Gb).
-    # See SP 'srv_random_unit_choice' for choising algorithm:
+    # See SP 'srv_random_unit_choice' for choising algorithm. Recommended value: not less than 30 minutes.
 
     recalc_idx_min_interval = 30
 
@@ -178,7 +178,7 @@
 
     separate_workers = 1
 
-    # How many ISQL sessions we expect to be launched on server.
+    # How many ISQL sessions we expect to be launched on server. This value is used when database is filled by initial data.
     # It is strongly recommended to choose such value of this parameter that will be close to number of actual launched ISQL sessions.
     # Recommened value: at least 100
     expected_workers = 100
@@ -308,13 +308,13 @@
 
     # Recommended value: at least 30.
 
-    warm_time = 10
+    warm_time = 30
 
 
     # Limit (in minutes) to measure operations before test autostop itself:
     # Recommended value: at least 120
 
-    test_time = 20
+    test_time = 120
 
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.

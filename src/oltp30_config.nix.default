@@ -3,7 +3,7 @@
 # To get last version type following command:
 # git clone https://github.com/FirebirdSQL/oltp-emul .
 # This file is used for launching test and ISQL sessions on POSIX host
-# with running Firebird 2.5.
+# with running Firebird 3.0
 # Parameters are extracted by '1run_oltp_emul.sh' command scenario.
 ####################################################################
 
@@ -116,7 +116,7 @@
     # by 'sleep_ddl' parameter.
     # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
 
-    sleep_max=20
+    sleep_max=0
 
 
     # Name of .sql script with declaration of UDF that will be used for SLEEPING if sleep_max greater than 0.
@@ -149,7 +149,7 @@
 
     # Minimal interval in minutes between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics
     # and can take too long time (more than 3-4 minutes per table on database with size ~100Gb).
-    # See SP 'srv_random_unit_choice' for choising algorithm:
+    # See SP 'srv_random_unit_choice' for choising algorithm. Recommended value: not less than 30 minutes.
 
     recalc_idx_min_interval = 30
 
@@ -175,7 +175,7 @@
 
     separate_workers = 1
 
-    # How many ISQL sessions we expect to be launched on server.
+    # How many ISQL sessions we expect to be launched on server. This value is used when database is filled by initial data.
     # It is strongly recommended to choose such value of this parameter that will be close to number of actual launched ISQL sessions.
 
     # Recommened value: at least 100
