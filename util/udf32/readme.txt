@@ -1,8 +1,7 @@
-This folder contains UDFs for running on 64-bit platforms.
-Followind commands can be used to extract UDF files:
+This folder contains UDF for running on 32-bit platforms (checked on Windows XP SP3).
+Followind command can be used to extract UDF file:
 ===
-    1. Windows: 7zip -x -tzip .\SleepUDF.dll.zip 
-    2. POSIX:   bzip2 -dk ./SleepUDF.so.bz2
+    7zip -x -tzip .\SleepUDF.dll.zip 
 ===
 
 Put extracted binary into any folder that can be accessed according to 'UDFaccess' parameter from firebird.conf. 
