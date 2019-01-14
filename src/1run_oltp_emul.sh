@@ -2463,6 +2463,23 @@ run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
 display_intention "Check whether DB is avaliable and has all needed objects." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 
+if grep -q -i "Permission denied" $tmperr; then
+	cat <<- EOF
+		#######################################################################
+		DBMS account ('firebird') does no have sufficient rights to open file that
+		is specified by config parameter 'dbnm' (read/write access is required):
+		$dbnm
+		#######################################################################
+		
+		Content of STDERR file '$tmperr':
+	EOF
+	echo
+	cat $tmperr
+	echo
+	pause Press any key to FINISH this script. . .
+	exit 1
+fi
+
 # We must stop this .sh only in case when database has unsupported ODS or offline etc.
 # We must CONTINUE if $tmpchk finished with error like 'table semaphores not found'.
 
