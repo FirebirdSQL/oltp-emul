@@ -2029,6 +2029,15 @@ begin
     --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
     --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
     
+    -- 16.01.2019: this SP can be called from outer .sql where UDF sleep() is called
+    -- in loop with SMALL pause = 1 second and checking whether test has to be
+    -- terminated or no (between each iteration, i.e. while this loop not ends)
+    -- Loop can work in READ_ONLY transaction, thus we have to check it and SKIP
+    -- any actions that attempts to write data:
+    if ( rdb$get_context('SYSTEM','READ_ONLY') = upper('true') ) then
+        exit;
+    --########
+
     if ( (a_need_to_stop < 0 or gen_id(g_stop_test, 0) <= 0) and (select result from fn_remote_process) NOT containing 'IBExpert' )
     then
         begin

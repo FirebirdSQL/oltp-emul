@@ -1176,9 +1176,18 @@ EOF
 			-- oOo    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  oOo
 			-- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
 			set transaction read only read committed;
-			set list on;
+			set heading off;
 			set term ^;
-			execute block returns( session1_delay_before_mon_query numeric(12,3) ) as
+			execute block returns( " " varchar(128) ) as
+			begin
+			    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
+			    begin
+			        " " = 'This sesion is dedicated to query mon tables only. Take pause: use UDF $sleep_udf()...';
+			        suspend;
+			    end
+			end
+			^
+			execute block returns( " " varchar(65), session1_delay_before_mon_query numeric(12,3) ) as
 			    declare c int;
 			    declare d int;
 			    declare t timestamp;
@@ -1207,6 +1216,7 @@ EOF
 			                exception;
 			            end
 			        end
+			        " " = 'SID=1. Completed pause between queries to monitoring tables, ms: ';
 			        session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
 			        suspend;
 			    end
@@ -1215,6 +1225,7 @@ EOF
 			set term ;^
 			commit; ------------------------ [ 2b ]
 			set list off;
+			set heading on;
 			EOF
                     else # sleep_udf is UNDEFINED
 			cat <<-EOF >>$sql
@@ -1427,17 +1438,27 @@ EOF
 		-- ##############################################################
 		-- ###   S H O W    S E L E C T E D     U N I T     N A M E   ###
 		-- ##############################################################
+
 		set heading off;
-		select lpad('',40,'+') || ' Action # $i of $lim ' || rpad('',40,'+') as " " from rdb\$database;
+		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
+		-- in case of extremely high workload (when number of attachments is ~1000 or more).
+		set term ^;
+		execute block returns(" " varchar(150)) as
+		begin
+		    " " = lpad('',50,'+') || ' Action # $i of $lim ' || rpad('',50,'+');
+		    suspend;
+		end
+		^
+		set term ;^
 		set heading on;
 
-		set width dts 12;
+		set width dts 24;
 		set width trn 14;
 		set width att 14;
 		set width unit 31;
 		set width elapsed_ms 10;
 		set width msg 16;
-		set width add_info 40;
+		set width add_info 20;
 		set width mon_logging_info 20;
 
 		-- ensure that just before call application unit
@@ -1445,15 +1466,31 @@ EOF
 		delete from tmp\$perf_log;
 
 		set list off;
-		select
-		      substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts
-		      ,'tra_'||current_transaction                                     as trn
-		      ,'att_'||current_connection                                      as att
-		      ,rdb\$get_context('USER_SESSION','SELECTED_UNIT')               as unit
-		      ,cast( rdb\$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER' ) as int ) as worker_seq
-		      ,'start'                                                         as msg
-		      ,'iter # $i  of $lim'                                            as add_info
-		from rdb\$database;
+		
+		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
+		-- in case of extremely high workload (when number of attachments is ~1000 or more).
+		set term ^;
+		execute block returns( dts varchar(24), trn varchar(20), att varchar(20), unit varchar(50), worker_seq int, msg varchar(16), add_info varchar(40) ) as
+		begin
+		    dts = cast(current_timestamp as varchar(24)); --  substring(cast(current_timestamp as varchar(24)) from 12 for 12);
+		    trn = 'tra_'||current_transaction;
+		    att = 'att_'||current_connection;
+		    unit = rdb\$get_context('USER_SESSION','SELECTED_UNIT'); 
+		    worker_seq = cast( rdb\$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER' ) as int ); 
+		    msg = 'start';
+		    add_info = 'iter # $i  of $lim';
+		    suspend;
+		end
+		^
+		set term ^;
+
+		-- *** RESULT: ***
+		-- ++++++++++++++++++++++++++++++++++++++++ Action # 4 of 300 ++++++++++++++++++++++++++++++++++++++++ 
+		
+		-- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
+		-- ======================= ============== ============== =============================== ============ ================ ==================
+		-- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            iter # 4  of 300  
+
 
 		SET STAT ON;
 
@@ -1568,12 +1605,12 @@ EOF
 			    -- Gather mon$ tables BEFORE run app unit.
 			    -- Add second row to GTT tmp\$mon_log - statistics on 'per unit' basis.
 			    -- Note: for FB 3.0 - also add first rowset into table tmp\$mon_log_table_stats.
-			    select count(*) from srv_fill_tmp_mon
-			    (
+			    select count(*)
+			    from srv_fill_tmp_mon (
 			            rdb\$get_context('USER_SESSION','MON_ROWSET')    -- :a_rowset
 			           ,1                                                -- :a_ignore_system_tables
 			           ,rdb\$get_context('USER_SESSION','SELECTED_UNIT') -- :a_unit
-			           ,coalesce(                                        -- :a_info
+			           ,coalesce(                                        -- :a_info ==> will be writted into mon_log.add_info, see SP: SRV_FILL_MON
 			                 rdb\$get_context('USER_SESSION','ADD_INFO') -- aux info, set in APP units only!
 			                ,rdb\$get_context('USER_SESSION','RUN_RESULT')
 			               )
@@ -1697,26 +1734,36 @@ EOF
 	cat <<- "EOF" >>$sql
 
 		-- Output results of application unit run:
+		set width dts 24;
+		set width trn 14;
+		set width att 14;
+		set width unit 31;
+		set width elapsed_ms 10;
 		set width msg 20;
-		select
-		    substring(cast(current_timestamp as varchar(24)) from 12 for 12) as dts
-		    ,'tra_' || rdb$get_context('USER_SESSION','APP_TRANSACTION') trn
-		    ,rdb$get_context('USER_SESSION','SELECTED_UNIT') as unit
-		    ,lpad(
-		           cast(
-		                 datediff(
-		                   millisecond
-		                   from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
-		                   to   cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
-		                        )
-		                as varchar(10)
-		               )
-		          ,10
-		          ,' '
-		        ) as elapsed_ms
-		    ,rdb$get_context('USER_SESSION', 'RUN_RESULT') as msg
-		    ,rdb$get_context('USER_SESSION','ADD_INFO') as add_info
-		from rdb$database;
+		set width add_info 60; -- 16.01.2019: increase width for add_info
+		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
+		-- in case of extremely high workload (when number of attachments is ~1000 or more).
+		set term ^;
+		execute block returns ( dts varchar(24), unit varchar(50), elapsed_ms int, msg varchar(80), add_info varchar(80) ) as
+		begin
+		    dts = cast(current_timestamp as varchar(24)); --  substring(cast(current_timestamp as varchar(24)) from 12 for 12);
+		    -- trn = 'tra_' || rdb$get_context('USER_SESSION','APP_TRANSACTION');
+		    unit = rdb$get_context('USER_SESSION','SELECTED_UNIT');
+		    elapsed_ms = datediff( millisecond 
+		                           from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
+		                           to cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'),24) as timestamp)
+		                         );
+		    msg = rdb$get_context('USER_SESSION', 'RUN_RESULT');
+		    add_info = rdb$get_context('USER_SESSION','ADD_INFO');
+		    suspend;
+		end
+		^
+		set term ;^
+		-- *** RESULT: *** (after business operation finish)
+		-- DTS          TRN            UNIT                            ELAPSED_MS MSG                  ADD_INFO
+		-- ============ ============== =============================== ========== ==================== ========================================
+		-- 22:09:21.823 tra_663        sp_supplier_order                     9013 OK, 5 rows           doc=211938601: created Ok
+		--                                                                        error, gds=335544517
 
 	EOF
 

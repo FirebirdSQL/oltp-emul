@@ -4907,6 +4907,9 @@ as
     declare v_dts_beg timestamp;
     declare v_info dm_info;
     declare v_dbkey dm_dbkey;
+    declare v_meta_cache_size bigint;
+    declare v_statements_running_cnt smallint;
+    declare v_statements_stalled_cnt smallint;
     declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
 begin
     -- 16.12.2018
@@ -4992,16 +4995,31 @@ begin
             m.mon$stat_group = u.stat_gr
     ) m
     cross join mon$database d
-    returning rdb$db_key into v_dbkey;
+    returning
+         rdb$db_key
+        ,meta_cache_size
+        ,page_cache_operating_stm_cnt
+        ,data_transfer_paused_stm_cnt
+    into
+        v_dbkey
+        ,v_meta_cache_size
+        ,v_statements_running_cnt
+        ,v_statements_stalled_cnt
+    ;
 
     v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
 
     update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
     where rdb$db_key = :v_dbkey;
 
-    v_info='done for ' || v_elapsed_ms || ' ms';
-    -- ::: nb ::: do NOT use the name 'ADD_INFO', it is reserved to common app unit result!
-    rdb$set_context( 'USER_SESSION','MON_INFO', v_info ); -- to be displayed in log of 1run_oltp_emul.bat
+    -- meta: 999777555111, stm_running: 29871, stm_stalled: 19955
+    v_info = 'meta: ' || lpad(v_meta_cache_size,12,' ')
+        || ', stm_running ' || lpad(v_statements_running_cnt,5,' ')
+        || ', stm_stalled ' || lpad(v_statements_stalled_cnt,5,' ')
+    ;
+
+    rdb$set_context( 'USER_SESSION','ADD_INFO', v_info ); -- to be displayed in log of ISQL, SID=1
+
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(0, v_this, null, v_info );
 

@@ -434,15 +434,19 @@ do
 
   if [ $cancel_test -eq 1 ]; then
 
-    sho "SID=$sid. Saving data about estimated performance for displaying later in final report." $sts
-
+    sho "SID=$sid. Filtering $log for phrase EST_OVERALL..." $sts
     grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
+
+    sho "SID=$sid. Process result of filtering: generate script for insert rows into PERF_ESTIMATED table" $sts
+
     while read s
     do
         a=( $s )
         echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
     done < $tmpsidlog >$tmpsidsql
     echo commit\;>>$tmpsidsql
+
+    sho "SID=$sid. Generation of INSERT statements completed. Now execute script $tmpsidsql" $sts
 
     $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
     rm -f $tmpsidsql $tmpsidlog $tmpsiderr
