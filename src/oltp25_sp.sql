@@ -3286,8 +3286,9 @@ begin
     if ( v_deferred_to_next_time = 1 ) then
     begin
         -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
-        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record msg;
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; -- current unit: srv_make_invnt_saldo
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
+
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3525,8 +3526,8 @@ begin
     if ( coalesce(v_deferred_to_next_time,0) <> 0) then
     begin
         -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
-        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record msg;
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; --  current unit: srv_make_money_saldo
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
     end
 
     -- add to performance log timestamp about start/finish this unit:
@@ -3685,9 +3686,8 @@ begin
     if ( v_deferred_to_next_time = 1 ) then
     begin
        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
-        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred';
-        exception ex_cant_lock_semaphore_record msg;
-        exit;
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; --  current unit: srv_recalc_idx_stat
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
     end
 
     -- add to performance log timestamp about start/finish this unit:

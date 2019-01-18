@@ -331,10 +331,12 @@ do
   # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error // token unkown et al
   # 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
   # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
-  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000"
+  # 22001 ==> string/num overflow // when resulting string within auto-generated EB can not fit in declared size of output variable
+  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000\|SQLSTATE = 22001"
   syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
   if [ $syntax_err_cnt -gt 0 ] ; then
-      sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
+      sho "SID=$sid. Syntax / string-arith-overflow errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern." $sts
+      sho "SID=$sid. Session has finished its job: auto-generated .SQL script is invalid." $sts
       ###################################################
       # ....................  e x i t ...................
       ###################################################

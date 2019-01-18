@@ -1377,7 +1377,7 @@ goto :end_of_test
 
                               echo set transaction read only read committed;
                               echo set term ^^;
-                              echo execute block returns(" " varchar(128^)^) as
+                              echo execute block returns(" " varchar(150^)^) as
                               echo     declare v_lf char(1^);
                               echo     declare SECONDS_IN_MINUTE smallint = 60;
                               echo     declare taken_pause_in_seconds int;
@@ -1387,11 +1387,11 @@ goto :end_of_test
                               echo         begin
                               echo             -- %mon_query_interval%: see config parameter 'mon_query_interval'
                               echo             -- MAXVALUE( %warm_time + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
-                              echo             taken_pause_in_seconds = minvalue( %mon_query_interval%, maxvalue( %warm_time + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
+                              echo             taken_pause_in_seconds = minvalue( %mon_query_interval%, maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
                               echo             rdb$set_context( 'USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds ^);
                               echo             " " = v_lf ^|^| cast('now' as timestamp^) 
-                              echo                        ^|^| '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause
-                              echo                       '^|^| taken_pause_in_seconds ^|^| ' s.'
+                              echo                        ^|^| '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause '
+                              echo                        ^|^| taken_pause_in_seconds ^|^| ' seconds.'
                               echo             ;
                               @rem             15.12.2018 18:23:23.333. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause NNN s.
                               echo         end
@@ -1536,8 +1536,8 @@ goto :end_of_test
                                       echo     begin
                                       echo         -- CONSTANT DELAY:
                                       echo         -- %mon_query_interval%: see config parameter 'mon_query_interval'
-                                      echo         -- maxvalue( %warm_time + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
-                                      echo         c = minvalue( %mon_query_interval%, maxvalue( %warm_time + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
+                                      echo         -- maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
+                                      echo         c = minvalue( %mon_query_interval%, maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
                                       echo         t = 'now';
                                       echo         while (c ^> 0^) do
                                       echo         begin
@@ -1604,12 +1604,17 @@ goto :end_of_test
               echo -- ################################################################
               echo.
               echo set transaction no wait %nau%; -- check oltp%fb%_config.win for optional setting NO AUTO UNDO
-              echo set echo on;
-              echo set list on;
-              echo select gen_id(g_stop_test, 0^) as current_g_stop_test from rdb$database;
-              echo set list off;
-              echo set echo off;
-              echo.
+              echo set heading off;
+              echo set term ^^;
+              echo -- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
+              echo -- in case of extremely high workload when number of attachments is ~1000 or more.
+              echo execute block returns(" " varchar(65^)^) as
+              echo begin
+              echo     " " = 'Current value of ''stop''-flag: g_stop_test = ' ^|^| lpad( gen_id(g_stop_test, 0^), 18, ' '^);
+              echo     suspend;
+              echo end^^
+              echo set term ;^^
+              echo set heading on;
 
               echo -- Config parameter 'unit_selection_method'=%unit_selection_method%
               if /i .%unit_selection_method%.==.random. (
@@ -1788,35 +1793,55 @@ goto :end_of_test
           )
 
           (
-              echo set width dts 12;
-              echo set width trn 14;
-              echo set width att 14;
-              echo set width unit 31;
-              echo set width elapsed_ms 10;
-              echo set width msg 16;
-              echo set width add_info 40;
-              echo set width mon_logging_info 20;
               echo.
               echo -- ensure that just before call application unit
               echo -- table tmp$perf_log is really EMPTY:
               echo delete from tmp$perf_log;
               echo.
+              echo -- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
+              echo -- in case of extremely high workload when number of attachments is ~1000 or more.
               echo set heading off;
-              echo select lpad('',40,'+'^) ^|^| ' Action # %%i of %lim% ' ^|^| rpad('',40,'+'^) as " "
-              echo from rdb$database;
+              echo set term ^^;
+              echo execute block returns(" " varchar(150^)^) as
+              echo begin
+              echo     " " = lpad('',50,'+'^) ^|^| ' Action # %%i of %lim% ' ^|^| rpad('',50,'+'^) ;
+              echo     suspend;
+              echo end^^
+              echo set term ;^^
               echo set heading on;
               echo.
+              echo set width dts 24;
+              echo set width trn 14;
+              echo set width att 14;
+              echo set width unit 31;
+              echo set width elapsed_ms 10;
+              echo set width msg 16;
+              echo set width add_info 20;
+              echo set width mon_logging_info 20;
+
               echo --------------- before run app unit: show it's NAME --------------
               echo set list off;
-              echo select
-              echo     substring(cast(current_timestamp as varchar(24^)^) from 12 for 12^) as dts
-              echo     ,'tra_'^|^|current_transaction                                      as trn
-              echo     ,'att_'^|^|current_connection                                       as att
-              echo     ,rdb$get_context('USER_SESSION','SELECTED_UNIT'^)                   as unit
-              echo     ,cast(rdb$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER'^) as int^) as worker_seq
-              echo     ,'start'                                                            as msg
-              echo     ,'iter # %%i  of %lim%'                                             as add_info
-              echo from rdb$database;
+              echo -- 18.01.2019. Avoid from querying rdb$database: this can affect on performance
+              echo -- in case of extremely high workload when number of attachments is ~1000 or more.
+              echo set term ^^;
+              echo execute block returns( dts varchar(24^), trn varchar(20^), att varchar(20^), unit varchar(50^), worker_seq int, msg varchar(16^), add_info varchar(40^) ^) as
+              echo begin
+              echo     dts = cast(current_timestamp as varchar(24^)^);
+              echo     trn = 'tra_' ^|^| current_transaction;
+              echo     att = 'att_' ^|^| current_connection;
+              echo     unit = rdb$get_context('USER_SESSION','SELECTED_UNIT'^); 
+              echo     worker_seq = cast( rdb$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER' ^) as int ^); 
+              echo     msg = 'start';
+              echo     add_info = 'iter # 1  of 300';
+              echo     suspend;
+              echo end^^
+              echo set term ;^^
+              echo -- *** RESULT: ***
+              echo -- ++++++++++++++++++++++++++++++++++++++++++++++++++ Action # 4 of 300 ++++++++++++++++++++++++++++++++++++++++++++++++++
+              echo.	
+              echo -- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
+              echo -- ======================= ============== ============== =============================== ============ ================ ==================
+              echo -- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            iter # 4  of 300  
               echo.
               echo SET STAT ON;
               echo -- SET BAIL ON; -- 28.09.2018: we have to cancel script if any error occured during selection business unit to be run
@@ -2057,7 +2082,7 @@ goto :end_of_test
                   echo     rdb$get_context('USER_SESSION','SELECTED_UNIT'^) is distinct from 'TEST_WAS_CANCELLED'
                   echo ;
                   echo set list off;
-              )>>%generated_sql%
+              ) >> %generated_sql%
           )
           @rem mode == run_test
 
@@ -2070,27 +2095,37 @@ goto :end_of_test
             echo -- Output results of application unit run:
             echo -- current_timestamp, Tx, selected_unit, elapsed_ms, result message and add_info
             echo.
+            echo set width dts 24;
+            echo set width trn 14;
+            echo set width att 14;
+            echo set width unit 31;
+            echo set width elapsed_ms 10;
             echo set width msg 20;
-            echo select
-            echo     substring(cast(current_timestamp as varchar(24^)^) from 12 for 12^) as dts
-            echo     ,'tra_'^|^|rdb$get_context('USER_SESSION','APP_TRANSACTION'^) trn
-            echo     ,rdb$get_context('USER_SESSION','SELECTED_UNIT'^) as unit ------------ BUSINESS OP THAT JUST HAS COMPLETED
-            echo     ,lpad(
-            echo            cast(
-            echo                  datediff(
-            echo                    millisecond
-            echo                    from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^),24^) as timestamp^)
-            echo                    to   cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^),24^) as timestamp^)
-            echo                         ^)
-            echo                 as varchar(10^)
-            echo                ^)
-            echo           ,10
-            echo           ,' '
-            echo         ^) as elapsed_ms
-            echo     ,rdb$get_context('USER_SESSION', 'RUN_RESULT'^) as msg
-            echo     ,rdb$get_context('USER_SESSION','ADD_INFO'^) as add_info
-            echo from rdb$database;
-          )>>%generated_sql%
+            echo set width add_info 60; -- 16.01.2019: increase width for add_info
+            echo -- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
+            echo -- in case of extremely high workload when number of attachments is ~1000 or more.
+            echo set term ^^;
+            echo execute block returns ( dts varchar(24^), unit varchar(50^), elapsed_ms int, msg varchar(80^), add_info varchar(80^) ^) as
+            echo begin
+            echo     dts = cast(current_timestamp as varchar(24^)^);
+            echo     -- trn = 'tra_' ^|^| rdb$get_context('USER_SESSION','APP_TRANSACTION'^);
+            echo     unit = rdb$get_context('USER_SESSION','SELECTED_UNIT'^); ------------ BUSINESS OP THAT JUST HAS COMPLETED
+            echo     elapsed_ms = datediff( millisecond 
+            echo                            from cast(left(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^),24^) as timestamp^)
+            echo                            to cast(right(rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^),24^) as timestamp^)
+            echo                          ^);
+            echo     msg = rdb$get_context('USER_SESSION', 'RUN_RESULT'^);
+            echo     add_info = rdb$get_context('USER_SESSION','ADD_INFO'^);
+            echo     suspend;
+            echo end^^
+            echo set term ;^^
+            echo -- *** RESULT: *** /after business operation finish/
+            echo -- DTS          TRN            UNIT                            ELAPSED_MS MSG                  ADD_INFO
+            echo -- ============ ============== =============================== ========== ==================== ========================================
+            echo -- 22:09:21.823 tra_663        sp_supplier_order                     9013 OK, 5 rows           doc=211938601: created Ok
+            echo --                                                                        error, gds=335544517
+
+          ) >> %generated_sql%
 
           if /i .%mode%.==.init_pop. (
             (
