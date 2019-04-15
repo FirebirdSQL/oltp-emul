@@ -573,7 +573,7 @@ order by 3 desc nulls first,1,2
 create or alter view z_rules_for_qdistr as
 -- 4debug
 select r.mode, r.snd_optype_id, so.mcode snd_mcode, r.rcv_optype_id, ro.mcode rcv_mcode
-from rules_for_qdistr r
+from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
 left join optypes so on r.snd_optype_id = so.id
 left join optypes ro on r.rcv_optype_id = ro.id
 ;
@@ -664,7 +664,8 @@ from(
         from doc_data d
         join doc_list h on d.doc_id = h.id
     ) d
-    inner join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
+    inner join v_rules_for_qdistr p  -- 29.03.2019: replaced with view in order to remove dependencies
+        on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
     left join v_qdistr_source qd on
         qd.ware_id = d.ware_id
         and qd.snd_optype_id = p.snd_optype_id
@@ -672,7 +673,8 @@ from(
     where d.optype_id<>1100 -- client refused from order
     group by d.doc_id, d.id, d.optype_id, d.qty
 ) d
-join rules_for_qdistr p on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
+join v_rules_for_qdistr p  -- 29.03.2019: replaced with view in order to remove dependencies
+    on d.optype_id = p.snd_optype_id + 0 and coalesce(p.storno_sub,1)=1 -- hash join! 3.0 only
 left join v_qstorned_source qs on
     d.id=qs.snd_id
     and p.snd_optype_id=qs.snd_optype_id
@@ -693,7 +695,8 @@ from(
         select d.doc_id, d.id, d.ware_id, iif(d.optype_id=3400, 3300, d.optype_id) as optype_id, d.qty
         from zdoc_data d
     ) d
-    inner join rules_for_qdistr p on d.optype_id=p.snd_optype_id and coalesce(p.storno_sub,1)=1
+    inner join v_rules_for_qdistr p -- 29.03.2019: replaced with view in order to remove dependencies
+        on d.optype_id=p.snd_optype_id and coalesce(p.storno_sub,1)=1
     left join zqdistr qd on
         qd.ware_id = d.ware_id
         and qd.snd_optype_id = p.snd_optype_id
@@ -701,7 +704,8 @@ from(
     where d.optype_id<>1100 -- client refused from order
     group by d.doc_id, d.id, d.optype_id, d.qty
 ) d
-inner join rules_for_qdistr p on d.optype_id=p.snd_optype_id and coalesce(p.storno_sub,1)=1
+inner join v_rules_for_qdistr p -- 29.03.2019: replaced with view in order to remove dependencies
+    on d.optype_id=p.snd_optype_id and coalesce(p.storno_sub,1)=1
 left join zqstorned qs on
     d.id=qs.snd_id
     and p.snd_optype_id=qs.snd_optype_id
@@ -1097,7 +1101,8 @@ begin
             ,coalesce(sum(qd.snd_qty),0) qdistr_q
             from doc_data d
             join doc_list h on d.doc_id = h.id
-            join rules_for_qdistr r on h.optype_id = r.snd_optype_id
+            join v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
+                on h.optype_id = r.snd_optype_id
             left join v_qdistr_source qd on
                 d.ware_id = qd.ware_id
                 and qd.snd_optype_id = r.snd_optype_id

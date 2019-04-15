@@ -3,8 +3,8 @@
 # To get last version type following command:
 # git clone https://github.com/FirebirdSQL/oltp-emul .
 # This file is used for launching test and ISQL sessions on POSIX host
-# with running Firebird 3.0
-# Parameters are extracted by '1run_oltp_emul.sh' command scenario.
+# with running Firebird 3.0.
+# Parameters are extracted by '1run_oltp_emul.bat' command scenario.
 ####################################################################
 
 #::::::::::::::::::::::::::::::::::::::::::::::::
@@ -12,51 +12,50 @@
 #::::::::::::::::::::::::::::::::::::::::::::::::
 
     # Folder with Firebird console utilities (isql, fbsvcmgr).
-    # Trailing backslash is optional.
+    # Trailing backslash and double quotes are optional.
     # Allows referencing to existing OS environment variable by using dollar sign.
     # Samples:
     # fbc = $FB30_HOME/bin
-    # fbc = /opt/firebird.30/bin
+    # fbc = /opt/fb30/bin
+    #
+    fbc  = /opt/firebird/bin
 
-    fbc  = /opt/fb30/bin
 
     # Alias or full path and file name of database.
     # If you want this database be created by test itself, specify it as
     # FULL PATH and file name. Use only ASCII characters in its name.
     # Allows referencing to existing OS environment variable by using dollar sign.
-    # Use forward slash (/) in all cases, even when database is on Windows host.
-    # Samples:
-    # dbnm = $HOME/data/oltp30.fdb
-    # dbnm = /var/db/fb30/oltp30.fdb
-    # dbnm = c:/mix/firebird/oltptest/oltp30.fdb
-
-    dbnm = /var/db/oltp30.fdb
+    # Use forward slash ("/) in all cases, even when database is on Windows host.
+    # Sample:
+    # dbnm = /var/db/oltp30_test.fdb
+    #
+    dbnm = /var/db/oltp30_test.fdb
 
 
     # Parameters for remote connection and authentication.
     # Will be ignored by command scenario if FB runs in embedded mode.
 
     host = localhost
-    port = 3333
+    port = 3050
     usr =  SYSDBA
     pwd =  masterkey
 
 
-    # Folder for storing .sql scenarios, STDOUT and STDERR logs of every working isql session.
+    # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
     # Trailing backslash is optional.
     # Allows referencing to existing OS environment variable by using dollar sign.
     # Samples:
-    # tmpdir = /var/tmp/logs.oltp30
+    # tmpdir = /var/tmp/logs.oltp30_emul
     # tmpdir = $TMP/logs.oltp30
-
+    #
     tmpdir = /var/tmp/logs.oltp30
 
 
-    # Condition for removing or preserving isql logs after test finish.
+    # Condition where all ISQL logs should be removed after test will finish.
     # Possible values: always | never | if_no_severe_errors
-    # Option 'always' means that ISQL logs in $tmpdir will be removed after test finish regardless any result.
-    # Option 'never' means that ISQL logs will be always preserved.
-    # Option 'if_no_severe_errors' means that ISQL logs will be removed only if no severe exceptions occured.
+    # Option 'always' means that ISQL logs in %tmpdir% will be removed after test finish without any condition.
+    # Option 'never' means that ISQL logs will be preserved.
+    # Option 'if_no_severe_errors' means that ISQL logs will be removed if no severe exceptions occured.
     # Test considers following exceptions as 'severe':
     #   335544558 check_constraint     (Operation violates CHECK constraint @1 on view or table @2).
     #   335544347 not_valid            (Validation error for column @1, value "@2").
@@ -66,11 +65,12 @@
     # Recommended value: if_no_severe_errors
 
     remove_isql_logs = if_no_severe_errors
-
+    #remove_isql_logs = never
 
 #:::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR REPLICATION, WORKLOAD LEVEL AND PAUSES
 #:::::::::::::::::::::::::::::::::::::::::::
+
 
     # Test has several settings that define how much work should be done by each business action in average.
     # All of them are considered as separate enumerations: when new ISQL session creates connection, it reads
@@ -82,76 +82,106 @@
     # sub-section "Definitions for workload modes".
     # WARNING: exception will raise on test startup if this value was mistyped and has no correspond data in DB.
     # Mnemonic name of workload mode (must be specified without quotes, case-insensitive):
-
+    #
     working_mode = small_03
 
 
-    # Maximal number connections per second (max allowed rate for new attachments occurrence for making SMOOTH workload growth).
+
+    # Maximal number connections per second (max allowed rate of new attachments appearance for making workload grow smoothly).
     # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
-    # is 1500-2000 or more. Otherwise some of ISQL will get TCP-related failure and raise error with text:
+    # is 1000 or more. Otherwise some of sessions will get failure on attempt to establish connection with text:
     #     Statement failed, SQLSTATE = 08004
     #     connection rejected by remote interface
-    # If this parameter will be set to 0 then value of 'warm_time' will be used for evaluating delay before trying
-    # to establish connection. If 'warm_time' is also 0 then delay will be chosen as random value betwee 1 and 30 seconds.
-    # See also comments to parameter 'warm_time'.
+    # If value of this parameter less than 10 or greater than 100 then delays will not occur and all sessions will try to establish
+    # their attachments at the same time. This can be reason of "connection rejected" error.
+    # Otherwise:
+    # * if number of sessions not exceeds <max_cps> then delay will be evaluated as random value between 1 and 4 seconds.
+    # * if number of sessions greater that this parameter then delay will be evaluated as: 1 + session_id / <max_cps>.
+    # NOTE. If you intend to launch more than 1000 sessions then consider to adjust following settings in /etc/sysctl.conf:
+    # net.core.somaxconn = 2000
+    # net.core.netdev_max_backlog = 2000
+    # net.core.tcp_max_syn_backlog = 2000
+    # net.ipv4.ip_local_port_range = 15000 61000
+    # net.ipv4.tcp_tw_reuse = 1
+    # net.ipv4.tcp_max_tw_buckets = 1440000
+    # See also:
+    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L111
+    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L284
+    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L464
+    # https://www.centos.org/docs/5/html/5.1/Deployment_Guide/s3-proc-sys-net.html
+    # http://docs.continuent.com/tungsten-clustering-6.0/performance-networking.html
+    # https://access.redhat.com/solutions/41776
+    #
     # Recommended value: 20...30
-
+    #
     max_cps = 25
 
 
     # MINIMAL pause duration between each business operations, in seconds.
     # This parameter has default value 0 and can be commented.
-    # Pause duration will be evaluated as random value between $sleep_min and $sleep_max values.
-
-    sleep_min=5
+    # Duration of pause will be evaluated at runtime as random value 
+    # between $sleep_min and $sleep_max values.
+    #
+    sleep_min=0
 
 
     # MAXIMAL pause duration between each business operations, in seconds.
     # Default: 0 - no pauses, next transaction will start immediatelly after previous commit.
-    # This will lead to maximal (non-realistic) level of workload but performance score will not be affected by uknown factor
-    # related to delays in all running isql sessions.
+    # This leads to maximal (non-realistic) level of workload.
     # Delay statement will be inserted in .sql script by 1run_oltp_emul.sh; the form of this statement depends on value of
-    # parameter 'sleep_ddl': if it is commented (undefined) then OS command call will be used: 'shell sleep NNN;'
-    # Otherwise UDF will be invoked from separate execute block. Name of this UDF must be declared in the SQL-script defined 
-    # by 'sleep_ddl' parameter.
+    # parameter 'sleep_ddl':
+    # 1) If parameter 'sleep_ddl' is commented (undefined) then OS call ("shell sleep NN;") will ne inserted betwee every adjacent
+    #    transactions in order to pause SQL execution. This leads to excessive OS workload when number of sessions is more than ~300.
+    # 2) Otherwise UDF will be invoked from separate execute block. Name of this UDF must be declared in the SQL-script defined 
+    #    by 'sleep_ddl' parameter.
     # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
-
+    #
     sleep_max=0
 
 
-    # Name of .sql script with declaration of UDF that will be used for SLEEPING if sleep_max greater than 0.
+    # Name of SQL script with declaration of UDF that will be used for PAUSES between transactions.
+    # An attachment will be IDLE only when <sleep_max> greater than 0 otherwise pauses will not occur at all.
     # Script must correctly drop old existent UDF with any name that contains phrases: DELAY, SLEEP or PAUSE.
     # After dropping, script also must create new UDF and test it (for checking results in log).
     # This script will be applied only when parameter 'sleep_max' greater than 0.
     # Note. The whole following phrase:
     #     declare external function <name>
     # -- must be written on the SINGLE LINE in this script (<name> will be parsed from this line as the 4th word)
-    # This UDF implementation (.so file) must be stored in the server-side folder, usually /opt/firebird/UDF, which
+    # This UDF implementation (.so file) must be stored in the server-side folder, usually $FIREBIRD_HOME\UDF, which
     # is allowed to be used for UDF calls. See description for parameter 'UDFaccess' in standard firebird.conf for details.
     # Test is provided with its own UDF and appropriate declaration script named "oltp_sleepUDF_nix.sql".
-    # Unpack file SleepUDF.so.bz2 and put file SleepUDF.so in any folder that is allowed by 'UDFaccess' parameter from firebird.conf.
-    # NOTE. This parameter will be ignored when value of 'sleep_max' is zero.
-    # Also, you can comment this parameter for using only external command ('shell sleep NNN;') when 'sleep_max' greater than 0.
-
+    # Unpack file SleepUDF.so.tar.gz and put file SleepUDF.so in any folder that is allowed by 'UDFaccess' parameter.
+    # You can comment this parameter for using only OS external command ('shell sleep ...;') when 'sleep_max' greater than 0.
+    #
     sleep_ddl=./oltp_sleepUDF_nix.sql
 
 
-    # Should SET TRANSACTION statement include NO AUTO UNDO clause (1=yes, 0=no) ?
-    # Value 1 is useful when most of started transactions finished successfully.
-    # Especially this can be so when setting 'separate_workers' has value 1.
-    # Results of benchmark (2015):
-    # SuperServer:  +  5-6%
-    # SuperClassic: + 10-11%
+    # Should SET TRANSACTION statement include NO AUTO UNDO clause (1=yes, 0=no) ? 
+    # Performance can be increased if this option is set to 1:
+    # SuperServer:   5 -  6%
+    # SuperClassic: 10 - 11%
     # Recommended value: 1
-
+    #
     no_auto_undo = 1
 
 
-    # Minimal interval in minutes between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics
-    # and can take too long time (more than 3-4 minutes per table on database with size ~100Gb).
-    # See SP 'srv_random_unit_choice' for choising algorithm. Recommended value: not less than 30 minutes.
-
-    recalc_idx_min_interval = 30
+    # Minimal interval in minutes between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics.
+    # Only indexes for tables that are participated in most often performing queries are affected. 
+    # Note that frequent update of index statistics has sense only for small databases which have quickly changed data distribution.
+    # There is no sense to update index statistics if test will runs for 7-9 hours and database has size more than 100 Gb: most probably
+    # it will finish at the moment when test itself will also be close to expiration. 
+    # In that case set value of this parameter to zero to prevent selection of procedure that does this updating.
+    #
+    # Recommended value of this parameter depends on size od database:
+    # within scope 30...60 minutes for databases with size up to 20 Gb;
+    # within scope 60...90 minutes for databases with size 20...40 Gb;
+    # within scope 90...120 minutes for databases with size 40...60 Gb;
+    # within scope 120...240 minutes for databases with size 60...80 Gb;
+    # 0 (zero) for databases with size more than 80...100 Gb (this means that statistics will not be updated at all).
+    # NOTE. For big databases (with size more than 100 Gb) updating of index statistics has sense only for big <test_time> values.
+    # See SP 'srv_random_unit_choice' for choising algorithm.
+    #
+    recalc_idx_min_interval = 0
 
 
     # If you plan this database work in replication process, one need to add PK constraints 
@@ -161,7 +191,7 @@
     # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
     # This parameter can be changed 'on the fly': database recreation is NOT required, but in case
     # when database has valuable size, changes will be applied not instantly.
-    
+    #
     used_in_replication = 0
 
 
@@ -169,17 +199,17 @@
 # SETTINGS RELATED TO LOCK CONFLICTS
 #:::::::::::::::::::::::::::::::::::
 
-    # Do we force every ISQL session to make its job only within 'sandbox' so that no update coinflicts will occur ?
-    # If yes then assign to separate_workers value 1, other wise set it to 0. 
-    # NOTE. Value 0 can lead to lot of update conflicts because every ISQL can take lock to any document.
-
+    # Though test uses pessimistic locks (tries to 'catch' document before any further actions) this strategy can not prevent
+    # neither from choosing the same document in random algorithm nor from decreasing stock remainder for the same wares.
+    # Lot of update conflicts or exceptions related to violate CHECK CONSTRANT about non-negative remainder will occur if
+    # we allow sessions to operate with the same ("shared") set of documents. This affects on performance, of course.
+    # One may to separate sessions in such way that each of them will work within "sandbox" and never fall in conflict with
+    # concurrent sessions for documents.
+    # Assign 1 to this parameter if you want to separate work of sessions and thus totally exclude exceptions related to
+    # update conflicts and violation or check constraint defined for aggregated remainders value.
+    # Otherwise set it to 0.
+    #
     separate_workers = 1
-
-    # How many ISQL sessions we expect to be launched on server. This value is used when database is filled by initial data.
-    # It is strongly recommended to choose such value of this parameter that will be close to number of actual launched ISQL sessions.
-
-    # Recommened value: at least 100
-    expected_workers = 100
 
     # How many documents from other's sandbox can be taken in processing by 'this' ISQL session, percent.
     # Value 0 means that we do not allow ISQL session to take any documents except those which was created by itself.
@@ -187,7 +217,7 @@
     # Moreover, this also mean that we want ISQL session 'forget' about documents which were created by itself.
     # This will lead to extremely high number of lock-conflicts and very poor performance.
     # Recommened value: 0 - for benchmark purposes; 30...50 - for investigations.
-
+    #
     update_conflict_percent = 0
 
     # How business operations should be selected: randomly or in predictable manner.
@@ -197,7 +227,7 @@
     #     create client order -> create order to supplier -> get invoice from supplier -> ...
     # Value 'predictable' was not deeply tested and currently can lead to poor performance.
     # Recommened value: random
-
+    #
     unit_selection_method = random
 
 
@@ -210,42 +240,43 @@
     # Recommended value: 0
     # Note: value = 1 significantly increases disk I/O on client machine.
     # Do not use it if you are not interested on data of table 'perf_log'.
-
+    #
     detailed_info = 0
+
 
     # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
     # When 0 then monitor tables are not queried.
     # When 1 then EVERY session will take two snapshots before and after execution of selected unit.
     # More detailed analysis with detalization down to separate stored procedures can be achieved
     # by updating setting 'mon_unit_list'.
-    # When 2 then only ONE session is dedicated to gather monitoring data. It will call special
-    # stored procedure 'srv_fill_mon_memo_consumption' every 'mon_query_interval'-th second.
+    # When 2 then only ONE session is dedicated to gather monitoring data with obtaining data
+    # that relates to ALL other working sessions.
+    # It will call special SP 'srv_fill_mon_memo_consumption' every 'mon_query_interval'-th second.
     # NOTE: pauses for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined.
-
-    mon_unit_perf = 0
-
-
-    # Actual only when 'mon_unit_perf' = 2: number of seconds between calls to SP that gathers monitoring
-    # data for all working attachments.
-    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
-    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script with UDF
-    # declaration that implements delay.
-    # Actual duration of delay, in seconds, will be evaluated as minimal of 'mon_query_interval'
-    # and test_time*60 divided by 20.
-
-    mon_query_interval = 60
+    #
+    mon_unit_perf = 1
 
 
-
+    # This setting can be used only when config parameter 'enable_mon_query' is 1.
     # List of top-level units (see 'business_ops' table) which performance statistics we want 
-    # to be logged by querying  mon$ tables. Logging is done by SP srv_log_mon_for_traced_units.
-    # This setting is ignored if config parameter 'enable_mon_query' is 0.
+    # to be logged by querying  monitoring tables. Logging is done by SP srv_log_mon_for_traced_units.
     # Value can be single unit name or LIST of unit names delimited by forward slash.
     # Sample:
     #     sp_make_qty_storno/sp_kill_qty_storno/sp_multiply_rows_for_qdistr/sp_multiply_rows_for_pdistr
     # Default value: two slashes without any characters between them, i.e. no interested units for logging.
-
+    #
     mon_unit_list = //
+
+
+    # This setting can be used only when config parameter 'enable_mon_query' is 2.
+    # Number of seconds between calls to SP that gathers monitoring data for all working attachments.
+    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
+    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script with UDF 
+    # declaration that implements delay.
+    # Actual duration of delay, in seconds, will be evaluated as minimal of 'mon_query_interval'
+    # and test_time*60 divided by 20.
+    #
+    mon_query_interval = 60
 
 
     # Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
@@ -260,7 +291,7 @@
     # Detailed investigation:
     # sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
     # (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
-
+    #
     halt_test_on_errors = /CK/
      
 
@@ -275,7 +306,7 @@
     #                when PK/FK or check constraint is violated (see parameter 'halt_test_on_errors')
     #                NOTE: when bit#2 has value 1 then parameter 'create_with_debug_objects' must be 1
     #                to force build scenario create auxiliary Z-tables in the test DB.
-
+    #
     qmism_verify_bitset = 1
 
 
@@ -291,32 +322,51 @@
     # to set this value to 1. Note though that if you will interrupt test by brute kill all
     # ISQL sessions than you have also to kill process of FBSVCMGR which can remain active.
     # Currently implemented only for Windows!
-
-    #trc_unit_perf = 1
+    #
+    # trc_unit_perf = 0
 
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR TEST DURATION AND PREMATURE WORK CANCELLATION
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    # Time (in minutes) to warm-up database after initial data population will finish and before all following operations will be measured.
-    # It is strongly recommended to assign NON zero value to this parameter when your test database has size more than total physical RAM.
-    # Also, this value can be used for evaluating delays in each launching session before it will try to establish attachment
-    # to database - but only when value of 'max_cps' parameter is zero.
-
-    # Recommended value: at least 30.
-
+    # Number of minutes since test launch for which evaluation of performance score is omited because database is 'cold' (not in cache).
+    # Means the same as 'ramp-up' period in TPC-C specification: we have to allow all sessions to establish  attachments and read some
+    # data into Firebird page cache.
+    # Recommended value: DBSize_Gb/2, where DBSize_Gb is size of database in Gb, but not less than 30 minutes.
+    # You can estimate whether value of this parameter is apropriate if run test for 2-3 hours and look after its finish in report 
+    # "Performance per minute". Performance counter at the end of <warm_time> period must be close to values for subsequent 20-30 minutes.
+    # See also TPC-C specification rev 5.11:
+    # * 5.6.4 (page 78) - graphical explanation of ramp-up period;
+    # * Appendix C (page 132) - numerical quantities summary.
+    #
     warm_time = 30
 
-    # Limit (in minutes) to measure operations before test autostop itself:
-    # Recommended value: at least 120
 
-    test_time = 120
+    # Duration of main test phase which starts after 'ramp-up'. Means the same as 'measurement interval' in TPC-C specification.
+    # Overall performance score is evaluated as total number of successfully completed transactions during this phase divided by <test_time>.
+    # At the end of this phase test will stop itself, i.e. you do not have to interrupt ISQL sessions.
+    # Note that TPC-C requires minimum 120 minutes for this phase, but your system must allows to run test during 480 minutes - and this
+    # value does not include <warm_time> phase (see TPC-C rev 5.1, 5.5.2.1, page 75).
+    # ATTENTION. Reports and performance score for test_time less than 120 minutes must be considered as unreliable (doubtful).
+    # Recommended value: at least 180.
+    #
+    test_time = 180
+
+
+    # Number of intervals for splitting 'test_time' for "Performance in DYNAMIC" report which shows how performance did change in time.
+    # NOTE. This report can be used only for quick and rough estimation only because it always will show small number of data.
+    # Precise performance score will be show in "Performance per minute" report.
+    # NOTE: TPC-C (rev 5.11, 5.6.4, page 78) requires that at least 240 intervals with maximum size 30 seconds will be used for such purpose.
+    # If you want to see such detailed data then assign <test_intervals> = 2 * <test_time>, but much useful is report "Performance per minute".
+    # Do not set this parameter value less than 30.
+    #
+    test_intervals = 30
 
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
     # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
-    # '$tmpdir/1stoptest.tmp.sh' which is created every time at test start phase by script '1run_oltp_emul.sh'.
+    # '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
     # Usage of this script is OK for most cases except extremely high workload when establishing of new connect will be unavaliable.
     #
     # When extremely high workload is used then following message can appear on every attempt to establish new attachment:
@@ -338,9 +388,10 @@
     #   1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
     #      queried by every attachment as 'stop flag'.
     #   2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
-    # Default setting: UNDEFINED, i.e. temporary batch '1stoptest.tmp.sh' in $tmpdir folder can be used for this.
+    # Default setting: UNDEFINED, i.e. only temporary batch '$tmpdir/1stoptest.tmp.sh' can be used for this.
+    #
+    # use_external_to_stop = stoptest.txt
 
-    # use_external_to_stop = stoptext.txt
 
 
 #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -354,17 +405,20 @@
     # and should be created by test script itself.
     # Valid options for create_with_fw are sync | async
     # Value of create_with_sweep should be not less than zero.
-
-    create_with_fw = sync
-
-    create_with_sweep = 20000
+    #
+    # RECOMMENDED value for create_with_sweep is 0 (zero).
+    # Remember that sweep interval greater than 0 can lead to unpredictable affect on performance, especially for short test duration.
+    #
+    create_with_fw = async
+  
+    create_with_sweep = 0
 
 
     # Should script be paused if database does not exist or its creation
     # did not finished properly (e.g. was interrupted; 1=yes; 0=no) ?
     # You have to set this parameter to 0 if this batch is launched by 
     # scheduler on regular basis. Otherwise it is recommended to set 1.
-
+    #
     wait_if_not_exists = 0
 
     # Should script be PAUSED after creation database objects before starting
@@ -373,32 +427,48 @@
     # Command scenario verifies this by searching special record in table 'SEMAPHORES' which should
     # be added there at the end-point of building process. If this record is found, test will use 
     # existing database and following parameters will be IGNORED.
-
-    wait_after_create = 0
+    #
+    wait_after_create = 1
 
     # Number of documents, total of all types, for initial data population.
     # Command scenario will compare number of existing document with this
     # and create new ones only if <init_docs> still greater than obtained.
-    # Recommended value: 
-    # 1. For benchmark purposes - at least 30000.
-    # 2. For regular running on scheduled basis - at least 10000.
+    #
+    # *** NOTE *** THIS VALUE IS OBSOLETE, LEAVE IT EQUAL TO 0 (ZERO) ***
+    #
+    # Instead of generating dosuments by single attachment it is much more properly (and faster) to assign some big value 
+    # to 'warm_time' parameter (say, 1440 which means to run for 1 day) and also set 'test_time' to 0 (zero). 
+    # When size of database will reach value that you consider as enough then just stop the test by running batch 
+    # '$tmpdir/1stoptest.tmp.sh' which always is created when test starts.
+    #
+    init_docs = 0
 
-    init_docs = 30000
 
-    # Number of pages for usage during init data population ("-c" switch for ISQL).
-    # Actual only for CS and SC, will be ignored in SS. Used ONLY during phase of
-    # initial data population and is IGNORED on main phase of test.
+    # This parameter actual only when 'init_docs' greater than 0 and 'separate_workers' is 1, i.e. when you want to separate 
+    # each ISQL session in such way that they will not ever meet update conflicts during work. In other cases value if this
+    # parameter is ignored.
+    # If you decide to generate initial quantity of documents by using old 'init_docs' value then assign to 'expected_workers' 
+    # value that is equal to the  number of ISQL sessions that is expected to run.
+    #
+    expected_workers = 100
+
+
+    # Actual only when 'init_docs' greater than 0 and FB mode is Classic Server or SuperClassic. Will be ignoired in SuperServer.
+    # Number of pages for usage during init data population ("-c" switch for ISQL). Used ONLY during phase of initial data population.
     # Make sure that it is LESS than FileSystemCacheThreshold, which default is 65536.
+    #
+    # *** NOTE *** THIS VALUE IS OBSOLETE, LEAVE IT EQUAL TO 10000 ***
+    #
+    init_buff = 10000
 
-    init_buff = 32768
 
-
-    # Should command scenario - 1run_oltp_emul.sh - be PAUSED after finish creating
+    # Actual only when 'init_docs' greater than 0
+    # Should command scenario (1run_oltp_emul.bat) be PAUSED after finish creating
     # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
     # Value = 1 can be set if you want to make copy of .fdb and restore later
     # this database to 'origin' state. This can save time because of avoiding need
     # to create <init_docs> again:
-
+    #
     wait_for_copy = 1
 
 
@@ -410,7 +480,7 @@
     # NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
     # (see oltp_main_filling.sql)
     # Recommended value: 1
-
+    #
     create_with_debug_objects = 1
 
 
@@ -424,8 +494,10 @@
     # Avaliable values: 
     # 0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
     # 1 = USE several tables with the same structure in order to split heavy workload on them.
-    # Recommended value: nope (choose yourself and compare).
-
+    #     NOTE (2019). Not only Qdistr and QStorned but also PERF_LOG table will be 'splitted' onto
+    #     several tables (with names PERF_SPLIT_01...PERF_SPLIT_09) when this parameter is set to 1. 
+    # Recommended value: 1.
+    #
     create_with_split_heavy_tabs = 1
 
     # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
@@ -433,8 +505,8 @@
     # Number of columns in compound index depends on value of two parameters:
     # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
     # Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
-    # Recommended value: nope (choose yourself and compare).
-
+    # Recommended value: 0.
+    #
     create_with_separate_qdistr_idx = 0
 
     # Parameter 'create_with_compound_columns_order' defines order of fields in the starting part
@@ -447,8 +519,8 @@
     # and third column will have selectivity = 1 / <W>.
     #
     # Actual only when create_with_split_heavy_tabs = 0.
-    # Recommended value: nope (choose yourself and compare).
-
+    # Recommended value: most_selective_first
+    #
     create_with_compound_columns_order = most_selective_first
 
 
@@ -456,35 +528,43 @@
 #  SETTINGS FOR SCHEDULED-BASIS JOB AND TEST REPORT
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+    # Windows only. Not implemented for Linux, will be ignored at runtime.
     # Total number of downloaded snapshots for storing in the folder !tmpdir!\snapshots_archive.
     # Batch scenario will keep in this folder only newest snapshots and remove old ones.
     # This setting is useful for regression investigations: you will not need to rebuild FB from sources,
     # just replace last tested FB snapshot with some of old ones. 
     # If this parameter is undefined or has value of ZERO then snapshots will NOT be stored on disk.
     # Currently implemented only for Windows!
-
+    #
     # max_snapshots_to_store=0
 
+    # Windows only. Not implemented for Linux, will be ignored at runtime.
     # Do we want to replace existent Firebird instance every time before test will be launched
     # (by downloading binary archieve from official site, decompress it and stop/restart FB daemon).
     # Currently implemented only for Windows!
-
+    #
     # replace_instance = 0
 
-
-    # Create report in HTML format (beside plain text one; 1=yes, 0=no) ?
     # Windows only. Not implemented for Linux, will be ignored at runtime.
+    # Used in "oltp-scheduled" scenario: name of etalon DB which serves as source 
+    # for copy to work DB before every new test start:
+    #
+    # etalon_dbnm = /path/to/oltp30-etalone.fdb
 
+
+    # Windows only. Not implemented for Linux, will be ignored at runtime.
+    # Create report in HTML format (beside plain text one; 1=yes, 0=no) ?
+    #
     make_html=0
 
     # Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
-    # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
-
+    # WARNING! This operation can take lot of time on big databases. Replace this setting with 0 for skip this action.
+    #
     run_db_statistics = 0
 
     # Do we want to include into final report result of database validation (1=yes; 0=no) ?
-    # This operation can take lot of time on big databases. Replace this setting with 0 for skip it.
-
+    # WARNING! This operation can take lot of time on big databases. Replace this setting with 0 for skip this action.
+    #
     run_db_validation = 0
 
     # Should final report be saved in file with name which contain info about FB, database, test settings ?
@@ -496,16 +576,16 @@
     # 20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on.txt
     # Sample of report name when this parameter = 'benchmark':
     # ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448.txt
-
+    #
     # Available options: regular | benchmark, or leave commented (undefined).
-
+    #
     file_name_with_test_params = regular
 
     # Suffix for adding at the end of report name.
     # CHANGE this value to some useful info about host location, 
     # hardware specifics, FB instance etc.
-
-    file_name_this_host_info = $HOSTNAME
+    #
+    file_name_this_host_info = no_host_info
 
 
     # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
@@ -513,16 +593,11 @@
     # attach report. This setting is OPTIONAL. Note: executable 'postie.exe' must be either in one
     #  of PATH-list or in ..\util related to current ('src') folder. Windows only.
     # Windows only. Not implemented for Linux, will be ignored at runtime.
-
+    #
     #postie_send_args = -esmtp -host:mail.local -from:malert@company.com -to:foo@bar.com -user:malert@company.com -pass:QwerTyuI0p
 
     # Windows only. Should final report be uploaded (1=yes; 0 or undefined = no) ?
-    # If no, leave this parameter commented. In that case final report will be preserved on local drive, in the folder %tmpdir%.
-    # If yes, set its value to 1 and make ensure that batch ..\util\upload.bat has command that is able to upload text html content
-    # to external source and store its result in text log with marking successful finish with phrase containing word 'success'.
-    # One of such console utility can be found here: http://curl.haxx.se/download.html
-    # Sample of its usage: curl.exe -F "name=%1" -F "file=@%2" http://some_external_site_as_storage
-
+    #
     #upload_report = 0
 
 
@@ -533,10 +608,10 @@
     # Do we use mtee.exe utility to provide timestamps for error messages 
     # before they are logged in .err files (1=yes, 0=no) ?
     # Windows only. Not implemented for Linux, will be ignored at runtime.
-
+    #
     use_mtee = 0
 
     # Does Firebird running in embedded mode ? (1=yes, 0=no)
-
+    #
     is_embed = 0
 

@@ -57,13 +57,9 @@ commit;
 
 set term ^;
 
-create or alter procedure srv_increment_tx_bops_counter
-as
-begin
-    rdb$set_context( 'USER_TRANSACTION', 'BUSINESS_OPS_CNT', coalesce( cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int), 0) + 1);
-end
-
-^ -- srv_increment_tx_bops_counter
+-- 08.02.2019: moved in oltp30_DDL, before SP sp_add_perf_log
+--create or alter procedure srv_increment_tx_bops_counter ...
+--^ -- srv_increment_tx_bops_counter
 
 
 create or alter procedure sp_fill_shopping_cart(
@@ -209,7 +205,7 @@ begin
     select
         r.snd_optype_id
         ,r.storno_sub
-    from rules_for_qdistr r
+    from v_rules_for_qdistr r -- 29.03.2019: replaced table name with view in order to remove dependencies
     where
         r.rcv_optype_id = :a_optype_id
         and r.mode containing 'new_doc' 
@@ -220,7 +216,6 @@ begin
     delete from tmp$shopping_cart where 1=1;
     row_cnt = 0;
     qty_sum = 0;
-
 
     if ( fn_make_predictable_workload() = 1 ) then
         open c_take_predictable_ware;
@@ -400,13 +395,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     v_oper_order_by_customer = fn_oper_order_by_customer();
 
     -- Random select contragent for this client order
@@ -415,7 +403,6 @@ begin
     if ( rand()*100 <= cast(rdb$get_context('USER_SESSION', 'ORDER_FOR_OUR_FIRM_PERCENT') as int) ) then
         begin
             v_clo_for_our_firm = 1;
-            --agent_id = sp_get_random_id('v_our_firm', null, null, 0);
             select id_selected from sp_get_random_id('v_our_firm', null, null, 0) into agent_id;
         end
     else
@@ -467,13 +454,6 @@ begin
             v_gen_inc_last_dd = gen_id( g_doc_data, :c_gen_inc_step_dd );
         end
         v_dd_new_id = v_gen_inc_last_dd - ( c_gen_inc_step_dd - v_gen_inc_iter_dd );
-
---        rdb$set_context('USER_TRANSACTION','DBG_DD_D',
---              'v_dd_new_id='||v_dd_new_id
---            ||', v_last_dd='||v_gen_inc_last_dd
---            ||', c_step_dd='||c_gen_inc_step_dd
---            ||', v_iter_dd='||v_gen_inc_iter_dd
---        );
         v_gen_inc_iter_dd = v_gen_inc_iter_dd + 1;
 
         if ( v_gen_inc_iter_nt = c_gen_inc_step_nt ) then -- its time to get another batch of IDs
@@ -622,13 +602,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
@@ -644,7 +617,7 @@ begin
                           );
 
     -- Find doc ID (with checking in view v_*** is need) and try to LOCK it.
-    -- Raise exc if can`t lock:
+    -- Raise exc if no found or can`t lock:
     execute procedure sp_lock_selected_doc( doc_list_id, 'v_cancel_client_order', a_selected_doc_id);
 
     -- 20.05.2014: BLOCK client_order in ALL cases instead of solving question about deletion
@@ -757,13 +730,6 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     -- choose randomly contragent that will be supplier for this order:
     agent_id = fn_get_random_supplier();
@@ -887,13 +853,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     -- select supplier, random:
     agent_id = fn_get_random_supplier();
 
@@ -904,7 +863,7 @@ begin
 
     -- 1. Find rows in QDISTR (and silently try to LOCK them) which can provide required
     --    amounts in tmp$shopping_cart, in FIFO manner.
-    -- 2. Perform "STORNING" of them (moves these rows from QDISTR to QSTORNED)
+    -- 2. Perform "STORNING" of them (move these rows from QDISTR to QSTORNED)
     -- 3. Create new document: header (doc_list) and detalization (doc_data).
     execute procedure sp_make_qty_storno(
         fn_oper_invoice_get()
@@ -1015,19 +974,12 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            ( select id_selected from
-                              sp_get_random_id(  'v_cancel_supplier_invoice' -- a_view_for_search
+                            ( select id_selected
+                              from sp_get_random_id(  'v_cancel_supplier_invoice' -- a_view_for_search
                                                 ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                                 ,null -- a_view_for_max_id ==> the same as a_view_for_search
                                                 ,:c_raise_exc_when_no_found
@@ -1174,7 +1126,7 @@ begin
         -- 16.09.2014 PLAN SORT (JOIN (D INDEX (FK_DOC_DATA_DOC_LIST), Q INDEX (QDISTR_SNDOP_RCVOP_SNDID_DESC)))
         -- (much faster than old: from qdistr where q.doc_id = :a_client_order_id and snd_op = ... and rcv_op = ...)
         from doc_data d
-        LEFT -- !! force to fix plan with 'doc_data' as drive table, see CORE-4926
+        LEFT -- !! force to fix plan with 'doc_data' as drive table, see CORE-4926: optimizer design pitfall!
         join v_qdistr_source q on
              -- :: NB :: full match on index range scan must be here!
              q.ware_id = d.ware_id
@@ -1294,13 +1246,6 @@ begin
         iif( a_client_order_id is null, 'from avaliable remainders', 'for clo_id='||a_client_order_id )
     );
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     if ( a_client_order_id = -1 ) then -- create reserve from avaliable remainders
         a_client_order_id = null;
     else if ( a_client_order_id is null ) then
@@ -1313,8 +1258,7 @@ begin
             -- Call sp_get_random_id with arg NOT to raise exc`eption if
             -- it will not found such documents:
             select id_selected
-            from
-                sp_get_random_id(
+            from sp_get_random_id(
                     'v_random_find_clo_res',
                     'v_min_id_clo_res',
                     'v_max_id_clo_res',
@@ -1482,21 +1426,14 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
 
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
     doc_list_id = coalesce( :a_selected_doc_id,
-                            ( select id_selected from
-                              sp_get_random_id(
+                            ( select id_selected
+                              from sp_get_random_id(
                                 'v_cancel_customer_reserve' -- a_view_for_search
                                 ,null -- a_view_for_min_id ==> the same as a_view_for_search
                                 ,null -- a_view_for_max_id ==> the same as a_view_for_search
@@ -1579,7 +1516,7 @@ begin
     for
         execute statement (v_stt) ( x := :doc_list_id)
     into
-        doc_list_id
+         doc_list_id
         ,worker_id
         ,client_order_id
         ,doc_data_id
@@ -1664,13 +1601,6 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
 
@@ -1993,13 +1923,6 @@ begin
     if ( a_cancel_mode = 1 ) then v_this = 'sp_cancel_adding_invoice';
 
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     -- check that special context var EXISTS otherwise raise exc:
     execute procedure sp_check_ctx('USER_SESSION', 'ENABLE_RESERVES_WHEN_ADD_INVOICE');
@@ -2346,13 +2269,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
 
     -- Choose random doc of corresponding kind.
@@ -2567,13 +2483,6 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
 
@@ -2882,13 +2791,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     execute procedure sp_payment_common(
         fn_oper_pay_from_customer(),
         a_selected_doc_id,
@@ -2959,13 +2861,6 @@ begin
     
      -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
@@ -3055,13 +2950,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     execute procedure sp_payment_common(
         fn_oper_pay_to_supplier(),
         a_selected_doc_id,
@@ -3131,13 +3019,6 @@ begin
     
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
@@ -3347,7 +3228,6 @@ begin
     then
         exception ex_snapshot_isolation_required;
 
-
     -- Ensure that current attach is the ONLY one which tries to make totals.
     -- Use locking record from `semaphores` table to serialize access to this
     -- code:
@@ -3395,13 +3275,6 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     ins_rows = 0;
     upd_rows = 0;
@@ -3627,13 +3500,6 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
-
     ins_rows = 0;
     upd_rows = 0;
     del_rows = 0;
@@ -3673,7 +3539,6 @@ begin
             begin
                 insert into money_saldo( agent_id, cost_purchase, cost_retail )
                 values( :agent_id, :cost_purchase, :cost_retail);
-
                 ins_rows = ins_rows + 1;
             end
         else
@@ -3710,6 +3575,130 @@ when any do
 end
 
 ^ -- srv_make_money_saldo
+
+--------------------------------------------------------------------------------
+
+create or alter procedure tmp_aggregate_perf_data_autogen( a_dts_interval int = 0)
+returns (
+    msg dm_info
+) as
+begin
+    -- 18.03.2019
+    -- STUB! Will be recreated in oltp_adjust_DDL.sql according to
+    -- number of perf_split_NN tables
+    suspend;
+end
+^
+
+-- 18.03.2019
+create or alter procedure srv_aggregate_perf_data( a_ignore_stop_flag smallint = 0 )
+returns (
+    msg dm_info
+)
+as
+    declare v_semaphore_id type of dm_ids;
+    declare v_deferred_to_next_time boolean = false;
+    declare v_gdscode int = null;
+    declare v_dts_beg timestamp;
+    declare v_this dm_dbobj = 'srv_aggregate_perf_data';
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
+begin
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- Check that table `ext_stoptest` (external text file) is EMPTY,
+        -- otherwise raises e`xception to stop test:
+        execute procedure sp_check_to_stop_work;
+    end
+
+    -- Check that current Tx run in NO wait or with lock_timeout.
+    -- Otherwise raise error: performance degrades almost to zero.
+    execute procedure sp_check_nowait_or_timeout;
+    
+    if ( not fn_is_snapshot() )
+    then
+        exception ex_snapshot_isolation_required;
+
+    -- Ensure that current attach is the ONLY one which tries to make totals.
+    -- Use locking record from `semaphores` table to serialize access to this
+    -- code:
+    begin
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found using('semaphores', v_this);
+            update semaphores set id = id where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
+    when any do
+        -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
+        -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
+        -- catched it's kind of exception!
+        -- 1) tracker.firebirdsql.org/browse/CORE-3275
+        --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
+        -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
+        begin
+            if ( fn_is_lock_trouble(gdscode) ) then
+                begin
+                    -- concurrent_transaction ==> if select for update failed;
+                    -- deadlock ==> if attempt of UPDATE set id=id failed.
+                    v_gdscode = gdscode;
+                    v_deferred_to_next_time = true;
+                end
+            else
+                exception;  -- ::: nb ::: anonimous but in when-block! (check will it be really raised! find topic in sql.ru)
+        end
+    end
+
+    if ( v_deferred_to_next_time ) then
+    begin
+        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; -- current unit: srv_make_money_saldo
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
+
+    end
+
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit:
+        execute procedure sp_add_perf_log(1, v_this);
+    end
+
+    v_dts_beg = 'now';
+    select msg from tmp_aggregate_perf_data_autogen into msg; -- 'i=1234, u=3210' etc
+    msg =  msg ||', ms='||datediff(millisecond from v_dts_beg to cast('now' as timestamp) );
+
+    rdb$set_context('USER_SESSION','ADD_INFO', msg);  -- to be displayed in result log of isql
+
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit:
+        execute procedure sp_add_perf_log(0, v_this, v_gdscode, msg );
+    end
+
+    suspend;
+
+when any do
+    begin
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
+        execute procedure sp_add_to_abend_log(
+            msg,  -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
+            gdscode,
+            msg,
+            v_this,
+            fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+end
+
+^ -- srv_aggregate_perf_data
 
 --------------------------------------------------------------------------------
 
@@ -3782,18 +3771,10 @@ begin
        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
         msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; -- current unit: srv_recalc_idx_stat
         exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
-
     end
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
-
-    -- increment number of total business routine calls within this Tx,
-    -- in order to display estimated overall performance in ISQL session
-    -- logs (see generated $tmpdir/tmp_random_run.sql).
-    -- Instead of querying perf_log join business_ops it was decided to
-    -- use only context variables in user_tran namespace:
-    execute procedure srv_increment_tx_bops_counter;
 
     for
         select ri.rdb$relation_name, ri.rdb$index_name, ri.rdb$statistics
@@ -3815,8 +3796,7 @@ begin
         v_start='now';
 
         execute statement( 'set statistics index '||idx_name )
-        with autonomous transaction -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
-        ; 
+        with autonomous transaction; -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
 
         elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
 
@@ -3847,30 +3827,10 @@ end
 
 ^ -- srv_recalc_idx_stat
 
-
 --------------------------------------------------------------------------
 -- ###########################    R E P O R T S   ########################
 --------------------------------------------------------------------------
 -- 14.08.2018. Only procedures that differ in 3.0 comparing to 2.5 remain here.
-
-create or alter procedure srv_get_last_launch_beg_end(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-     last_launch_beg timestamp
-    ,last_launch_end timestamp
-) as
-
-begin
-    -- ###########################################################
-    -- STUB! Will be filled with actual code in oltp_common_sp.sql
-    -- ###########################################################
-
-    suspend;
-
-end
-
-^ -- srv_get_last_launch_beg_end
 
 create or alter procedure srv_fill_mon(
     a_rowset bigint default null -- not null ==> gather info from tmp$mo_log (2 rows); null ==> gather info from ALL attachments
@@ -4439,205 +4399,12 @@ end
 
 ^ -- srv_fill_tmp_mon
 
-create or alter procedure srv_mon_stat_per_units (
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0 )
-returns (
-    unit dm_unit
-   ,iter_counts bigint
-   ,avg_elap_ms bigint
-   ,avg_rec_reads_sec numeric(12,2)
-   ,avg_rec_dmls_sec numeric(12,2)
-   ,avg_bkos_sec numeric(12,2)
-   ,avg_purg_sec numeric(12,2)
-   ,avg_xpng_sec numeric(12,2)
-   ,avg_fetches_sec numeric(12,2)
-   ,avg_marks_sec numeric(12,2)
-   ,avg_reads_sec numeric(12,2)
-   ,avg_writes_sec numeric(12,2)
-   ,avg_seq bigint
-   ,avg_idx bigint
-   ,avg_rpt bigint
-   ,avg_bkv bigint
-   ,avg_frg bigint
-   ,avg_bkv_per_rec numeric(12,2)
-   ,avg_frg_per_rec numeric(12,2)
-   ,avg_ins bigint
-   ,avg_upd bigint
-   ,avg_del bigint
-   ,avg_bko bigint
-   ,avg_pur bigint
-   ,avg_exp bigint
-   ,avg_fetches bigint
-   ,avg_marks bigint
-   ,avg_reads bigint
-   ,avg_writes bigint
-   ,avg_locks bigint
-   ,avg_confl bigint
-   ,max_seq bigint
-   ,max_idx bigint
-   ,max_rpt bigint
-   ,max_bkv bigint
-   ,max_frg bigint
-   ,max_bkv_per_rec numeric(12,2)
-   ,max_frg_per_rec numeric(12,2)
-   ,max_ins bigint
-   ,max_upd bigint
-   ,max_del bigint
-   ,max_bko bigint
-   ,max_pur bigint
-   ,max_exp bigint
-   ,max_fetches bigint
-   ,max_marks bigint
-   ,max_reads bigint
-   ,max_writes bigint
-   ,max_locks bigint
-   ,max_confl bigint
-   ,job_beg varchar(16)
-   ,job_end varchar(16)
-) as
-    declare v_report_beg timestamp;
-    declare v_report_end timestamp;
-begin
-    -- SP for detailed performance analysis: count of operations
-    -- (NOT only business ops; including BOTH successful and failed ones),
-    -- count of errors (including by their types)
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
-    a_last_mins = coalesce(a_last_mins, 0);
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+-- old name: s`rv_mon_stat_per_units
+-- 17.02.2019: SP report_stat_per_units --> moved in oltp_common_sp.sql 
 
-    select p.last_launch_beg, p.last_launch_end
-    from srv_get_last_launch_beg_end( :a_last_hours, :a_last_mins ) p
-    into v_report_beg, v_report_end;
-
-    for
-        -- 29.08.2014: data from measuring statistics per each unit
-        -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
-        -- 25.01.2015: added rec_locks, rec_confl.
-        -- 06.02.2015: reorder columns, made all `max` values most-right
-        select
-             m.unit
-            ,count(*) iter_counts
-            -------------- speed -------------
-            ,avg(m.elapsed_ms) avg_elap_ms
-            ,avg(1000.00 * ( (m.rec_seq_reads + m.rec_idx_reads + m.bkv_reads ) / nullif(m.elapsed_ms,0))  ) avg_rec_reads_sec
-            ,avg(1000.00 * ( (m.rec_inserts + m.rec_updates + m.rec_deletes ) / nullif(m.elapsed_ms,0))  ) avg_rec_dmls_sec
-            ,avg(1000.00 * ( m.rec_backouts / nullif(m.elapsed_ms,0))  ) avg_bkos_sec
-            ,avg(1000.00 * ( m.rec_purges / nullif(m.elapsed_ms,0))  ) avg_purg_sec
-            ,avg(1000.00 * ( m.rec_expunges / nullif(m.elapsed_ms,0))  ) avg_xpng_sec
-            ,avg(1000.00 * ( m.pg_fetches / nullif(m.elapsed_ms,0)) ) avg_fetches_sec
-            ,avg(1000.00 * ( m.pg_marks / nullif(m.elapsed_ms,0)) ) avg_marks_sec
-            ,avg(1000.00 * ( m.pg_reads / nullif(m.elapsed_ms,0)) ) avg_reads_sec
-            ,avg(1000.00 * ( m.pg_writes / nullif(m.elapsed_ms,0)) ) avg_writes_sec
-            -------------- reads ---------------
-            ,avg(m.rec_seq_reads) avg_seq
-            ,avg(m.rec_idx_reads) avg_idx
-            ,avg(m.rec_rpt_reads) avg_rpt
-            ,avg(m.bkv_reads) avg_bkv
-            ,avg(m.frg_reads) avg_frg
-            ,avg(m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
-            ,avg(m.frg_per_seq_idx_rpt) avg_frg_per_rec
-            ---------- modifications ----------
-            ,avg(m.rec_inserts) avg_ins
-            ,avg(m.rec_updates) avg_upd
-            ,avg(m.rec_deletes) avg_del
-            ,avg(m.rec_backouts) avg_bko
-            ,avg(m.rec_purges) avg_pur
-            ,avg(m.rec_expunges) avg_exp
-            --------------- io -----------------
-            ,avg(m.pg_fetches) avg_fetches
-            ,avg(m.pg_marks) avg_marks
-            ,avg(m.pg_reads) avg_reads
-            ,avg(m.pg_writes) avg_writes
-            ----------- locks and conflicts ----------
-            ,avg(m.rec_locks) avg_locks
-            ,avg(m.rec_confl) avg_confl
-            --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
-            ,max(m.rec_seq_reads) max_seq
-            ,max(m.rec_idx_reads) max_idx
-            ,max(m.rec_rpt_reads) max_rpt
-            ,max(m.bkv_reads) max_bkv
-            ,max(m.frg_reads) max_frg
-            ,max(m.bkv_per_seq_idx_rpt) max_bkv_per_rec
-            ,max(m.frg_per_seq_idx_rpt) max_frg_per_rec
-            ,max(m.rec_inserts) max_ins
-            ,max(m.rec_updates) max_upd
-            ,max(m.rec_deletes) max_del
-            ,max(m.rec_backouts) max_bko
-            ,max(m.rec_purges) max_pur
-            ,max(m.rec_expunges) max_exp
-            ,max(m.pg_fetches) max_fetches
-            ,max(m.pg_marks) max_marks
-            ,max(m.pg_reads) max_reads
-            ,max(m.pg_writes) max_writes
-            ,max(m.rec_locks) max_locks
-            ,max(m.rec_confl) max_confl
-            ,left(cast(:v_report_beg as varchar(24)),16)
-            ,left(cast(:v_report_end as varchar(24)),16)
-        from mon_log m
-        where m.dts between :v_report_beg and :v_report_end
-        group by unit
-    into
-        unit
-       ,iter_counts
-       ,avg_elap_ms
-       ,avg_rec_reads_sec
-       ,avg_rec_dmls_sec
-       ,avg_bkos_sec
-       ,avg_purg_sec
-       ,avg_xpng_sec
-       ,avg_fetches_sec
-       ,avg_marks_sec
-       ,avg_reads_sec
-       ,avg_writes_sec
-       ,avg_seq
-       ,avg_idx
-       ,avg_rpt
-       ,avg_bkv
-       ,avg_frg
-       ,avg_bkv_per_rec
-       ,avg_frg_per_rec
-       ,avg_ins
-       ,avg_upd
-       ,avg_del
-       ,avg_bko
-       ,avg_pur
-       ,avg_exp
-       ,avg_fetches
-       ,avg_marks
-       ,avg_reads
-       ,avg_writes
-       ,avg_locks
-       ,avg_confl
-       ,max_seq
-       ,max_idx
-       ,max_rpt
-       ,max_bkv
-       ,max_frg
-       ,max_bkv_per_rec
-       ,max_frg_per_rec
-       ,max_ins
-       ,max_upd
-       ,max_del
-       ,max_bko
-       ,max_pur
-       ,max_exp
-       ,max_fetches
-       ,max_marks
-       ,max_reads
-       ,max_writes
-       ,max_locks
-       ,max_confl
-       ,job_beg
-       ,job_end
-    do
-        suspend;
-end
-
-^ -- srv_mon_stat_per_units
-
-create or alter procedure srv_mon_stat_per_tables (
-    a_last_hours smallint default 3,
+-- old name: s`rv_mon_stat_per_tables
+create or alter procedure report_stat_per_tables (
+    a_last_hours smallint default 0,
     a_last_mins smallint default 0 )
 returns (
     table_name dm_dbobj
@@ -4677,20 +4444,22 @@ returns (
    ,job_beg varchar(16)
    ,job_end varchar(16)
 ) as
-    declare v_report_beg timestamp;
-    declare v_report_end timestamp;
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
 begin
-    -- SP for detailed performance analysis: count of operations
-    -- (NOT only business ops; including BOTH successful and failed ones),
-    -- count of errors (including by their types)
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
+
+    a_last_hours = abs( a_last_hours );
     a_last_mins = coalesce(a_last_mins, 0);
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
-    select p.last_launch_beg, p.last_launch_end
-    from srv_get_last_launch_beg_end( :a_last_hours, :a_last_mins ) p
-    into v_report_beg, v_report_end;
-
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
+    if ( a_last_hours > 0 or a_last_mins > 0 ) then
+        v_test_time_dts_beg =
+            maxvalue(   v_test_time_dts_beg,
+                        dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to v_test_time_dts_end )
+                    );
     for
     select
          t.table_name
@@ -4731,11 +4500,11 @@ begin
         ,max(t.rec_expunges) max_exp
         ,max(t.rec_locks) max_locks
         ,max(t.rec_confl) max_confl
-        ,left(cast(:v_report_beg as varchar(24)),16)
-        ,left(cast(:v_report_end as varchar(24)),16)
+        ,left(cast(:v_test_time_dts_beg as varchar(24)),16)
+        ,left(cast(:v_test_time_dts_end as varchar(24)),16)
     from mon_log_table_stats t
     where
-        t.dts between :v_report_beg and :v_report_end
+        t.dts between :v_test_time_dts_beg and :v_test_time_dts_end
         and
           t.rec_seq_reads
         + t.rec_idx_reads
@@ -4793,7 +4562,7 @@ begin
         suspend;
 end
 
-^ -- srv_mon_stat_per_tables
+^ -- report_stat_per_tables
 
 create or alter procedure srv_fill_mon_memo_consumption
 returns (

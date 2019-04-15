@@ -110,6 +110,11 @@ delete from semaphores;
 insert into semaphores(id, task) values(1, 'srv_make_money_saldo');
 insert into semaphores(id, task, dts) values(2, 'srv_recalc_idx_stat', 'YESTERDAY');
 insert into semaphores(id, task) values(3, 'srv_make_invnt_saldo');
+
+-- 18.03.2019: serialize access to SP srv_autogen_aggregate_perf_data
+-- (this SP will be called with frequency ~= srv_make*_saldo, in order to reduce time
+-- of calculating final reports: datasource changed from v_perf_log to perf_agg)
+insert into semaphores(id, task) values(4, 'srv_aggregate_perf_data');
 commit;
 
 -- ##########   S E T T I N G S     f o r    D I F F.      M O D E S   #########
@@ -247,12 +252,12 @@ insert into settings(working_mode, mcode, context,svalue,init_on)
 -- according to the config setting 'create_with_compound_columns_order'.
 -- actual only when setting 'create_with_split_heavy_tabs' = 0.
 insert into settings(working_mode, mcode, context,svalue,init_on)
-	    values(  'COMMON'                       -- working_mode
-		    ,'BUILD_WITH_QD_COMPOUND_ORDR'  -- mcode
-		    ,'USER_SESSION'                 -- context
-		    ,'*** TAKE AT BUILD PHASE FROM CONFIG ***' -- value from config
-		    ,'db_prepare'                   -- init_on
-		  );
+        values(  'COMMON'                       -- working_mode
+            ,'BUILD_WITH_QD_COMPOUND_ORDR'  -- mcode
+            ,'USER_SESSION'                 -- context
+            ,'*** TAKE AT BUILD PHASE FROM CONFIG ***' -- value from config
+            ,'db_prepare'                   -- init_on
+          );
 
 
 insert into settings(working_mode, mcode,           svalue)
@@ -359,7 +364,7 @@ insert into settings(working_mode, mcode,                      svalue,  init_on)
 insert into settings(working_mode, mcode,  svalue)
               values('COMMON',     'C_MIN_COST_TO_BE_SPLITTED', '1000');
 
--- number of rows which should be added into rdistr for every new cost
+-- number of rows which should be added into Pdistr for every new cost
 -- (this setting will be stored into rules_for_pdistr table, see below):
 -- ::: NB ::: this setting must remains in THIS script, see below filling
 -- of table rules_for_pdistr
@@ -490,8 +495,45 @@ begin
         );
 
 end
+^
 
-^set term ;^
+/************************
+create or alter procedure sp_rules_for_qdistr returns(
+    mode           dm_name
+    ,snd_optype_id  smallint
+    ,rcv_optype_id  smallint
+    ,storno_sub     smallint
+) as
+begin
+    -- 29.03.2019
+    mode = 'new_doc_only';   snd_optype_id = NULL; rcv_optype_id = 1000; storno_sub = NULL; suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 1000; rcv_optype_id = 1200; storno_sub = 1;    suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 1200; rcv_optype_id = 2000; storno_sub = 1;    suspend;
+    mode = 'mult_rows_only'; snd_optype_id = 1000; rcv_optype_id = 3300; storno_sub = 2;    suspend;
+    mode = 'mult_rows_only'; snd_optype_id = 2000; rcv_optype_id = 3300; storno_sub = NULL; suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 2100; rcv_optype_id = 3300; storno_sub = 1;    suspend;
+    mode = 'new_doc_only';   snd_optype_id = 3300; rcv_optype_id = 3400; storno_sub = NULL; suspend;
+end
+^
+
+create or alter procedure sp_rules_for_pdistr returns(
+    mode           dm_name
+    ,snd_optype_id  smallint
+    ,rcv_optype_id  smallint
+    ,rows_to_multiply int
+) as
+begin
+    -- 29.03.2019
+    mode = ''; snd_optype_id = 5000; rcv_optype_id = 3400; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 3400; rcv_optype_id = 5000; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 4000; rcv_optype_id = 2100; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 2100; rcv_optype_id = 4000; rows_to_multiply = 10; suspend;
+end
+^
+
+*************************/
+
+set term ;^
 commit;
 
 --------------------------------------------------------------------------------
@@ -585,14 +627,21 @@ values('srv_make_invnt_saldo',        'service',  'service',     35,            
 -- 12.01.2019. Increased frequency for gathering money turnovers from 25 to 33.
 insert into business_ops(
         unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
-values('srv_make_money_saldo',        'service',  'service',     33,                      995,        9991,                           'service: total monetary turnovers');
+values('srv_make_money_saldo',        'service',  'service',     33,                      993,        9991,                           'service: total monetary turnovers');
+
+
+-- 18.03.2019: task for aggregating data from perf_log / perf_split_NN in order to reduce time of reports creation:
+insert into business_ops(
+        unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
+values('srv_aggregate_perf_data',     'service',  'service',      5,                      995,        9992,                           'service: aggregate perf. data');
+
 
 -- 12.01.2019. Algorithm of selection SP srv_recalc_idx_stat in srv_random_unit_choice has been changed: this routine must be launched **ALWAYS**
 -- when number of minutes since its previous run exceeds config parameter 'recalc_idx_min_interval' (e.g. 30 minutes). Otherwise it should be SKIPPED from selection.
 -- In order to make this possible, new field was added to table 'semaphores' with storing TIMESTAMP of last run.
 insert into business_ops(
         unit,                         mode,       kind,          random_selection_weight, sort_prior, predictable_selection_priority, info )
-values('srv_recalc_idx_stat',         'service',  'service',     99,                      997,        9992,                           'service: refresh index statistics');
+values('srv_recalc_idx_stat',         'service',  'service',     99,                      997,        9993,                           'service: refresh index statistics');
 
 
 -- need only to check FB stability against extremely high frequency of MON$-querying:
@@ -600,6 +649,9 @@ values('srv_recalc_idx_stat',         'service',  'service',     99,            
 -- delete from business_ops b where b.unit='srv_fill_mon'; commit;
 --insert into business_ops( unit, mode, kind, random_selection_weight, sort_prior, predictable_selection_priority, info )
 --values('srv_fill_mon',         'service', 'service',         40, 999, 9995,  '(temply) stability test when querying mon$-tables');
+
+update business_ops set unit = lower(unit); -- see SP srv_increment_tx_bops_counter: we have to be sure that business unit always be found there, but we can escape CI-collate here.
+commit;
 
 --------------------------------------------------------------------------------
 -- ##################   FIREBIRD STANDARD ERROR CODES   ########################

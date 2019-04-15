@@ -143,29 +143,48 @@ chk4crash() {
     local tmperr=$2
     local log4all=$3
 
-    local crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
+    #sho "Routine $FUNCNAME: start." $log4all
+
+    local crash_pattern
     local crashes_cnt
+    local syntax_pattern
+    local syntax_err_cnt
     local msg
 
+    crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
     crashes_cnt=$(grep -i -c -e "$crash_pattern" $tmperr)
     #echo tmperr=$tmperr
     #echo crashes_cnt=$crashes_cnt
     if [ $crashes_cnt -gt 0 ] ; then
-      msg="$(date +'%Y.%m.%d %H:%M:%S'). Connection problem found $crashes_cnt times, pattern = $crash_pattern."
-      echo $msg
-      echo $msg>>$log4all
-      echo Command: $run_isql
-      echo Command: $run_isql>>$log4all
-      echo ---------------------------------------------
-      cat $tmperr
-      echo ---------------------------------------------
-      cat $tmperr>>$log4all
-      echo Script is now terminated.
-      ###################################################
-      # ....................  e x i t ...................
-      ###################################################
-      exit 1
+        sho "Connection problem found $crashes_cnt times, pattern = $crash_pattern." $log4all
+        sho "Command: $run_isql" $log4all
+        grep -n -i -e "$crash_pattern" $tmperr >> $log4all
+        sho "Check details in $tmperr" $log4all
+        sho "Script has been terminated." $log4all
+        ###################################################
+        # ....................  e x i t ...................
+        ###################################################
+        exit 1
     fi
+    
+    # 20.02.2019
+    # 42000 ==> -902    335544569 dsql_error     Dynamic SQL Error // token unkown et al
+    # 42S22 ==> -206    335544578 dsql_field_err Column unknown
+    # 42S02 ==> -204    335544580 Table unknown
+    # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
+    syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 39000"
+    syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $tmperr)
+    if [ $syntax_err_cnt -gt 0 ] ; then
+        sho "Syntax / copliler errors found occured $syntax_err_cnt times, pattern = $syntax_pattern." $log4all
+        sho "Check details in $tmperr" $log4all
+        sho "Script has been terminated." $log4all
+        ###################################################
+        # ....................  e x i t ...................
+        ###################################################
+        exit 1
+    fi
+    #echo $(date +'%Y.%m.%d %H:%M:%S'). STDERR log $tmperr with size $(stat -c%s $tmperr) bytes has been checked, script is working normally.>>$log4all
+    #sho "Routine $FUNCNAME: finish." $log4all
 }
 
 # -------------------------------  d b _ c r e a t e -----------------------------------
@@ -335,7 +354,8 @@ inject_actual_setting $fb init working_mode upper\(\'$working_mode\'\)  >>$tmpsq
 inject_actual_setting $fb common enable_mon_query \'$mon_unit_perf\'  >>$tmpsql
 inject_actual_setting $fb common unit_selection_method \'$unit_selection_method\' >>$tmpsql
 if echo "$working_mode" | grep -q -i "debug_01\|debug_02"; then
-    # 20.08.2018: move here from oltp_main_filling.sql:
+    # 20.08.2018: move here from oltp_main_filling.sql.
+    # For DEBUG modes we turn off complex logic related to adding invoices:
     inject_actual_setting $fb common enable_reserves_when_add_invoice \'0\'  >>$tmpsql
     inject_actual_setting $fb common order_for_our_firm_percent \'0\' >>$tmpsql
 fi
@@ -353,7 +373,9 @@ inject_actual_setting $fb common update_conflict_percent \'$update_conflict_perc
 # Otherwise EDS connection (that is created fin SP sys_get_fb_arch for definition whether FB is in Classic mode or no)
 # will remain alive infinitely and will keep DB file opened.
 # ::: NB ::: This setting will be INSERTED if record doesnot exist - see 5th argument = 1:
-inject_actual_setting $fb common connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1 >>$tmpsql
+#inject_actual_setting $fb common connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1 >>$tmpsql
+# 21.02.2019: changed common to init
+inject_actual_setting $fb init connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1 >>$tmpsql
 
 # Added 23.11.2018
 ##################
@@ -363,8 +385,18 @@ inject_actual_setting $fb common connect_str "'connect ''$host/$port:$dbnm'' use
 inject_actual_setting $fb common mon_unit_list \'$mon_unit_list\' >>$tmpsql
 inject_actual_setting $fb common halt_test_on_errors \'$halt_test_on_errors\' >>$tmpsql
 inject_actual_setting $fb common qmism_verify_bitset \'$qmism_verify_bitset\' >>$tmpsql
+
+if [ $recalc_idx_min_interval -eq 0 ]; then
+    # added 14.04.2019
+    recalc_idx_min_interval=99999999
+fi
 inject_actual_setting $fb common recalc_idx_min_interval \'$recalc_idx_min_interval\' >>$tmpsql
 ##################
+#  Added 21.02.2019:
+inject_actual_setting $fb common warm_time \'$warm_time\' 1 >>$tmpsql
+
+# Added 21.03.2019
+inject_actual_setting $fb common test_intervals  \'$test_intervals\' 1 >>$tmpsql
 
 cat <<- EOF >>$tmpsql
     end
@@ -574,16 +606,25 @@ show_db_and_test_params() {
          set width working_mode 12;
          set width setting_name 40;
          set width setting_value 20;
+
+         set heading off;
+         select 'Workload level settings (see definitions in oltp_main_filling.sql):' as " " from rdb\$database;
+         set heading on;
          select * from z_settings_pivot;
+
+         set heading off;
+         select 'Main test settings:' as " " from rdb\$database;
+         set heading on;
          select z.setting_name, z.setting_value from z_current_test_settings z;
 
          set width tab_name 13;
          set width idx_name 31;
          set width idx_key 65;
-         set heading off;
-         select 'Index(es) for heavy-loaded table(s):' as " " from rdb\$database;
-         set heading on;
-         select * from z_qd_indices_ddl;
+         -- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES.
+         -- set heading off;
+         -- select 'Index(es) for heavy-loaded table(s):' as " " from rdb\$database;
+         -- set heading on;
+         -- select * from z_qd_indices_ddl;
          
          set heading off;
          select 'Table(s) WITHOUT primary and unique constrains:' as " " from rdb\$database;
@@ -976,7 +1017,7 @@ cat <<- EOF
      5) show-detailed-info:	$nfo
 EOF
  if  [ "$mode" = "run_test" ] ; then
-cat <<- EOF     
+cat <<- EOF
      6) sleep_min:              $sleep_min
      7) sleep_max:              $sleep_max
      8) sleep_udf:              $sleep_udf
@@ -984,35 +1025,14 @@ cat <<- EOF
 EOF
   fi
 
-
-
-#          if /i .!mode!.==.run_test. (
-#              echo         5. Make detailed info after each Tx: ^|%nfo%^|
-#              echo         6. Units selection method:           ^|%unit_selection_method%^|
-#              if %sleep_max% GTR 0 (
-#                  if !sleep_min! GEQ !sleep_max! (
-#                      set /a sleep_min=1
-#                  )
-#                  echo         7. Make idle between Tx, seconds:    ^|%sleep_min% ... %sleep_max%^|
-#                  if .%sleep_udf%.==.. (
-#                      echo.           Delay is implemented by OS executable call.
-#                  ) else (
-#                      echo.           Delay is implemented by call UDF: ^|%sleep_udf%^|
-#                      echo.           Multiplier for delays in SECONDS: ^|%sleep_mul%^|
-#                  )
-#              ) else (
-#                  echo         7. NO pauses between transactions.
-#                  echo            *** NOTE *** 
-#                  echo            EXTREMELY HEAVY (UNREAL^) WORKLOAD CAN OCCUR ***
-#              )
-#          )
-
-
- #echo set tran option: $nau
- echo "-- ### WARNING: DO NOT EDIT ###">>$sql
- echo "-- Generated auto by $shname, routine: $FUNCNAME">>$sql
- if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-   cat <<- EOF >>$sql
+#echo set tran option: $nau
+cat <<- EOF >>$sql
+	-- ### WARNING: DO NOT EDIT ###
+	-- Generated auto by $shname, routine: $FUNCNAME
+	-- SQL script generation started at $(date +'%d.%m.%Y %H:%M:%S')
+EOF
+ if  [ "$mode" = "init_pop" ] ; then
+	cat <<- EOF >>$sql
 		-- mode='$mode': get data from mon\$database for verifying settings of database
 		-- NB-1: FW must be (temply) set to OFF
 		-- NB-2: cache buffers temply set to pretty big value
@@ -1029,7 +1049,10 @@ EOF
  for (( i=1; i<=$lim; i++ ))
  do
 
-    [[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
+    #[[ $((  $i % $verb )) = 0 ]] && echo Done generating iter $i of total $lim
+    if [ $((  $i % $verb )) = 0 ] ; then
+	sho "Generating SQL script. Iter $i of total $lim" $log4all
+    fi
 
     if [ $i = 1 ]; then
 	cat <<-EOF >>$sql
@@ -1088,9 +1111,9 @@ EOF
 		    --- c = $sleep_udf( c );
 		    while (c > 0) do
 		    begin
-		        -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
-		        -- oOo C A L L     U D F   F O R    S L E E P  oOo
-		        -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+		        -- +=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=
+		        -- +=- C A L L     U D F   F O R    S L E E P  +=-
+		        -- +=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=-+=
 		        d = $sleep_udf( $sleep_mul ); -- here we wait only 1 second: we have to BREAK from this loop ASAP when test is prematurely cancelled.
 		
 		        execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
@@ -1149,15 +1172,15 @@ EOF
       else 
             # ......................... config parameter sleep_max = 0
 		cat <<-EOF >>$sql
-		-- Delay between transactions that perform business operations is DISABLED.
-		-- To enable delays set value of 'sleep_max' parameter to some value greater than 0.
+		-- Pause between transactions is DISABLED. HEAVY WORKLOAD CAN OCCUR BECAUSE OF THIS.
+		-- For enabling them assign positive value to 'sleep_max' parameter in $cfg.
 		-- Pauses will be done either via 'shell sleep NN' invocation or using UDF call.
 		-- The latter requires existense of appropriate binary .so and SQL script with UDF
 		-- declaration.
 		-- Configuration parameter 'sleep_ddl' must be uncommented and have to point on this SQL script.
 
 		EOF
-#QQQ
+
             if [ $mon_unit_perf -eq 2 ]; then
 		cat <<-EOF >>$sql
 			-- 16.12.2018. Config parameter 'mon_unit_perf' = 2.
@@ -1172,9 +1195,9 @@ EOF
 				EOF
                     if [ ! -z "$sleep_udf" ] ; then
 			cat <<-EOF >>$sql
-			-- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
-			-- oOo    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  oOo
-			-- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
+			-- .:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:
+			-- :.:    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  .:.
+			-- .:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:
 			set transaction read only read committed;
 			set heading off;
 			set term ^;
@@ -1202,9 +1225,9 @@ EOF
 			        t = 'now';
 			        while (c > 0) do
 			        begin
-			            -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
-			            -- oOo C A L L     U D F   F O R    S L E E P  oOo
-			            -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+			            -- #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-
+			            -- #-#   C A L L     U D F   F O R    S L E E P   #-#
+			            -- #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-
 			            d = $sleep_udf( $sleep_mul ); -- here we wait only 1 second: we have to BREAK from this loop ASAP when test is prematurely cancelled.
 			
 			            execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
@@ -1216,7 +1239,7 @@ EOF
 			                exception;
 			            end
 			        end
-			        " " = 'SID=1. Completed pause between queries to monitoring tables, ms: ';
+			        " " = 'SID=1. Completed pause between queries to moitoring tables, ms: ';
 			        session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
 			        suspend;
 			    end
@@ -1240,7 +1263,7 @@ EOF
 			EOF
                 fi # $test_time -ge 10 / -lt 10
             fi # $mon_unit_perf -eq 2
-#ZZZ
+
       fi # config parameter sleep_max -gt 0 --> yes / no
 	cat <<- EOF >>$sql
 		
@@ -1254,11 +1277,34 @@ EOF
     
     [[ $unit_selection_method = "random" ]] && eb_title="RANDOM" || eb_title="PREDICTABLE"
     cat <<- EOF >>$sql
-		-- check oltp_config.NN for optional setting NO AUTO UNDO here:
-		set transaction no wait $nau;
-		set list on;
-		select gen_id(g_stop_test, 0) as current_g_stop_test from rdb\$database;
-		set list off;
+        -- ################################################################
+        -- START TRANSACTION WHICH WILL BE USED FOR BUSINESS UNIT EXECUTION
+        -- ################################################################
+		
+		set transaction no wait $nau; -- check oltp_config.NN for optional setting NO AUTO UNDO here:
+		set heading off;
+		-- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
+		-- in case of extremely high workload when number of attachments is ~1000 or more.
+		-- Sample of output:
+		-- Current value of 'stop'-flag: g_stop_test = 0, test_time: 2019-03-21 09:05:31.0390 ... 2019-03-21 12:05:31.0390
+		set term ^;
+		execute block returns(" " varchar(255)) as
+		    declare v_dts_beg timestamp;
+		    declare v_dts_end timestamp;
+		begin
+		    select test_time_dts_beg, test_time_dts_end
+		    from sp_get_test_time_dts -- this SP uses session-level context variables since its 2nd call and until reconnect
+		    into v_dts_beg, v_dts_end;
+		    " " = 'Current value of ''stop''-flag: g_stop_test = ' || gen_id(g_stop_test, 0)
+		          || ', test_time: '
+		          || coalesce( v_dts_beg, '<?>' )
+		          || ' ... '
+		          || coalesce( v_dts_end, '<?>' )
+		    ;
+		    suspend;
+		end^
+		set term ;^
+		set heading on;
 		
 		-- #########################################################
 		-- TOP-LEVEL UNIT (BUSINESS OPERATION) CHOISE,  $eb_title
@@ -1268,6 +1314,8 @@ EOF
 		execute block as
 		  declare v_unit dm_name;
 		begin
+		    -- 21.02.2019 00:05
+		    -- execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
 	EOF
 	
     if  [ "$mode" = "init_pop" ] ; then
@@ -1337,13 +1385,16 @@ EOF
 		        end
 		        if ( v_unit is null ) then
 		        begin
+                      -- +++++++++++++++++++++++++++++++++++++++++++++++++++
+                      -- +++  c h o o s e    b u s i n e s s    u n i t  +++
+                      -- +++++++++++++++++++++++++++++++++++++++++++++++++++
 	EOF
 
 	if  [ "$unit_selection_method" = "random" ] ; then
         cat <<-EOF >>$sql
 			          select p.unit
 			          from srv_random_unit_choice(
-			             ''
+			              ''
 			             ,''
 			             ,''
 			             ,''
@@ -1386,7 +1437,7 @@ EOF
 			    declare v_dummy bigint;
 			begin
 			    rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', 
-					      datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
+					      datediff(millisecond from timestamp '01.01.2015' to cast('now' as timestamp) )
 					    );
 			    -- define context var which will identify rowset field
 			    -- in mon_log and mon_log_table_stats:
@@ -1408,7 +1459,7 @@ EOF
 			    -- are filled with counters BEFORE application unit call.
 			    -- Field "mult" in these tables is now negative: -1
 			    rdb$set_context('USER_SESSION','MON_GATHER_0_END',
-					      datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
+					      datediff(millisecond from timestamp '01.01.2015' to cast('now' as timestamp) )
 					    );
 			end
 			^
@@ -1439,6 +1490,10 @@ EOF
 		-- ###   S H O W    S E L E C T E D     U N I T     N A M E   ###
 		-- ##############################################################
 
+		-- ensure that just before call application unit
+		-- GTT tmp\$perf_log is really EMPTY:
+		delete from tmp\$perf_log;
+
 		set heading off;
 		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
 		-- in case of extremely high workload (when number of attachments is ~1000 or more).
@@ -1458,38 +1513,45 @@ EOF
 		set width unit 31;
 		set width elapsed_ms 10;
 		set width msg 16;
-		set width add_info 20;
+		set width add_info 30;
 		set width mon_logging_info 20;
-
-		-- ensure that just before call application unit
-		-- table tmp\$perf_log is really EMPTY:
-		delete from tmp\$perf_log;
 
 		set list off;
 		
 		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
 		-- in case of extremely high workload (when number of attachments is ~1000 or more).
 		set term ^;
-		execute block returns( dts varchar(24), trn varchar(20), att varchar(20), unit varchar(50), worker_seq int, msg varchar(16), add_info varchar(40) ) as
+		execute block returns( dts varchar(24), trn varchar(20), att varchar(20), unit varchar(50), worker_seq int, msg varchar(16), add_info varchar(50) ) as
 		begin
-		    dts = cast(current_timestamp as varchar(24)); --  substring(cast(current_timestamp as varchar(24)) from 12 for 12);
+		    dts = left( cast(current_timestamp as varchar(255)), 24); -- NB, 14.04.2019: FB 4.0 adds time_zone info
 		    trn = 'tra_'||current_transaction;
 		    att = 'att_'||current_connection;
 		    unit = rdb\$get_context('USER_SESSION','SELECTED_UNIT'); 
 		    worker_seq = cast( rdb\$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER' ) as int ); 
 		    msg = 'start';
-		    add_info = 'iter # $i  of $lim';
+		    select iif( current_timestamp < p.dts_beg, 'WARM_TIME', 'TEST_TIME' ) || ', minute N '
+		           || cast( iif( current_timestamp < p.dts_beg,
+		                         60*$warm_time - datediff( second from current_timestamp to p.dts_beg ),
+		                         datediff( second from p.dts_beg to current_timestamp )
+		                       ) / 60
+		                       +1
+		                    as varchar(10)
+		                  )
+		    from (
+		        select p.test_time_dts_beg as dts_beg from sp_get_test_time_dts p
+		    ) p
+		    into add_info;
 		    suspend;
 		end
 		^
 		set term ^;
 
 		-- *** RESULT: ***
-		-- ++++++++++++++++++++++++++++++++++++++++ Action # 4 of 300 ++++++++++++++++++++++++++++++++++++++++ 
+		-- ++++++++++++++++++++++++++++++++++++++++ Action # 4 of NNN ++++++++++++++++++++++++++++++++++++++++ 
 		
 		-- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
-		-- ======================= ============== ============== =============================== ============ ================ ==================
-		-- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            iter # 4  of 300  
+		-- ======================= ============== ============== =============================== ============ ================ =========================
+		-- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            TEST_TIME, minute N 12345
 
 
 		SET STAT ON;
@@ -1515,33 +1577,27 @@ EOF
     
     cat <<- EOF >>$sql
 		  begin
-		    -- save in ctx var timestamp of START app unit:
-		    rdb\$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp));
 		    rdb\$set_context('USER_SESSION', 'GDS_RESULT', null);
+		    rdb\$set_context('USER_SESSION', 'TOTAL_OPS_SUCCESS_INFO', null);
 		    -- save value of current_transaction because we make COMMIT
 		    -- after gathering mon$ tables when oltp_config.NN parameter
 		    -- mon_unit_perf=1
 		    rdb\$set_context('USER_SESSION', 'APP_TRANSACTION', current_transaction);
+
+		    -- save in ctx var timestamp of START app unit:
+		    rdb\$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp)); -- timestamp of START business unit
 
 		    if ( rdb\$get_context('USER_SESSION','SELECTED_UNIT')
 		       is distinct from
 		       'TEST_WAS_CANCELLED'
 		    ) then
 		      begin
-			        rdb\$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null);
 			        v_stt='select count(*) from ' || rdb\$get_context('USER_SESSION','SELECTED_UNIT');
-			        -- ######################################################
-			        -- ###  r u n     a p p l i c a t i o n      u n i t  ###
-			        -- ######################################################
+			        -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
+                    -- +++  l a u n c h     b u s i n e s s    u n i t  +++
+                    -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
 			        execute statement (v_stt) into result;
 			        rdb\$set_context('USER_SESSION', 'RUN_RESULT',  'OK, '|| result ||' rows');
-			        -- Get count of 'atomic' business operations that occured 'under-cover' of SELECTED_UNIT:
-			        v_success_ops_increment = cast(rdb\$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int);
-			        ---------------------------------------------------------------
-			        -- Increment counter of SUCCESSFULLY finished business asctions
-			        -- for using later in ESTIMATED performance value:
-			        ---------------------------------------------------------------
-			        result = gen_id( g_success_counter, v_success_ops_increment );
 		      end
 		    else
 		      begin
@@ -1558,7 +1614,7 @@ EOF
 		    rdb\$set_context( 'USER_SESSION','BAT_PHOTO_UNIT_DTS',
 			                rdb\$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS')
 			                || ' '
-			                || cast('now' as timestamp)
+			                || cast('now' as timestamp) -- concatenate start timestamp with timestamp of FINISH
 			   );
 		  when any do
 		    begin
@@ -1591,7 +1647,7 @@ EOF
     #if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
     if  [ "$mode" = "run_test" ] ; then
       if [ $mon_unit_perf = 1 ]; then
-        cat <<- EOF >>$sql
+		cat <<- EOF >>$sql
 			-- ##########################################################
 			-- ###    G A T H E R    M O N.    D A T A    A F T E R   ###
 			-- ##########################################################
@@ -1600,7 +1656,7 @@ EOF
 			    declare v_dummy bigint;
 			begin
 			    rdb\$set_context('USER_SESSION','MON_GATHER_1_BEG', 
-			            datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
+			            datediff(millisecond from timestamp '01.01.2015' to cast('now' as timestamp) )
 			    );
 			    -- Gather mon$ tables BEFORE run app unit.
 			    -- Add second row to GTT tmp\$mon_log - statistics on 'per unit' basis.
@@ -1618,7 +1674,7 @@ EOF
 			    )
 			    into v_dummy;
 			    rdb\$set_context('USER_SESSION','MON_GATHER_1_END', 
-			            datediff(millisecond from timestamp '01.01.2015' to current_timestamp ) 
+			            datediff(millisecond from timestamp '01.01.2015' to cast('now' as timestamp) )
 			    );
 			    -- add pair of rows with aggregated differences of mon$
 			    -- counters from GTT to fixed tables
@@ -1649,86 +1705,43 @@ EOF
 			-- ##############################################################
 		EOF
 
-		# Variable 'PERF_WATCH_END' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
-		# ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'
-                # Record with p.unit = 'perf_watch_interval' must be added before FIRST isql will be launched
-                		
-		end_time_dts="left( cast( rdb\$get_context('USER_SESSION','PERF_WATCH_END') as varchar(24)), 19)"
 		cat <<- EOF >>$sql
 			set list on;
-			select
-			    -- 12.08.2018. Variable 'WORKER_SEQUENTIAL_NUMBER' is defined in 'oltp_isql_run_worker' scenario.
-			    -- Its value is used in procedures for storing in doc_list.worker_id field.
-			    -- This is done for separation of scope that is avaliable for each ISQL session.
-			    -- Purpose - reduce frequency of lock conflicts.
-			    rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') as worker_sequential_number
-			    ,$end_time_dts as test_ends_at
-			    ,rdb\$get_context('USER_SESSION','GDS_RESULT') as last_operation_gds_code
-			    ,lpad( iif( minutes_since_start > 0, 1.00 * success_ops_count / minutes_since_start, 0 ), 12, ' ' )
-			     ||
-			     lpad( minutes_since_start, 7, ' ')
-			     as est_overall_at_minute_since_beg
+            select
+                v.worker_sequential_number
+                ,v.test_ends_at
+                ,v.last_operation_gds_code
+                ,v.estimated_perf_since_test_beg
 		EOF
+		#	Sample:
+		# ESTIMATED_PERF_SINCE_TEST_BEG          10808     31 2019-03-25 12:16:18
+		#	::: NOTE ::: Do not use float numbers with decimal spearator:
+		#	-414.50: syntax error: invalid arithmetic operator (error token is ".50")
+		
 		if [ $mon_unit_perf -eq 1 ]; then
 			cat <<- EOF >>$sql
-				    -- this variable will be defined in SP srv_fill_mon:
-				    -- :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-				    -- ::: NB ::: rdb_get_context('USER_SESSION', 'ENABLE_MON_QUERY') must be '1' 
-				    -- :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-				    ,cast( rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') as smallint) as enable_mon_query -- 4debug
-				    ,rdb\$get_context('USER_SESSION','MON_INFO') as mon_logging_info
-				    ,cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_END') as bigint)
-				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_0_BEG') as bigint)
-				     + cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_END') as bigint)
-				     - cast( rdb\$get_context('USER_SESSION','MON_GATHER_1_BEG') as bigint)
-				     as mon_gathering_time_ms
-				    ,rdb\$get_context('USER_SESSION','TRACED_UNITS') as traced_units
+                 -- this variable will be defined in SP srv_fill_mon:
+                ,v.mon_logging_info
+                ,v.mon_gathering_time_ms
+                ,v.traced_units
 			EOF
 		elif [ $mon_unit_perf -eq 2 ]; then
 			cat <<- EOF >>$sql
-				    ,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''' as mon_logging_info
+				,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''' as mon_logging_info
 			EOF
 		else
 			cat <<- EOF >>$sql
-				    ,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
+				,'MON$ querying DISABLED, see config ''mon_unit_perf''' as mon_logging_info
 			EOF
 		fi
+		# $mon_unit_perf = 1 or 2
+
 		cat <<- EOF >>$sql
-		    ,rdb\$get_context('USER_SESSION','WORKING_MODE') as workload_type
-		    ,rdb\$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
-		    ,rdb\$get_context('USER_SESSION','QMISM_VERIFY_BITSET') as qmism_verify_bitset
-			from (
-			  select
-			    gen_id( g_success_counter, 0 ) as success_ops_count
-			    ,datediff( minute
-			               -- Variable 'PERF_WATCH_BEG' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
-			               -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'.
-			               -- Record with p.unit = 'perf_watch_interval' must be added before FIRST isql will be launched
-			               -- We need to substract $warm_time from the moment PERF_WATCH_BEG because sequence
-			               -- of successfully finished business ops is increased from ACTUAL start rather than 
-			               -- timestamp PERF_WATCH_BEG which is used for reports:
-			               from dateadd( -$warm_time minute to cast( rdb\$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) )
-			               to current_timestamp
-			             ) -- datediff minus config "warm_time" value
-			             as minutes_since_start
+               ,v.workload_type
+               ,v.halt_test_on_errors
+            from v_est_perf_for_last_minute v;
+            set list off;
 		EOF
-		if [ $i = 1 ]; then
-			cat <<- EOF >>$sql
-				    ,p.dts_end
-				  from rdb\$database r
-				  left join perf_log p on p.unit = 'perf_watch_interval'
-				  order by dts_beg desc
-				  rows 1
-				) p;
-				set list off;
-			EOF
-		else
-			cat <<- EOF >>$sql
-					from rdb\$database
-				) p;
-				set list off;
-			EOF
-		fi
     fi # mode = 'run_test'
 
 	cat <<- "EOF" >>$sql
@@ -1746,7 +1759,8 @@ EOF
 		set term ^;
 		execute block returns ( dts varchar(24), unit varchar(50), elapsed_ms int, msg varchar(80), add_info varchar(80) ) as
 		begin
-		    dts = cast(current_timestamp as varchar(24)); --  substring(cast(current_timestamp as varchar(24)) from 12 for 12);
+ 		    dts = left( cast(current_timestamp as varchar(255)), 24); -- NB, 14.04.2019: FB 4.0 adds time_zone info
+
 		    -- trn = 'tra_' || rdb$get_context('USER_SESSION','APP_TRANSACTION');
 		    unit = rdb$get_context('USER_SESSION','SELECTED_UNIT');
 		    elapsed_ms = datediff( millisecond 
@@ -1768,7 +1782,7 @@ EOF
 	EOF
 
     #if echo $mode | grep -i "^init_pop$" > /dev/null ; then
-    if  [ "$mode" = "init_pop" ] ; then    
+    if  [ "$mode" = "init_pop" ] ; then
 		cat <<- "EOF" >>$sql
 		set list on;
 		set width db_name 80;
@@ -1797,7 +1811,6 @@ EOF
 		       -- ############################################################################################
 		       -- ###   c a n c e l     t h i s     S Q L    s c r i p t,    r e t u r n     t o     s h e l l
 		       -- ############################################################################################
-		       --exception ex_test_cancellation;
 		       exception ex_test_cancellation ( select result from sys_stamp_exception('ex_test_cancellation') );
 		    end
 		    -- REMOVE data from context vars, they will not be used more
@@ -1807,10 +1820,11 @@ EOF
 		    rdb$set_context('USER_SESSION','GDS_RESULT',    null);
 		    rdb$set_context('USER_SESSION','ADD_INFO', null);
 		    rdb$set_context('USER_SESSION','APP_TRANSACTION', null);
-		    rdb$Set_context('USER_SESSION','MON_GATHER_0_BEG', null);
-		    rdb$Set_context('USER_SESSION','MON_GATHER_0_END', null);
-		    rdb$Set_context('USER_SESSION','MON_GATHER_1_BEG', null);
-		    rdb$Set_context('USER_SESSION','MON_GATHER_1_END', null);
+		    rdb$set_context('USER_SESSION','TOTAL_OPS_SUCCESS_INFO', null);
+		    rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', null);
+		    rdb$set_context('USER_SESSION','MON_GATHER_0_END', null);
+		    rdb$set_context('USER_SESSION','MON_GATHER_1_BEG', null);
+		    rdb$set_context('USER_SESSION','MON_GATHER_1_END', null);
 		    -- 17.09.2018. Restore initial value of current ISQL window sequential number
 		    -- 'WORKER_SEQUENTIAL_NUMBER' by its copy that was stored in 'WORKER_SEQ_NUMB_4RESTORE':
 		    rdb$set_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER', rdb$get_context( 'USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE' ) );
@@ -1882,10 +1896,13 @@ EOF
 
 
  done 
+
+  echo -- SQL script generation finished at $(date +'%d.%m.%Y %H:%M:%S') >> $sql
+
+
  # i=1..$lim
  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
  echo
-
 
 } # end of gen_working_sql()
 
@@ -1903,9 +1920,6 @@ add_init_docs() {
 
   local run_isql
   t0=$(date +'%y%m%d_%H%M%S')
-
-  local crash_pattern="SQLSTATE = 08003\|SQLSTATE = 08006"
-  local crashes_cnt
 
   echo
   echo Begin of initial data population.
@@ -1931,15 +1945,15 @@ add_init_docs() {
 			set heading on;
 			commit;
 			set transaction no wait;
-			echo select count(*) as srv_make_invnt_saldo_result from srv_make_invnt_saldo;
+			select count(*) as srv_make_invnt_saldo_result from srv_make_invnt_saldo;
 			select * from srv_make_invnt_saldo;
 			commit;
 			set transaction no wait;
-			echo select count(*) as srv_make_money_saldo_result from srv_make_money_saldo;
+			select count(*) as srv_make_money_saldo_result from srv_make_money_saldo;
 			select * from srv_make_money_saldo;
 			commit;
 			set transaction no wait;
-			echo select count(*) as srv_recalc_idx_stat_result from srv_recalc_idx_stat;
+			select count(*) as srv_recalc_idx_stat_result from srv_recalc_idx_stat;
 			select * from srv_recalc_idx_stat;
 			commit;
 		EOF
@@ -2069,13 +2083,15 @@ launch_preparing() {
         gen_working_sql run_test $tmpsql 300 $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
         #                  1        2      3         4            5            6           7        8          9
     else
-        gen_working_sql run_test $tmpsql  30  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
+        gen_working_sql run_test $tmpsql  19  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
         #                  1        2      3         4            5            6           7        8          9
         echo
-        echo ..... DEBUG ....  Routine: $FUNCNAME
-        echo RETURN INITIAL NUMBER OF EXEC BLOCKS TO 300. IT WAS CHANGED FOR DEBUG PURPUCES. PRESS ANY KEY...
+        echo DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG
+        echo Routine: $FUNCNAME
+        echo RETURN INITIAL NUMBER OF EXEC BLOCKS TO 300. IT WAS CHANGED FOR DEBUG PURPOSES. PRESS ANY KEY...
         echo
         pause Press any key...
+        exit
     fi
     #                  1        2     3       4             5             6
     # ##########################################################################
@@ -2101,12 +2117,14 @@ launch_preparing() {
 		execute block as
 		begin
 			begin
-				delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+			    -- this view is one-to-one projection to the table perf_agg which is used in report "Performance for every MINUTE":
+				delete from v_perf_agg;
 				when any do
 				begin
 					-- nop --
 				end
 			end
+
 			begin
 				delete from perf_log g
 				where g.unit in ( 'perf_watch_interval',
@@ -2136,17 +2154,17 @@ launch_preparing() {
 		                      null, null, -1);
 		alter sequence g_success_counter restart with 0;
 		commit;
-		set width unit 20;
-		set width add_info 30;
-		set width dts_measure_beg 19;
-		set width dts_measure_end 19;
+
 		set list on;
 		select
 		       g.dts_measure_beg
 		      ,g.dts_measure_end
+		      ,g.add_info
 		from
 		(
-		  select p.unit, p.exc_info as add_info,
+		  select 
+		     p.unit, 
+		     p.exc_info as add_info, -- name of this .sh that did insert this record
 		     left(replace(cast(p.dts_beg as varchar(24)),' ','_'),19) as dts_measure_beg,
 		     left(replace(cast(p.dts_end as varchar(24)),' ','_'),19) as dts_measure_end
 		  from perf_log p
@@ -2304,6 +2322,7 @@ vars=(
     separate_workers
     sleep_max
     test_time
+    test_intervals
     tmpdir
     unit_selection_method
     update_conflict_percent
@@ -2321,6 +2340,23 @@ for i in ${vars[@]}; do
   #echo -e param: $i, value: \|${!i}\|
   [[ -z ${!i} ]] && msg_novar $i $cfg && exit 1
 done
+
+dbdir=$(dirname "${dbnm}")
+
+mkdir -p $tmpdir/sql 2>/dev/null
+mkdir -p $dbdir/sql 2>/dev/null
+
+if [ ! -d "$dbdir" ]; then
+    echo Directory "$dbdir" does not exist and could not be created.
+    echo
+    exit 1
+fi
+
+if [ ! -d "$tmpdir" ]; then
+    echo Directory "$tmpdir" does not exist and could not be created..
+    echo
+    exit 1
+fi
 
 echo
 if [ $sleep_max -gt 0 ]; then
@@ -2354,9 +2390,9 @@ fi
 
 # NOTE, 16.12.2018: we have to use UDF even when sleep_max=0 but mon_unit_perf = 2:
 if [ -s "$sleep_ddl" ]; then
-        #grep -i -e "declare[[:space:]]*external[[:space:]]*function" "$sleep_ddl" >/tmp/tmp_oltp_emul.tmp
-        # declare external function sleep
-        arr=($(grep -i -e "declare[[:space:]]*external[[:space:]]*function" "$sleep_ddl"))
+        # arr=($(grep -i -e "declare[[:space:]]*external[[:space:]]*function" "$sleep_ddl")) -- wrong if file $sleep_ddl contasins 
+        # trailing newlines (^M ) when was copied from Windows host as binary rather than plain text:
+        arr=($( sed 's/\r//' "$sleep_ddl" | grep -i -e "declare[[:space:]]*external[[:space:]]*function" ))
 
         ###################################################################################
         ###   p a r s i n g     n a m e     o f     U D F      f o r      p a u s e s   ###
@@ -2374,6 +2410,7 @@ if [ -s "$sleep_ddl" ]; then
         else
             echo
             echo Parsed UDF for pauses, its name: \'$sleep_udf\'
+            echo $sleep_udf.
         fi
 else
         echo
@@ -2383,9 +2420,6 @@ else
 fi
 
 # fi << old pos for  $sleep_max -gt 0
-
-
-echo  Done.
 
 
 vars=(isql fbsvcmgr)
@@ -2443,6 +2477,16 @@ else
   dbconn=$host/$port:$dbnm
 fi
 
+
+#	cat <<-EOF >$tmpdir/gdb-foo.txt
+#		thread apply all bt
+#		shell $fbc/fb_lock_print -a -d $dbnm 1>$tmpdir/gdb-firebird-lock-print.txt 2>&1
+#		quit
+#		yes
+#	EOF
+#
+
+
 rm -f $tmpchk $tmpclg $tmpadj
 
 rndname=$RANDOM
@@ -2457,7 +2501,7 @@ cat <<-EOF >>$tmpchk
     -- Now we have to:
     -- 0. Check that all database objects already exist:
     -- 1. Ensure that Firebird engine *can* add rows to GTT, i.e. it *has* access to $FIREBIRD_TMP directory on server;
-    -- 2. Database is not in read-only mode (updating 'settings' table with actual values of some config params^).
+    -- 2. Database is not in read-only mode (updating 'settings' table with actual values of some config params).
     -- 3. Update some parameters in the database to be match for their actual values from config file
     --   see invocations of 'inject_actual_setting' subroutine
 
@@ -2964,7 +3008,7 @@ echo $msg
 echo $msg>>$log4all
 echo>>$log4all
 
-if [ 1 -eq 0 ]; then
+if [ 0 -eq 1 ]; then
     echo "./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info AMP"
     pause ... :::DEBUG::: stop_before_launch_single_isql...
 
@@ -2992,7 +3036,7 @@ do
 
     #echo ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}
 
-    ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}&
+    bash ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}&
     #                            1      2      3     4      5                   6                   7                8                  9
 done
 

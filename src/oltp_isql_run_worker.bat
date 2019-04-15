@@ -379,7 +379,7 @@ if .%sid%.==.1. (
 
 )
 
-@set k=0
+@set sql_execution_idx=0
 @echo off
 
 call :sho "Start ISQL #%sid% of total %winq%." %sts%
@@ -401,73 +401,96 @@ if .%sid%.==.1. (
 call :getRandom gen_vbs %sid%
 
 set /a random_delay=1
-set /a min_delay=1
-if %max_cps% GTR 0 (
+set /a min_delay = 1 + %sid% / 25
+set /a max_delay = 2 + %sid% / 25
+
+set use_cps=0
+if %max_cps% GEQ 10 (
+    if %max_cps% LEQ 100 (
+        @rem Max rate of new attachments appearance set to some reasonable value.
+        set use_cps=1
+    )
+)
+
+if .!use_cps!.==.1. (
     if %winq% GTR %max_cps% (
+        set mcase=a
         set /a min_delay = 1 + %sid% / %max_cps%
         set /a max_delay = 1 + %sid% / %max_cps%
-
-        if .1.==.0. (
-        (
-            call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
-            echo sid=%sid%, max_cps=%max_cps%
-            echo min_delay=!min_delay!
-            echo max_delay=!max_delay!
-            echo random_delay=!random_delay!
-            ) >>%tmp%
-            type %tmp%
-            pause
-        )
-
+        call :sho "SID=%sid%. Number of sessions greater than max_cps=%max_cps%. Delay for this SID is !max_delay! seconds." %sts%
     ) else (
-        set /a max_delay = 30
+        set mcase=b
+        set /a min_delay = 1
+        set /a max_delay = 4
+        call :sho "SID=%sid%. Number of sessions is too small, delay will be from !min_delay! fo !max_delay! seconds." %sts%
     )
 ) else (
-    if %warm_time% EQU 0 (
-        set /a max_delay=30
+    set mcase=c
+    if %max_cps% EQU 0 (
+        set mcase=d
+        set /a min_delay=0
+        set /a max_delay=0
+        call :sho "SID=%sid%. Config parameter 'max_cps' is 0. Heavy workload will be for big number of sessions." %sts%
     ) else (
-        set /a min_delay=30
-        set /a max_delay=60*%warm_time%+30
+        sho "SID=%sid%. Config parameter 'max_cps' = %max_cps% is out of reasonable scope. Delay will be from !min_delay! fo !max_delay! seconds." %sts%
     )
 )
 
 
+if .1.==.0. (
+    echo ##### debug code, do not delete #####
+    echo mcase=!mcase!, sid=%sid%, max_cps=%max_cps%, min_delay=!min_delay!, max_delay=!max_delay!
+    call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
+    echo Result: random_delay=!random_delay!
+    echo #####################################
+    pause
+    exit
+)
+
 :start
 
-    @set /a k=k+1
-
+    set /a sql_execution_idx=!sql_execution_idx!+1
 
     if %sid% GTR 1 (
-        if !sleep_min! GEQ !sleep_max! (
-            set /a sleep_min=1
-        )
-        call :sho "SID=%sid%. Point before execution packet !k!." %sts%
-        call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
+        if !sql_execution_idx! EQU 1 (
+            if !sleep_min! GEQ !sleep_max! (
+                set /a sleep_min=1
+            )
+            call :sho "SID=%sid%. Point before execution packet !sql_execution_idx!." %sts%
+            call :getRandom get_rnd %sid% !min_delay! !max_delay! random_delay
 
-        set msg_suff=Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds
-        if %max_cps% GTR 0 (
-            call :sho "Parameter 'max_cps'=%max_cps% connections per second. !msg_suff!" %sts%
+            if !random_delay! GTR 0 (
+                set msg_suff=Get random delay from scope !min_delay!..!max_delay!. Result: !random_delay! seconds
+                if %max_cps% GTR 0 (
+                    call :sho "Parameter 'max_cps'=%max_cps% connections per second. !msg_suff!" %sts%
+                ) else (
+                    call :sho "Parameter 'warm_time'=%warm_time% minutes. !msg_suff!" %sts%
+                )
+
+                @rem ################################################################
+                @rem ###    p a u s e      u s i n g      C S C R I P T   //t:NNN  ##
+                @rem ################################################################
+                @rem //t:nn -- Maximum time a script is permitted to run
+                @rem NB: we have to copy script to separate file for each SID otherwise strange error will raise in many of launching sessions:
+                @rem "CScript Error: Loading script ... failed (The process cannot access ... used by another process.)"
+
+                copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+                set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+                @rem                                               ^
+                @rem                                               |
+                @rem                                          Maximum time a script is permitted to run
+                call :sho "Command: !run_cmd!" %sts%
+                cmd /c !run_cmd! 1>>%sts% 2>&1
+
+                call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
+                del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+            ) else (
+                call :sho "SID=%sid%. Start ISQL without pause: random_delay=!random_delay!." %sts%
+            )
         ) else (
-            call :sho "Parameter 'warm_time'=%warm_time% minutes. !msg_suff!" %sts%
+            call :sho "SID=%sid%. Packet=!sql_execution_idx!. Pause is skipped for all packets starting from 2nd." %sts%
         )
-
-        @rem ################################################################
-        @rem ###    p a u s e      u s i n g      C S C R I P T   //t:NNN  ##
-        @rem ################################################################
-        @rem //t:nn -- Maximum time a script is permitted to run
-        @rem NB: we have to copy script to separate file for each SID otherwise strange error will raise in many of launching sessions:
-        @rem "CScript Error: Loading script ... failed (The process cannot access ... used by another process.)"
-
-        copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-        set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-        @rem                                               ^
-        @rem                                               |
-        @rem                                          Maximum time a script is permitted to run
-        call :sho "Command: !run_cmd!" %sts%
-        cmd /c !run_cmd! 1>>%sts% 2>&1
-
-        call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
-        del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+        @rem packet EQU 1
 
     ) else (
         @rem 26.10.2018. If SID=1 will get client error and this message in STDERR:
@@ -482,14 +505,6 @@ if %max_cps% GTR 0 (
     if .%size%.==.. set size=0
     echo size of %log% = %size%
     if %size% gtr %maxlog% (
-
-        @rem ---------------------------------------------------------------------------------
-        @rem Saving estimated performance counters that have been evaluated on each iteration
-        @rem of current ISQL session before every call of business action - see .sql script:
-        @rem ---------------------------------------------------------------------------------
-        
-        call :save_perf_estimated log sts rpt fbc dbconn dbauth
-
         echo %date% %time% size of log %log% = %size% - exceeds limit %maxlog%, make it EMPTY.>> %sts%
         del %log%
     )
@@ -505,7 +520,7 @@ if %max_cps% GTR 0 (
     echo ------------------------------------------
     (
         echo.
-        echo %date% %time%. Starting packet # %k%.
+        echo !date! !time!. Starting packet # !sql_execution_idx!.
         echo RUNCMD: %run_isql%
         echo STDLOG: %log% 
         echo STDERR: %err%
@@ -568,7 +583,7 @@ if %max_cps% GTR 0 (
         del !trace_lst!
     )
 
-    set msg=%date% %time%. Finished packet # %k%.
+    set msg=%date% %time%. Finished packet # %sql_execution_idx%.
     echo %msg%
     echo %msg% >> %log%
     echo %msg% >> %sts%
@@ -687,21 +702,24 @@ if %max_cps% GTR 0 (
     @rem 18.12.2018
     @rem 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
     @rem 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+    @rem 42S02 ==> -204     335544580   Table unknown
     @rem 22001 ==> arith overflow / string truncation
     set syntax_msg1="SQLSTATE = 42000"
     set syntax_msg2="SQLSTATE = 42S22"
-    set syntax_msg3="SQLSTATE = 22001"
-    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! %err% >%tmp%
+    set syntax_msg3="SQLSTATE = 42S02"
+    set syntax_msg4="SQLSTATE = 22001"
+    
+    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3!  /c:!syntax_msg4!   %err% >%tmp%
     if NOT errorlevel 1 (
         (
-          echo At least one syntax-compile / string-arith error found during SQL script execution.
-          for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! %err% ^| find /i /c "SQLSTATE"') do (
-              echo Total number of errors: %%x
-          )
-          echo.
-          echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!
-          echo Details see in file: %err%. Job terminated.
-          echo.
+            echo At least one syntax-compile / string-arith error found during SQL script execution.
+            for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! %err% ^| find /i /c "SQLSTATE"') do (
+                echo Total number of errors: %%x
+            )
+            echo.
+            echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!, !syntax_msg4!
+            echo Details see in file: %err%. Job terminated.
+            echo.
         ) >%tmp%
         type %tmp%
         type %tmp%>>%sts%
@@ -857,19 +875,10 @@ if %max_cps% GTR 0 (
 
     set msg=!date! !time!. Test has been CANCELLED.
 
-    echo.
-    echo !msg!
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-    echo.
+    set msg=SID=%sid%. Test has been CANCELLED.
 
-    @rem ---------------------------------------------------------------------------------
-    @rem Saving estimated performance counters that have been evaluated on each iteration
-    @rem of current ISQL session before every call of business action - see .sql script:
-    @rem ---------------------------------------------------------------------------------
-
-    call :save_perf_estimated log sts rpt fbc dbconn dbauth
-
+    echo !date! !time! !msg! >>!log!
+    call :sho "!msg!" %sts%
 
     if not .%sid%.==.1. (
         @rem ---------------------------------------------------------------------------------------------------------------
@@ -880,6 +889,10 @@ if %max_cps% GTR 0 (
         echo !msg! >>%log%
         echo !msg! >>%sts%
         goto end
+    ) else (
+        set msg=SID=1. Return to %~f0. Now we can forcedly detach all remaining sessions and make final reports.
+        echo !msg! >> %sts%
+        call :sho "!msg!" %log4all%
     )
     
     @rem All other attachment have to be FINISH before we start to creaing report.
@@ -890,9 +903,9 @@ if %max_cps% GTR 0 (
     call :getRandom del_vbs %sid%
 
     
-    @rem #######################################################################################################################
-    @rem ###   S I D = 1:     c h a n g e    s t a t e    t o        O F F L I N E    a n d    r e t u r n    t o    O N L I N E
-    @rem #######################################################################################################################
+    @rem ########################################################################################################################
+    @rem ###   S I D = 1:   c h a n g e     D B    s t a t e    t o   O F F L I N E    a n d    r e t u r n    t o    O N L I N E
+    @rem ########################################################################################################################
     @rem 14.11.2018
 
     call :sho "SID=1. Forcedly drop all other attachments: change DB state to full shutdown." %sts%
@@ -907,15 +920,47 @@ if %max_cps% GTR 0 (
     @rem ..................................................
     cmd /c !run_cmd! 1>>%sts% 2>&1
 
-    call :sho "SID=1. Check that DB is really in full shutdown mode:" %sts%
+    call :sho "SID=1. Done. Check that DB is really in full shutdown mode:" %sts%
     %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
     
     set run_cmd=%fbsvcrun% action_properties prp_db_online dbname %dbnm%
     call :sho "SID=1. Return DB to online state." %sts%
     call :sho "SID=1. Command: !run_cmd!" %sts%
     cmd /c !run_cmd! 1>>%sts% 2>&1
-    call :sho "SID=1. Check that DB is online:" %sts%
+    call :sho "SID=1. Done. Check that DB is online:" %sts%
     %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
+
+    (
+		echo set heading off;
+		echo select 'SID=1. Attachments that still alive:' as " " from rdb$database;
+		echo set heading on;
+		echo set list on;
+		echo set blob all;
+		echo set count on;
+        echo select 
+        echo     a.mon$attachment_id as attachment_id
+        echo     ,a.mon$server_pid as server_pid
+        echo     ,a.mon$state as attachment_state
+        echo     ,a.mon$remote_protocol as remote_protocol
+        echo     ,a.mon$remote_address as remote_address
+        echo     ,a.mon$remote_pid as remote_pid
+        echo     ,a.mon$timestamp as attachment_timestamp
+        echo     ,s.mon$state as statement_state
+        echo     ,s.mon$timestamp as statement_timestamp
+        echo     ,s.mon$sql_text as statement_sql
+        echo from mon$attachments a
+        echo left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id
+        echo where 
+        echo     a.mon$attachment_id is distinct from current_connection 
+        echo     and a.mon$remote_address is not null
+        echo ;
+		echo set count off;
+		echo set list off;
+    ) > %rpt%
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    %run_repo% 1>>%log4all% 2>&1
+    del %rpt% 2>nul
+    
     @rem ########################################################################################
 
 
@@ -1106,9 +1151,9 @@ if %max_cps% GTR 0 (
         echo        p.dts_end, p.fb_gdscode, e.fb_mnemona, 
         echo        coalesce(p.stack,''^) as stack,
         echo        p.ip,p.trn_id, p.att_id,p.exc_unit
-        echo     from perf_log p
+        echo     from rdb$database r
+        echo     left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here TABLE "perf_log" table with VIEW "v_perf_log"
         echo     left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-        echo     where p.unit = 'sp_halt_on_error'
         echo     order by p.dts_beg desc
         echo     rows 1;
         echo commit;
@@ -1127,7 +1172,7 @@ if %max_cps% GTR 0 (
         echo ;
         echo commit;
     ) > %rpt%
-    type %rpt% >>%log4all%
+    @rem type %rpt% >>%log4all%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
@@ -1155,72 +1200,108 @@ if %max_cps% GTR 0 (
     )
     del %rpt% 2>nul
 
+
+    @rem ###########################
+    @rem beg of block for debug only
+    if .1.==.0. (
+        (
+          echo.
+          echo #####################################################
+          echo ###  c u r r e n t    t e s t    s e t t i n g s  ###
+          echo #####################################################
+        ) >> %log4all%
+
+        if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> Current test settings ^</a^> !htm_secc! >> %htm_file%
+
+        (
+
+          echo set width category 12;
+          echo set width setting 32;
+          echo set width val 80; --- connection string can be too long
+
+          echo select 
+          echo    s.working_mode as category, 
+          echo    s.mcode as setting, 
+          echo    s.svalue as val
+          echo from settings s
+          echo where s.working_mode='COMMON'
+
+          echo union all
+
+          echo select s.working_mode, s.mcode as setting, s.svalue
+          echo from settings s
+          echo join (
+          echo     select s.svalue as working_mode
+          echo     from settings s where s.working_mode = 'INIT'
+          echo ^) w on s.working_mode = w.working_mode;
+
+        ) > %rpt%
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+        echo Command for obtaining current test settings:>>%sts%
+        echo %run_repo%>>%sts%
+     
+        echo %date% %time%. Output current database and test settings...
+        %run_repo% 1>>%log4all% 2>&1
+
+        if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        del %rpt% 2>nul
+
+        @rem NORMALLY MUST BE DISABLED. ENABLE ONLY FOR DEBUG OR BENCHMARK PURPUSES
+        (
+            echo set width tab_name 13;
+            echo set width idx_name 31;
+            echo set width idx_key 45;
+            echo select * from z_qd_indices_ddl;
+        ) > %rpt% 
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+        set msg=Indexes for heavy-loaded tables
+
+        echo %msg%: >>%log4all%
+        if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> %msg% ^</a^> !htm_secc! >> %htm_file%
+
+        %run_repo% 1>>%log4all% 2>&1
+        if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        del %rpt% 2>nul
+
+    )
+    @rem end of block for debug only
+    @rem ###########################
+
+    @rem ------------------------------------------------------------------------------
+
+
+    set msg=Final aggregation of data from PERF_FPLIT_nn tables to perf_agg
+    call :sho "SID=1. !msg!" %sts%
+
+    @rem 18.03.2019
     (
-      echo.
-      echo #####################################################
-      echo ###  c u r r e n t    t e s t    s e t t i n g s  ###
-      echo #####################################################
-    ) >> %log4all%
-
-    if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> Current test settings ^</a^> !htm_secc! >> %htm_file%
-
-    (
-
-      echo set width category 12;
-      echo set width setting 32;
-      echo set width val 20;
-
-      echo select 
-      echo    s.working_mode as category, 
-      echo    s.mcode as setting, 
-      echo    s.svalue as val
-      echo from settings s
-      echo where s.working_mode='COMMON'
-
-      echo union all
-
-      echo select s.working_mode, s.mcode as setting, s.svalue
-      echo from settings s
-      echo join (
-      echo     select s.svalue as working_mode
-      echo     from settings s where s.working_mode = 'INIT'
-      echo ^) w on s.working_mode = w.working_mode;
-
-    ) > %rpt%
-
-    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-
-    echo Command for obtaining current test settings:>>%sts%
-    echo %run_repo%>>%sts%
- 
-    echo %date% %time%. Output current database and test settings...
-    %run_repo% 1>>%log4all% 2>&1
-
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-
-    del %rpt% 2>nul
-
-    (
-        echo set width tab_name 13;
-        echo set width idx_name 31;
-        echo set width idx_key 45;
-        echo select * from z_qd_indices_ddl;
+        echo set list on;
+        echo set echo on;
+        echo -- Final aggregation of data from PERF_FPLIT_nn tables to perf_agg:
+        echo commit;
+        echo set transaction no wait;
+        echo select * from srv_aggregate_perf_data( 1 ^); -- 1 = ignore stop-flag, do aggregation anyway.
+        echo commit;
     ) > %rpt% 
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
-    set msg=Index(es) for heavy-loaded table(s)
-
-    echo %msg%: >>%log4all%
-    if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> %msg% ^</a^> !htm_secc! >> %htm_file%
+    set t1=!time!
 
     %run_repo% 1>>%log4all% 2>&1
 
-    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-
-    del %rpt% 2>nul
-
-    @rem ------------------------------------------------------------------------------
+    set t2=!time!
+    set tdiff=0
+    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
+    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+   
+    @rem --------------------------------------------------------------------------
 
     (
       echo.
@@ -1231,11 +1312,10 @@ if %max_cps% GTR 0 (
 
     if .%make_html%.==.1. echo !htm_sect! Performance reports !htm_secc! >>%htm_file%
    
-
     @rem --------------------------------------------------------------------------
 
     set msg=Performance in TOTAL
-    echo %date% %time%. Generating report "%msg%"...
+    call :sho "SID=1. Generating report '!msg!'" %sts%
     (
       echo.
       echo %msg%:
@@ -1250,14 +1330,12 @@ if %max_cps% GTR 0 (
       echo.
       echo set width action 35;
       echo select 
-      echo    business_action as action, 
-      echo    avg_times_per_minute, 
-      echo    avg_elapsed_ms, 
-      echo    successful_times_done, 
-      echo    job_beg, 
-      echo    job_end
+      echo     business_action as action
+      echo    ,avg_times_per_minute
+      echo    ,avg_elapsed_ms
+      echo    ,successful_times_done
       echo from rdb$database
-      echo left join srv_mon_perf_total on 1=1;
+      echo left join report_perf_total on 1=1;
       echo commit;
       @rem -- Result: table 'perf_log' contains overall performance value
       @rem -- which can be found by query:
@@ -1293,7 +1371,7 @@ if %max_cps% GTR 0 (
     @rem --------------------------------------------------------------------------
 
     set msg=Performance in DYNAMIC
-    echo %date% %time%. Generating report "%msg%"...
+    call :sho "SID=1. Generating report '!msg!'" %sts%
     (
       echo.
       echo %msg%:
@@ -1303,14 +1381,12 @@ if %max_cps% GTR 0 (
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfdynam"^> %msg%: ^</a^> !htm_repc!>> %htm_file%
 
     (
-      echo --  Get performance report with splitting data to 10 equal time intervals,
-      echo --  for last 3 hours of activity:
+      echo -- Get performance score for N equal time intervals, where N is defined by value 'test_intervals' config parameter:
       echo set width action 24; 
       echo set width itrv_no  7;
       echo set width itrv_beg 8;         
       echo set width itrv_end 8;         
-      echo select business_action as action
-      echo       ,cast(interval_no as smallint^) as itrv_no
+      echo select cast(interval_no as smallint^) as itrv_no
       echo       ,cnt_ok_per_minute
       echo       ,cnt_all
       echo       ,cnt_ok
@@ -1319,10 +1395,8 @@ if %max_cps% GTR 0 (
       echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
       echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
       echo from rdb$database 
-      echo left join srv_mon_perf_dynamic(20^) p on  -- 20 = number of intervals; default: 10
-      echo -- where 
-      echo       p.business_action containing 'interval' 
-      echo       and p.business_action containing 'overall';
+      echo left join report_perf_dynamic p on 1=1 -- number of intervals is defined by test config parameter
+      echo ;
       echo commit;
     ) > %rpt%
     
@@ -1356,36 +1430,35 @@ if %max_cps% GTR 0 (
     @rem --------------------------------------------------------------------------
 
     set msg=Performance for every MINUTE
-    echo %date% %time%. Generating report "%msg%"...
+    call :sho "SID=1. Generating report '!msg!'" %sts%
     (
       echo.
       echo %msg%:
       echo.
+      echo Extract values of ESTIMATED performance that was evaluated after EACH business
+      echo operation finished.
+      echo These data can help to find proper value of config parameter 'warm_time'.
+      echo Current value of config parameter 'warm_time' = %warm_time%.
+
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfminute"^> %msg%: ^</a^> !htm_repc!>> %htm_file%
 
     (
-      echo -- Extract values of ESTIMATED performance that was evaluated after EACH business
-      echo -- operation finished. View is base on table PERF_ESTIMATED which was filled up
-      echo -- by every ISQL session after it finished and before it was terminated.
-      echo -- These data can help to find proper value of config parameter 'warm_time'.
-      echo -- Current value of config parameter 'warm_time' = %warm_time%.
-      echo set width test_phase 10; 
-      echo select iif( minute_since_test_start ^<= %warm_time%, 'WARM_TIME', 'TEST_TIME'^) test_phase
-      echo       ,minute_since_test_start
-      echo       ,avg_estimated
-      echo       ,min_to_avg_ratio
-      echo       ,max_to_avg_ratio
-      echo       ,rows_aggregated
-      echo       ,distinct_attachments -- since 22.12.2015: helps to ensure that all ISQL sessions were alive in every minute of test work time
-      echo from z_estimated_perf_per_minute;
-      echo commit;
+        echo set width test_phase 20;
+        echo select
+        echo     test_phase_name
+        echo     ,minutes_passed
+        echo     ,perf_score
+        echo     ,distinct_workers
+        echo from report_perf_per_minute; -- since 27.03.2019
+        echo commit;
     ) > %rpt%
-    
+
     type %rpt% >>%log4all%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
     set t1=!time!
     
     %run_repo% 1>>%log4all% 2>&1
@@ -1410,7 +1483,7 @@ if %max_cps% GTR 0 (
     @rem --------------------------------------------------------------------------
     if .%trc_unit_perf%.==.1. (
         set msg=Performance from TRACE for ISQL instance #1
-        echo !date! !time!. Generating report "!msg!"...
+        call :sho "SID=1. Generating report '!msg!'" %sts%
 
         if .%make_html%.==.1. echo !htm_repn! ^<a name="perftrace"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
 
@@ -1446,7 +1519,7 @@ if %max_cps% GTR 0 (
           echo      ,srv_recalc_idx_stat
           echo      ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
           echo      ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
-          echo from rdb$database left join srv_mon_perf_trace_pivot on 1=1;
+          echo from rdb$database left join report_perf_trace_pivot on 1=1;
           echo commit;
 
           @rem echo select info as action
@@ -1459,7 +1532,7 @@ if %max_cps% GTR 0 (
           @rem echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
           @rem echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
           @rem echo from rdb$database 
-          @rem echo left join srv_mon_perf_trace p on 1=1;
+          @rem echo left join report_perf_trace p on 1=1;
           @rem echo commit;
         ) > %rpt%
         
@@ -1505,7 +1578,7 @@ if %max_cps% GTR 0 (
 
 
     set msg=Performance in DETAILS
-    echo %date% %time%. Generating report "%msg%"...
+    call :sho "SID=1. Generating report '!msg!'" %sts%
     (
       echo.
       echo %msg%:
@@ -1520,23 +1593,31 @@ if %max_cps% GTR 0 (
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perfdetail"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
 
     (
-      echo set width unit 40;
-      echo.
-      echo select
-      echo     unit
-      echo     ,cnt_all
-      echo     ,cnt_ok
-      echo     ,cnt_err
-      echo     ,err_prc
-      echo     ,ok_min_ms
-      echo     ,ok_max_ms
-      echo     ,ok_avg_ms
-      echo     ,cnt_lk_confl
-      echo     ,job_beg
-      echo     ,job_end
-      echo from rdb$database
-      echo left join srv_mon_perf_detailed on 1=1;
-      echo commit;
+        echo set width unit 40;
+        echo.
+        echo select
+        echo     unit
+        echo     ,cnt_all
+        echo     ,cnt_ok
+        echo     ,cnt_err
+        echo     ,err_prc
+        echo     ,ok_min_ms
+        echo     ,ok_max_ms
+        echo     ,ok_avg_ms
+        echo     ,cnt_lk_confl
+        echo     ,cnt_user_exc
+        if .1.==.0. (
+            @rem Do not delete this fields. UNcomment if any troubles will ocur during test:
+            echo     ,cnt_chk_viol
+            echo     ,cnt_unq_viol
+            echo     ,cnt_fk_viol
+            echo     ,cnt_stack_trc
+            echo     ,cnt_zero_gds
+        )
+        echo     ,cnt_other_exc
+        echo from rdb$database
+        echo left join report_perf_detailed on 1=1;
+        echo commit;
     ) > %rpt%
 
     type %rpt% >>%log4all%
@@ -1568,7 +1649,7 @@ if %max_cps% GTR 0 (
     if .%mon_unit_perf%.==.1. (
 
         set msg=Monitoring data, per application UNITS
-        echo !date! !time!. Generating report "!msg!"...
+        call :sho "SID=1. Generating report '!msg!'" %sts%
         (
           echo.
           echo #####################################################################
@@ -1590,7 +1671,7 @@ if %max_cps% GTR 0 (
             echo set width unit 31;
             echo select z.*
             echo from rdb$database
-            echo left join srv_mon_stat_per_units z on 1=1;
+            echo left join report_stat_per_units z on 1=1;
             echo commit;
         ) > %rpt%
 
@@ -1619,8 +1700,7 @@ if %max_cps% GTR 0 (
     
         if NOT .%fb%.==.25. (
             set msg=Monitoring data, per TABLES and application UNITS
-            echo !date! !time!. Generating report "!msg!"...
-     
+            call :sho "SID=1. Generating report '!msg!'" %sts%
             (
               echo.
               echo ######################################################################
@@ -1643,7 +1723,7 @@ if %max_cps% GTR 0 (
               echo set width table_name 31;
               echo select z.* 
               echo from rdb$database
-              echo left join srv_mon_stat_per_tables z on 1=1;
+              echo left join report_stat_per_tables z on 1=1;
               echo commit;
             ) > %rpt%
 
@@ -1675,7 +1755,7 @@ if %max_cps% GTR 0 (
     ) else if .%mon_unit_perf%.==.2. (
 
         set msg=Monitoring metadata cache size
-        echo !date! !time!. Generating report "!msg!"...
+        call :sho "SID=1. Generating report '!msg!'" %sts%
         (
           echo.
           echo ################################################################################
@@ -1712,7 +1792,7 @@ if %max_cps% GTR 0 (
             echo select p.page_cache_info from srv_get_page_cache_info p;
             echo set heading on;
             echo select d.*
-            echo from srv_mon_cache_dynamic d;
+            echo from report_cache_dynamic d;
             echo commit;
         ) > %rpt%
 
@@ -1757,7 +1837,7 @@ if %max_cps% GTR 0 (
     @rem ------------------------------------------------------------------------------
 
     set msg=Exceptions occured during test work
-    echo %date% %time%. Generating report "%msg%"...
+    call :sho "SID=1. Generating report '!msg!'" %sts%
     (
       echo.
       echo #########################################################
@@ -1768,15 +1848,11 @@ if %max_cps% GTR 0 (
     
     (
       echo.
-      echo set width fb_mnemona 31;                  
-      echo set width unit 40;                        
-      echo set width dts_beg 16;                     
-      echo set width dts_end 16;                     
+      echo set width fb_mnemona 31;
+      echo set width unit 40;
       echo select fb_mnemona, cnt, unit, fb_gdscode                                  
-      echo       ,substring(cast( dts_min as varchar(24^)^) from 1 for 16^) dts_beg  
-      echo       ,substring(cast( dts_max as varchar(24^)^) from 1 for 16^) dts_end  
       echo from rdb$database
-      echo left join srv_mon_exceptions on 1=1;
+      echo left join report_exceptions on 1=1;
       echo.
     ) > %rpt%
 
@@ -1856,7 +1932,7 @@ if %max_cps% GTR 0 (
     if .%run_db_statistics%.==.1. (
 
         set msg=Database statistics, full
-        echo !date! !time!. Generating report "!msg!"...
+        call :sho "SID=1. !msg!" %sts%
 
         (
            echo.
@@ -1888,7 +1964,7 @@ if %max_cps% GTR 0 (
         )
 
         set msg=Analyzing DB stat log: obtaining values of total records and versions
-        echo !date! !time!. !msg!...
+        call :sho "SID=1. !msg!" %sts%
 
         copy %tmp_file% %rpt% >nul
 
@@ -2040,7 +2116,7 @@ if %max_cps% GTR 0 (
     if .%run_db_validation%.==.1. (
 
         set msg=Database validation
-        echo !date! !time!. Generating report "!msg!"...
+        call :sho "SID=1. !msg!" %sts%
 
         set skip_val_list=(AGENTS^^^|BUSINESS_OPS^^^|DOC_STATES^^^|FB_ERRORS^^^|EXT_STOPTEST^^^|SETTINGS^^^|OPTYPES^^^|RULES_FOR_%%%%^^^|PHRASES^^^|TMP$%%%%^^^|MON%%%%^^^|WARE%%%%^^^|Z_%%%%^)
         (
@@ -2119,7 +2195,7 @@ if %max_cps% GTR 0 (
     )
 
     set msg=Differences between old and current firebird.log
-    echo !date! !time!. Generating report "!msg!"...
+    call :sho "SID=1. !msg!" %sts%
 
     (
         echo.
@@ -2214,7 +2290,7 @@ if %max_cps% GTR 0 (
     ) >>%sts%
 
 
-    echo !date! !time!. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
+    call :sho "SID=1. Removing all ISQL logs according to value of config 'remove_isql_logs' setting" %sts%
 
     @rem 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
     @rem 335544347    not_valid    Validation error for column @1, value "@2".
@@ -2316,7 +2392,9 @@ if %max_cps% GTR 0 (
       if not errorlevel 1 (
           echo ISQL logs are removed because no severe errors occured during test. > %tmp_file%
           type %tmp_file% >> %log4all%
-          call :add_html_text tmp_file htm_file
+          if .%make_html%.==.1. (
+              call :add_html_text tmp_file htm_file
+          )
           if exist %log_ptn% (
               (
                   echo Following temporary files are to be DELETED:
@@ -3087,66 +3165,6 @@ goto:eof
     endlocal & set "%~3=%fld_name%"
 goto:eof
 
-:save_perf_estimated
-
-    @rem call {this} log sts rpt fbc dbconn dbauth
-    @rem              1   2   3   4     5     6
-    setlocal
-    set log=!%1!
-    set sts=!%2!
-    set rpt=!%3!
-    set fbc=!%4!
-    set dbconn=!%5!
-    set dbauth=!%6!
-
-    set msg=!date! !time!. Writing statistics data about estimated performance from %log%
-    echo !msg!
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-    (
-      echo -- Debug. Uncomment this if some problem occur and see then %log%
-      echo -- set echo on;
-    ) > %rpt%
-
-    set /a k=0
-    (
-      @rem do NOT: echo delete from perf_estimated; -- this is done in 1run_oltp_emul before every new test (re)start.
-      @rem See in 1run_oltp_emul subroutine ":gen_working_sql" :
-      @rem echo     ,lpad( iif( minutes_since_start ^>0, 1.00 * success_ops_count / minutes_since_start, 0 ^), 12, ' ' ^)
-      @rem echo      ^|^|
-      @rem echo      lpad( minutes_since_start, 7, ' ' ^)
-      @rem echo      as est_overall_at_minute_since_beg      
-      @rem estimated_perf_since_test_beg
-
-      for /f "tokens=1-3" %%a in ('findstr /i /c:"estimated_perf_since_test_beg" /c:"EST_OVERALL_AT_MINUTE_SINCE_BEG" %log%') do (
-        if not .%%c.==.. if not .%%b.==.. (
-            echo insert into perf_estimated( minute_since_test_start, success_count ^) values( %%c, %%b ^);
-            set /a k=!k!+1
-        ) else (
-            echo -- PARSING ERROR. Statement can not be executed: %%a %%b %%c
-        )
-      )
-      echo commit;
-    ) >> %rpt%
-
-    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-
-    set msg=!date! !time!. Running !run_repo!
-    echo !msg!
-
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-    findstr /i /c:"parsing error" %rpt% >>%sts%
-
-    %run_repo% 1>>%log% 2>&1
-
-    set msg=!date! !time!. Done, !k! rows were saved in the database before this log will be made empty.
-    echo !msg!
-    echo !msg! >>%log%
-    echo !msg! >>%sts%
-
-    del %rpt% 2>nul
-goto:eof
 
 :is_num_type
 

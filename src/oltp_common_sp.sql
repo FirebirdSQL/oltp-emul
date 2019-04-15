@@ -14,6 +14,103 @@ select 'oltp30_common.sql start at ' || current_timestamp as msg from rdb$databa
 set list off;
 commit;
 
+
+
+--##################### restored 25.03.2019 #################################
+
+-- This view is used in generated SQL after execute block finished, for showing estimated performance.
+create or alter view v_est_perf_for_last_minute as
+select
+    -- 12.08.2018. Variable 'WORKER_SEQUENTIAL_NUMBER' is defined in 'oltp_isql_run_worker' scenario.
+    -- Its value is used in procedures for storing in doc_list.worker_id field.
+    -- This is done for separation of scope that is avaliable for each ISQL session.
+    -- Purpose - reduce frequency of lock conflicts.
+    rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') as worker_sequential_number
+    ,left( cast( p.test_time_dts_end as varchar(24) ), 19 ) as test_ends_at
+    ,rdb$get_context('USER_SESSION','GDS_RESULT') as last_operation_gds_code
+     --    Sample:
+     --        ESTIMATED_PERF_SINCE_TEST_BEG       -2973      8      <timestampX> -- for warm_time phase
+     --        ESTIMATED_PERF_SINCE_TEST_BEG        5321    158      <timestampY> -- for test_time phase
+     --    ::: NOTE ::: Do not use float numbers with decimal spearator:
+     --    -414.50: syntax error: invalid arithmetic operator (error token is ".50")
+    ,lpad( iif( p.curr_phase_lasts_minutes >0, cast(p.success_bop_total_cnt / p.curr_phase_lasts_minutes as int), 0 ), 12, ' ' )
+        ||
+        lpad( p.curr_phase_lasts_minutes, 7, ' ' )
+        || ' ' ||
+        left(cast( success_bop_last_dts as varchar(50) ),19)
+     as estimated_perf_since_test_beg
+    ,rdb$get_context('USER_SESSION','WORKING_MODE') as workload_type
+    ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS') as halt_test_on_errors
+     -- this variable will be defined in SP srv_fill_mon:
+    ,rdb$get_context('USER_SESSION','MON_INFO')  as mon_logging_info
+    ,cast( rdb$get_context('USER_SESSION','MON_GATHER_0_END') as bigint)
+         - cast( rdb$get_context('USER_SESSION','MON_GATHER_0_BEG') as bigint) 
+         + cast( rdb$get_context('USER_SESSION','MON_GATHER_1_END') as bigint)
+         - cast( rdb$get_context('USER_SESSION','MON_GATHER_1_BEG') as bigint) 
+     as mon_gathering_time_ms
+    ,rdb$get_context('USER_SESSION','TRACED_UNITS') as traced_units
+from (
+    select
+          -- How long lasts this phase, minutes:
+          maxvalue(
+               iif( success_bop_last_dts > p.test_time_dts_beg,
+                    datediff(minute from p.test_time_dts_beg to success_bop_last_dts ), -- TEST_TIME phase
+                    cast( rdb$get_context('USER_SESSION','WARM_TIME') as int) - datediff(minute from success_bop_last_dts to p.test_time_dts_beg) -- WARM_TIME phase, $warm_time minutes
+                 ),
+               0
+           ) + 1 as curr_phase_lasts_minutes
+          -- Total number of business operations which did finish SUCCESSFULLY, since current test phase start.
+          -- ::: NOTE ::: We have count them SEPARATELY on warm_time and test_time phases:
+         ,success_bop_total_cnt
+          -- timestamp of last successfully finished business operation:
+         ,success_bop_last_dts
+         ,p.test_time_dts_beg -- when tests_time phase started
+         ,p.test_time_dts_end -- when tests_time phase will finish
+    from (
+        select 
+             p.test_time_dts_beg
+            ,p.test_time_dts_end
+             -- ctx var 'TOTAL_OPS_SUCCESS_INFO' is changed in sp_add_perf_log by string:
+             -- cast(v_curr_success_bop_cnt as char(18)) || ' ' || cast( v_dts as varchar(24)) ; v_dts = 'now'
+            ,cast(left(rdb$get_context('USER_SESSION', 'TOTAL_OPS_SUCCESS_INFO' ), 18 ) as bigint) as success_bop_total_cnt
+            ,cast(substring(rdb$get_context('USER_SESSION', 'TOTAL_OPS_SUCCESS_INFO' ) from 20) as timestamp) as success_bop_last_dts
+        from sp_get_test_time_dts p -- 10.02.2019: will query 'perf_log' table only one time per session, then returns context variables
+        where -- 27.08.2016, otherwise output can contain "null" for 'est_overall_at_minute_since_beg' field
+            rdb$get_context('USER_SESSION','SELECTED_UNIT') is distinct from 'TEST_WAS_CANCELLED'
+    ) p
+) p
+;
+
+
+create or alter view v_estimated_perf_per_minute as
+-- Do NOT delete! 28.10.2015.
+-- This view is used in oltp_isql_run_worker.bat (.sh) when it creates final report.
+-- Table PERF_ESTIMATED is filled up by temply created .sql which scans log
+-- of 1st ISQL session (which, in turn, makes final report). This log contains
+-- rows like this:
+-- EST_OVERALL_AT_MINUTE_SINCE_BEG         0.00      0
+-- - where 1st number is estimated performance value and 2nd is datediff(minute)
+-- from test start to the moment when each business transaction SUCCESSFULLY finished.
+-- Data in this view is performance value in *dynamic* but with detalization per
+-- ONE minute, from time when all ISQL sessions start (rather then all other reports
+-- which make starting point after database was warmed up).
+-- This report can help to find proper value of warm-time in oltpNN_config.
+select
+    e.minute_since_test_start
+    ,avg(e.success_count) as avg_successful_business_ops -- old: avg_estimated
+    ,min(e.success_count) / nullif(avg(e.success_count), 0) min_to_avg_ratio
+    ,max(e.success_count) / nullif(avg(e.success_count), 0) max_to_avg_ratio
+    ,count(e.success_count) rows_aggregated
+     -- how many ISQL sessions were actually in work:
+    ,count(distinct e.worker_id) distinct_workers
+from v_perf_estimated e
+where e.minute_since_test_start>0
+group by e.minute_since_test_start
+;
+
+commit;
+
+
 -------------------------------------------------------
 
 create or alter view z_current_test_settings as
@@ -50,11 +147,13 @@ from (
             in (
                  'USED_IN_REPLICATION'
                 ,'SEPARATE_WORKERS'
+                ,'RECALC_IDX_MIN_INTERVAL'
                 ,'UNIT_SELECTION_METHOD'
                 ,'BUILD_WITH_SPLIT_HEAVY_TABS'
                 ,'BUILD_WITH_SEPAR_QDISTR_IDX'
                 ,'BUILD_WITH_QD_COMPOUND_ORDR'
                 ,'ENABLE_MON_QUERY'
+                ,'MON_UNIT_PERF'
                 ,'MON_UNIT_LIST'
                 ,'HALT_TEST_ON_ERRORS'
                 ,'QMISM_VERIFY_BITSET'
@@ -185,7 +284,151 @@ order by p.id
 ------------------------------------------------------
 
 commit;
+
 set term ^;
+
+create or alter procedure sp_cache_rules_for_distr( a_table dm_dbobj )
+returns(
+    mode dm_name,
+    snd_optype_id  bigint,
+    rcv_optype_id  bigint,
+    rows_to_multiply int
+)
+as
+    declare v_ctx_prefix type of dm_ctxnv;
+    declare v_stt varchar(255);
+    declare i int;
+    declare v_mode dm_name;
+    declare v_snd_optype_id type of dm_idb;
+    declare v_rcv_optype_id type of dm_idb;
+    declare v_rows_to_multiply int;
+begin
+    if ( upper(coalesce(a_table,'')) not in ( upper('QDISTR'), upper('PDISTR') ) )
+    then
+      exception ex_bad_argument; --  'argument @1 passed to unit @2 is invalid';
+
+    -- cache records from rules_for_Qdistr and rules_for_Pdistr in context variables
+    -- for fast output of them (without database access)
+
+    v_ctx_prefix = 'MEM_TABLE_'||upper(a_table)||'_'; -- 'MEM_TABLE_QDISTR' or 'MEM_TABLE_PDISTR'
+    v_stt='select mode, snd_optype_id, rcv_optype_id' || iif( upper(a_table)=upper('QDISTR'),', storno_sub',', rows_to_multiply ' )
+          ||' from rules_for_'||a_table;
+    if ( rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') is null ) then
+    begin
+        i = 1;
+        for
+            execute statement( v_stt )
+            into v_mode, v_snd_optype_id, v_rcv_optype_id, v_rows_to_multiply
+        do begin
+            rdb$set_context(
+            'USER_SESSION'
+            ,v_ctx_prefix||i
+            ,rpad( v_mode ,80,' ')
+             || coalesce( cast(v_snd_optype_id as char(18)), rpad('', 18,' ') )
+             || coalesce( cast(v_rcv_optype_id as char(18)), rpad('', 18,' ') )
+             || coalesce( cast(v_rows_to_multiply as char(10)), rpad('', 10,' ') )
+            );
+            rdb$set_context('USER_SESSION', v_ctx_prefix||'CNT', i);
+            i = i+1;
+        end
+    end
+    i = 1;
+    while ( i <= cast(rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') as int) )
+    do begin
+        mode = trim( substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 1 for 80 ) );
+        snd_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 81 for 18 )), '') as dm_idb);
+        rcv_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 99 for 18 )), '') as dm_idb);
+        rows_to_multiply = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 117 for 10 )), '') as int);
+        suspend;
+        i = i+1;
+    end
+end
+
+^ -- sp_cache_rules_for_distr
+
+create or alter procedure sp_rules_for_qdistr
+returns(
+    mode dm_name,
+    snd_optype_id  bigint,
+    rcv_optype_id  bigint,
+    storno_sub smallint
+) as
+begin
+    -- 29.03.2019
+    mode = 'new_doc_only';   snd_optype_id = NULL; rcv_optype_id = 1000; storno_sub = NULL; suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 1000; rcv_optype_id = 1200; storno_sub = 1;    suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 1200; rcv_optype_id = 2000; storno_sub = 1;    suspend;
+    mode = 'mult_rows_only'; snd_optype_id = 1000; rcv_optype_id = 3300; storno_sub = 2;    suspend;
+    mode = 'mult_rows_only'; snd_optype_id = 2000; rcv_optype_id = 3300; storno_sub = NULL; suspend;
+    mode = 'distr+new_doc';  snd_optype_id = 2100; rcv_optype_id = 3300; storno_sub = 1;    suspend;
+    mode = 'new_doc_only';   snd_optype_id = 3300; rcv_optype_id = 3400; storno_sub = NULL; suspend;
+
+    /****************
+    for
+        select p.mode,p.snd_optype_id, p.rcv_optype_id,
+              p.rows_to_multiply -- 28.07.2014
+        from sp_cache_rules_for_distr('QDISTR') p
+        into mode, snd_optype_id, rcv_optype_id,
+            storno_sub -- 28.07.2014
+    do
+        suspend;
+    ***************/
+end
+
+^ -- sp_rules_for_qdistr
+
+create or alter procedure sp_rules_for_pdistr
+returns(
+    mode dm_name,
+    snd_optype_id  bigint,
+    rcv_optype_id  bigint,
+    rows_to_multiply int
+)
+as
+begin
+    -- 29.03.2019
+    mode = ''; snd_optype_id = 5000; rcv_optype_id = 3400; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 3400; rcv_optype_id = 5000; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 4000; rcv_optype_id = 2100; rows_to_multiply = 10; suspend;
+    mode = ''; snd_optype_id = 2100; rcv_optype_id = 4000; rows_to_multiply = 10; suspend;
+
+    /*****************
+    for
+        select p.snd_optype_id, p.rcv_optype_id, p.rows_to_multiply
+        from sp_cache_rules_for_distr('PDISTR') p
+        into snd_optype_id, rcv_optype_id, rows_to_multiply
+    do
+        suspend;
+     ***************/
+end
+
+^ -- sp_rules_for_pdistr
+
+
+create or alter procedure srv_increment_tx_bops_counter( a_unit dm_unit )
+as
+begin
+    -- Increments number of total BUSINESS routine calls within this Tx,
+    -- in order to display estimated overall performance in ISQL session
+    -- logs (see generated $tmpdir/tmp_random_run.sql).
+    -- Instead of querying perf_log join business_ops it was decided to
+    -- use only context variables in user_tran namespace:
+
+    if ( exists(
+            select * from business_ops b
+            where b.unit = lower(:a_unit) -- and mode != 'service'
+            )
+        ) then
+    begin
+        rdb$set_context( 'USER_TRANSACTION',
+                         'BUSINESS_OPS_CNT',
+                         coalesce( cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int), 0) + 1
+                       );
+    end
+end
+
+^ -- srv_increment_tx_bops_counter
+
 
 create or alter procedure sys_get_fb_arch (
      a_connect_with_usr varchar(31) default 'SYSDBA'
@@ -290,169 +533,101 @@ end
 ^ -- sys_timestamp_to_ansi
 
 
-create or alter procedure srv_get_last_launch_beg_end(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-     last_launch_beg timestamp
-    ,last_launch_end timestamp
+create or alter procedure sp_get_test_time_dts
+returns(
+    test_time_dts_beg timestamp,
+    test_time_dts_end timestamp,
+    test_intervals int
 ) as
-
 begin
-    -- NB: STUB of this procedure was created before; now it is filled with actual code.
-    -- Auxiliary SP: finds moments of start and finish business operations in perf_log
-    -- on timestamp interval that is [L, N] where:
-    -- "L" = latest from {-abs( :a_last_hours * 60 + :a_last_mins ), 'perf_watch_interval'}
-    -- "N" = latest record in perf_log table
-
-    select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-    from (
-        select p.dts_beg as last_job_start_dts
-        from perf_log p -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
-        where p.unit = 'perf_watch_interval'
-        order by dts_beg desc rows 1
-        -- 14.10.2018 do NOT ever use decs index on dts_beg !!
-        -- MUST BE: PLAN SORT (P INDEX (PERF_LOG_UNIT));
-    ) x
-    cross join
-    (
-        select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-        from business_ops b
-        -- NB: unioned-view must be in RIGHT (driven) part of outer join if we want to involve indices of its tables!
-        LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-            on p.unit=b.unit
-        order by p.dts_beg desc
+    test_time_dts_beg = rdb$get_context('USER_SESSION','PERF_WATCH_BEG');
+    test_time_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
+    test_intervals = cast( rdb$get_context('USER_SESSION','TEST_INTERVALS') as int); -- taken from config
+    if ( test_time_dts_beg is null ) then
+    begin
+        -- this record is added in 1run_oltp_emul.bat before FIRST attach
+        -- will begin it's work:
+        -- PLAN (P ORDER PERF_LOG_DTS_BEG_DESC INDEX (PERF_LOG_UNIT))
+        select p.dts_beg, p.dts_end
+        from perf_log p
+        where 
+            p.unit = 'perf_watch_interval'
+            -- and p.info containing 'active'
+        order by dts_beg + 0 desc -- !! 24.09.2014, speed !! (otherwise dozen fetches!)
         rows 1
-    ) y
-    into last_launch_beg;
+        into test_time_dts_beg, test_time_dts_end;
 
-    select p.dts_end as report_end
-    from business_ops b
-    -- NB: unioned-view must be in RIGHT (driven) part of outer join if we want to involve indices of its tables!
-    LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-        on p.unit=b.unit
-    where
-        p.dts_beg >= :last_launch_beg
-        and p.dts_end is not null
-    order by p.dts_beg desc
-    rows 1
-    into last_launch_end;
+        select s.svalue from settings s where s.mcode = upper('test_intervals') 
+        into test_intervals;
+
+        rdb$set_context('USER_SESSION','PERF_WATCH_BEG', test_time_dts_beg);
+        rdb$set_context('USER_SESSION','PERF_WATCH_END', test_time_dts_end);
+        rdb$set_context('USER_SESSION','TEST_INTERVALS', test_intervals);
+    end
 
     suspend;
 
 end
+^ -- sp_get_test_time_dts
 
-^ -- srv_get_last_launch_beg_end
 
-
-create or alter procedure srv_mon_perf_total(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
+create or alter procedure report_perf_total
 returns (
     business_action dm_info,
-    job_beg varchar(16),
-    job_end varchar(16),
     avg_times_per_minute numeric(12,2),
-    avg_elapsed_ms int,
-    successful_times_done int
-)
-as
-    declare v_sort_prior int;
+    avg_elapsed_ms integer,
+    successful_times_done integer)
+AS
+declare v_sort_prior int;
     declare v_overall_performance double precision;
     declare v_all_minutes int;
-    declare v_last_job_start_dts timestamp;
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
     declare v_this dm_dbobj = 'srv_mon_perf_total';
 begin
-    -- MAIN SP for estimating performance: provides number of business operations
-    -- per minute which were SUCCESSFULLY finished. Suggested by Alexey Kovyazin.
+    -- Report. Estimating OVERALL performance: obtain number of SUCCESSULLY
+    -- finished business operations per minute for whole test_time phase.
+    -- 18.03.2019: refactored, using v_perf_agg instead of huge perf_split_NN table(s).
 
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    -- reduce needed number of minutes from most last event of some SP starts:
-    -- 18.07.2014: handle only data which belongs to LAST job.
-    -- Record with p.unit = 'perf_watch_interval' is added in
-    -- oltp_isql_run_worker.bat before FIRST isql will be launched
-    -- for each mode ('sales', 'logist' etc)
-
-    --#######################################################################################################################
-    -- 13.10.2018: split complex queryL materializing its intermediate reults (poor performance when deal with unioned-view!)
-    --#######################################################################################################################
-    select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-    from (
-        select p.dts_beg as last_job_start_dts
-        from perf_log p -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
-        where p.unit = 'perf_watch_interval'
-        order by dts_beg desc rows 1
-    ) x
-    cross join
-    (
-        select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-        from business_ops b
-        -- NB: unioned-view must be in RIGHT (driven) part of outer join if we want to involve indices of its tables!
-        LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-            on p.unit=b.unit
-        order by p.dts_beg desc
-        rows 1
-    ) y
-    into v_last_job_start_dts; -- materialize intermediate result: save it in variable!
-
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
 
     delete from tmp$perf_log p  where p.stack = :v_this;
 
     insert into tmp$perf_log(
         unit
-        ,info
-        ,id
-        ,dts_beg
-        ,dts_end
-        ,aux1
-        ,aux2
-        ,stack
+        ,info  -- business_ops.info
+        ,id    -- sort_prior
+        ,aux1  -- successful_times_done
+        ,aux2  -- successful_avg_ms
+        ,stack -- v_this
     )
     with
     p as(
         select
             g.unit
-            ,min( g.dts_beg ) report_beg
-            ,max( g.dts_end  ) report_end
-            ,count(*) successful_times_done
-            ,avg(g.elapsed_ms) successful_avg_ms
+            ,sum( g.total_cnt ) as successful_times_done
+            ,1.00 * cast( sum( g.total_ms ) / nullif(sum( g.total_cnt ),0) as numeric(12,2) ) as successful_avg_ms
         from business_ops p
-        -- NB: unioned-view must be in RIGHT (driven) part of outer join if we want to involve indices of its tables!
-        LEFT join v_perf_log g -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-            on p.unit=g.unit
+        join v_perf_agg g on p.unit = g.unit
         where
-            -- 1) take in account only rows which are from THIS job!
-            g.dts_beg >= :v_last_job_start_dts and
-            -- 2) we must take in account only SUCCESSFULLY finished units, i.e. fb_gdscode is NULL.
-            g.fb_gdscode + 0 -- 25.11.2015: suppress making bitmap for this index! almost 90% of rows contain NULL in this field.
-            is null
+            g.dts_interval > 0 and
+            -- we must take in account only units which finished with SUCCESS, i.e. fb_gdscode is NULL.
+            g.fb_gdscode is null
         group by g.unit
     )
     select
         b.unit
         ,b.info
         ,b.sort_prior
-        ,p.report_beg
-        ,p.report_end
         ,p.successful_times_done
         ,p.successful_avg_ms
         ,:v_this
     from business_ops b
     left join p on b.unit = p.unit;
-    -- tmp$perf_log(unit, info, id, dts_beg, dts_end, aux1, aux2, stack)
 
-    -- total elapsed minutes and number of successfully finished SPs for ALL units:
-    select nullif(datediff( minute from min_beg to max_end ),0),
-           left(cast(min_beg as varchar(24)),16),
-           left(cast(max_end as varchar(24)),16)
-    from (
-        select min(p.dts_beg) min_beg, max(p.dts_end) max_end
-        from tmp$perf_log p
-        where p.stack = :v_this
-    )
-    into v_all_minutes, job_beg, job_end;
+    v_all_minutes = nullif(datediff( minute from v_test_time_dts_beg to v_test_time_dts_end ),0);
 
     for
         select
@@ -466,8 +641,8 @@ begin
                 0 as sort_prior
                 ,'*** OVERALL *** for '|| :v_all_minutes ||' minutes: ' as business_action -- 'Average ops/minute = '||:v_all_minutes||' ;'||(sum( aux1 ) / :v_all_minutes)  as business_action
                 ,1.00*sum( aux1 ) / :v_all_minutes as avg_times_per_minute
-                ,avg(aux2) as avg_elapsed_ms
-                ,sum(aux1) as successful_times_done
+                ,avg(aux2) as avg_elapsed_ms        -- for ALL business units
+                ,sum(aux1) as successful_times_done -- for ALL business units
             from tmp$perf_log p
             where p.stack = :v_this
 
@@ -476,9 +651,9 @@ begin
             select
                  p.id as sort_prior
                 ,p.info as business_action
-                ,1.00 * aux1 / maxvalue( 1, datediff( minute from p.dts_beg to p.dts_end ) ) as avg_times_per_minute
-                ,aux2 as avg_elapsed_ms
-                ,aux1 as successful_times_done
+                ,1.00 * aux1 / maxvalue( 1, :v_all_minutes ) as avg_times_per_minute
+                ,aux2 as avg_elapsed_ms        -- line for some business op
+                ,aux1 as successful_times_done -- line for some business op
             from tmp$perf_log p
             where p.stack = :v_this
         ) x
@@ -510,433 +685,178 @@ begin
             -- value that we want to save.
         end
     end
-    -- Statistics for database with size = 100 Gb and cleaned OS cache (LI-V3.0.0.32179):
-    -- sync
-    -- echo 3 > /proc/sys/vm/drop_caches
-    -- 20 records fetched
-    -- 600187 ms, 233041 read(s), 4 write(s), 3206400 fetch(es), 70 mark(s)
-    --
-    -- Table                             Natural     Index    Update    Insert    Delete
-    -- ***********************************************************************************
-    -- RDB$INDICES                                       9
-    -- BUSINESS_OPS                           19        38
-    -- PERF_LOG                                     369967         1
-    -- TMP$PERF_LOG                           76                            19        19
 
 end
 
-^ -- srv_mon_perf_total
+^ -- report_perf_total
 
-create or alter procedure srv_mon_perf_dynamic(
-    a_intervals_number smallint default 20,
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
+
+create or alter procedure report_perf_dynamic
 returns (
-     business_action dm_info
-    ,interval_no smallint
+     interval_no smallint
     ,cnt_ok_per_minute int
     ,cnt_all int
     ,cnt_ok int
     ,cnt_err int
     ,err_prc numeric(12,2)
-    ,ok_avg_ms int
     ,interval_beg timestamp
     ,interval_end timestamp
 )
 as
-    declare v_first_job_start_dts timestamp;
-    declare v_last_job_finish_dts timestamp;
-    declare v_sec_for_one_interval int;
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+    declare v_intervals_number smallint;
+    declare v_sec_per_one_interval double precision;
     declare v_this dm_dbobj = 'srv_mon_perf_dynamic';
 begin
 
-    -- 15.09.2014 Get performance results 'in dynamic': split all job time to N
-    -- intervals, where N is specified by 1st input argument.
-    -- 03.09.2015 Removed cross join perf_log and CTE 'inp_args as i' because
-    -- of inefficient plan. Input parameters are injected inside DT.
-    -- See: http://www.sql.ru/forum/1173774/select-a-b-from-a-cross-b-order-by-indexed-field-of-a-rows-n-ignorit-rows-n-why
+    -- Get performance separately for each of 1...N time intervals
+    -- in order to see how it changed in DYNAMIC.
 
-    a_intervals_number = iif( a_intervals_number <= 0, 20, a_intervals_number);
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+    select p.test_time_dts_beg, p.test_time_dts_end, p.test_intervals
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end, v_intervals_number;
 
-    --#######################################################################################################################
-    -- 13.10.2018: split complex queryL materializing its intermediate reults (poor performance when deal with unioned-view!)
-    --#######################################################################################################################
-    select
-        a.first_job_start_dts
-        ,a.last_job_finish_dts
-        ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / :a_intervals_number as sec_for_one_interval
-    from (
-        select
-            maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
-            ,y.last_job_finish_dts
-            --,y.intervals_number
-        from (
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select p.dts_beg as last_added_watch_row_dts
-            from perf_log p
-            where p.unit = 'perf_watch_interval'
-            order by dts_beg desc rows 1
-        ) x
-        cross join
-        (
-            select
-                dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
-                ,p.dts_beg as last_job_finish_dts
-                --,:a_intervals_number as intervals_number
-            from (
-                select
-                     p.*
-                    ,-abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                from business_ops b
-                -- NB: unioned-view must be in RIGHT part of outer join if we want to involve indices of its tables!
-                LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-                    on p.unit=b.unit
-                order by p.dts_beg desc
-                rows 1
-            ) p
-        ) y
-    ) a
-    into
-        v_first_job_start_dts
-        ,v_last_job_finish_dts
-        ,v_sec_for_one_interval
-    ;
-
-    delete from tmp$perf_log p where p.stack = :v_this;
-    insert into tmp$perf_log(
-        unit
-        ,info
-        ,id        -- interval_no
-        ,dts_beg   -- interval_beg
-        ,dts_end   -- interval_end
-        ,aux1      -- cnt_ok
-        ,aux2       -- cnt_err
-        ,elapsed_ms -- ok_avg_ms
-        ,stack
-    )
-    with
-    p as(
-        select
-            g.unit
-            ,b.info
-            ,1+cast(datediff(second from :v_first_job_start_dts to g.dts_beg) / :v_sec_for_one_interval as int) as interval_no
-            ,count(*) cnt_all
-            ,count( iif( g.fb_gdscode is null, 1, null ) ) cnt_ok
-            ,count( iif( g.fb_gdscode is NOT null, 1, null ) ) cnt_err
-            ,100.00 * count( nullif(g.fb_gdscode,0) ) / count(*) err_prc
-            ,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-        from business_ops b
-        -- NB: unioned-view must be in RIGHT part of outer join if we want to involve indices of its tables!
-        LEFT join v_perf_log g -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-            on b.unit=g.unit
-        where
-            -- 1) take in account only rows which are from THIS measured test run!
-            g.dts_beg >= :v_first_job_start_dts
-            -- do NOT! >>> and g.fb_gdscode + 0 is null -- we have to show count of FAILED transactions in this report
-        group by 1,2,3
-    )
-    ,q as(
-        select
-            unit
-            ,info
-            ,interval_no
-            ,dateadd( (interval_no-1) * :v_sec_for_one_interval + 1 second to :v_first_job_start_dts ) as interval_beg
-            ,dateadd( interval_no * :v_sec_for_one_interval second to :v_first_job_start_dts ) as interval_end
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-        from p
-    )
-    --select * from q;
-    select
-        unit
-        ,info
-        ,interval_no
-        ,interval_beg
-        ,interval_end
-        ,cnt_ok          -- aux1
-        ,cnt_err         -- aux2
-        ,ok_avg_ms
-        ,:v_this
-    from q;
-    -----------------------------
+    -- v_sec_per_one_interval = 1 + datediff(second from v_test_time_dts_beg to v_test_time_dts_end) / v_intervals_number;
+    v_sec_per_one_interval = maxvalue(1, 1.00 * datediff(second from v_test_time_dts_beg to v_test_time_dts_end) / v_intervals_number );
 
     for
         select
-             business_action
-            ,interval_no
-            ,cnt_ok_per_minute
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-            ,interval_beg
-            ,interval_end
+             interval_no
+            ,60 * cnt_ok / nullif(:v_sec_per_one_interval,0) as cnt_ok_per_minute
+            ,cnt_ok + cnt_err as cnt_all
+            ,cnt_ok     -- aux1
+            ,cnt_err    -- aux2
+            ,100.00 * cnt_err /  nullif(cnt_ok + cnt_err, 0) as err_prc
+            ,dateadd( (interval_no-1) * :v_sec_per_one_interval + 1 second to :v_test_time_dts_beg ) as interval_beg
+            ,dateadd( interval_no * :v_sec_per_one_interval second to :v_test_time_dts_beg ) as interval_end
         from (
             select
-                0 as sort_prior
-                ,'interval #'||lpad(id, 4, ' ')||', overall' as business_action
-                ,id as interval_no
-                ,min(dts_beg) as interval_beg
-                ,min(dts_end) as interval_end
-                ,round(sum(aux1) / nullif(datediff(minute from min(dts_beg) to min(dts_end)),0), 0) cnt_ok_per_minute
-                ,sum(aux1 + aux2) as cnt_all
-                ,sum(aux1) as cnt_ok
-                ,sum(aux2) as cnt_err
-                ,100 * sum(aux2) / sum(aux1 + aux2) as err_prc
-                ,cast(null as int) as ok_avg_ms
-                --,avg(elapsed_ms) as ok_avg_ms
-            from tmp$perf_log p
-            where p.stack = :v_this
-            group by id
+                 g.dts_interval as interval_no
+                ,sum( iif( g.fb_gdscode is null, g.total_cnt, 0) ) cnt_ok
+                ,sum( iif( g.fb_gdscode is NOT null, g.total_cnt, 0) ) cnt_err
+                ,sum( iif( g.fb_gdscode is null, g.total_ms, null) ) successful_sum_ms
+            from business_ops b
+            join v_perf_agg g on b.unit = g.unit
+            where g.dts_interval > 0
+            group by g.dts_interval
+        ) t
+        into
+                 interval_no
+                ,cnt_ok_per_minute
+                ,cnt_all
+                ,cnt_ok
+                ,cnt_err
+                ,err_prc
+                ,interval_beg
+                ,interval_end
+    do
+        suspend;
 
-            UNION ALL
-
-            select
-                1 as sort_prior
-                ,info as business_action
-                ,id as interval_no
-                ,dts_beg as interval_beg
-                ,dts_end as interval_end
-                ,aux1 / nullif(datediff(minute from dts_beg to dts_end),0) cnt_ok_per_minute
-                ,aux1 + aux2 as cnt_all
-                ,aux1 as cnt_ok
-                ,aux2 as cnt_err
-                ,100 * aux2 / (aux1 + aux2) as err_prc
-                ,elapsed_ms as ok_avg_ms
-            from tmp$perf_log p
-            where p.stack = :v_this
-        )
-        order by sort_prior, business_action, interval_no
-    into
-             business_action
-            ,interval_no
-            ,cnt_ok_per_minute
-            ,cnt_all
-            ,cnt_ok
-            ,cnt_err
-            ,err_prc
-            ,ok_avg_ms
-            ,interval_beg
-            ,interval_end
-    do suspend;
 end
-^ -- srv_mon_perf_dynamic
 
-create or alter procedure srv_mon_perf_detailed (
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0,
-    a_show_detl smallint default 0)
+^ -- report_perf_dynamic
+
+create or alter procedure report_perf_detailed
 returns (
-    unit type of dm_unit,
-    cnt_all integer,
-    cnt_ok integer,
-    cnt_err integer,
-    err_prc numeric(6,2),
-    ok_min_ms integer,
-    ok_max_ms integer,
-    ok_avg_ms integer,
-    cnt_lk_confl integer,
-    cnt_user_exc integer,
-    cnt_chk_viol integer,
-    cnt_unq_viol integer,
-    cnt_fk_viol integer,
-    cnt_stack_trc integer, -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
-    cnt_zero_gds integer,  -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
-    cnt_other_exc integer,
-    job_beg varchar(16),
-    job_end varchar(16)
+    unit type of dm_unit
+   ,cnt_all integer
+   ,cnt_ok integer
+   ,cnt_err integer
+   ,err_prc numeric(6,2)
+   ,ok_min_ms integer
+   ,ok_max_ms integer
+   ,ok_avg_ms integer
+   ,cnt_lk_confl integer
+   ,cnt_user_exc integer
+   ,cnt_chk_viol integer
+   ,cnt_unq_viol integer
+   ,cnt_fk_viol integer
+   ,cnt_stack_trc integer -- 335544842, 'stack_trace': appears at the TOP of stack in 3.0 SC (strange!)
+   ,cnt_zero_gds integer  -- 03.10.2014: core-4565 (gdscode=0 in when-section! 3.0 SC only)
+   ,cnt_other_exc integer
 )
 as
-    declare v_report_beg timestamp;
-    declare v_report_end timestamp;
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+    declare v_this dm_dbobj = 'srv_mon_perf_dynamic';
 begin
     -- SP for detailed performance analysis: count of operations
     -- (NOT only business ops; including BOTH successful and failed ones),
     -- count of errors (including by their types)
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
-    a_last_mins = coalesce(a_last_mins, 0);
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+    -- Mnemonic names for ISC-code see in: src\include\gen\iberror.h
 
-    -- reduce needed number of minutes from most last event of some SP starts:
-    -- 18.07.2014: handle only data which belongs to LAST job.
-    -- Record with p.unit = 'perf_watch_interval' is added in
-    -- oltp_isql_run_worker.bat before FIRST isql will be launched
-    -- for each mode ('sales', 'logist' etc)
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
 
-    -- 13.10.2018: split complex query for materializing its intermediate reults (poor performance when deal with unioned-view!)
-    select
-        a.first_job_start_dts
-        ,a.last_job_finish_dts
-    from (
-        select
-            maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
-            ,y.last_job_finish_dts
-            --,y.intervals_number
-        from (
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select p.dts_beg as last_added_watch_row_dts
-            from perf_log p
-            where p.unit = 'perf_watch_interval'
-            order by dts_beg desc rows 1
-        ) x
-        cross join
-        (
-            select
-                dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
-                ,p.dts_beg as last_job_finish_dts
-                --,:a_intervals_number as intervals_number
-            from (
-                select
-                     p.*
-                    ,-abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                from business_ops b
-                -- NB: unioned-view must be in RIGHT part of outer join if we want to involve indices of its tables!
-                LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-                    on p.unit=b.unit
-                order by p.dts_beg desc
-                rows 1
-            ) p
-        ) y
-    ) a
-    into
-        v_report_beg
-        ,v_report_end
-    ;
-
-
-    delete from tmp$perf_mon where 1=1;
-
-    insert into tmp$perf_mon(
-         rollup_level
-        ,dts_beg                    --  1
-        ,dts_end
-        ,unit
-        ,cnt_all
-        ,cnt_ok                     --  5
-        ,cnt_err
-        ,err_prc
-        ,ok_min_ms
-        ,ok_max_ms
-        ,ok_avg_ms                  -- 10
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc               -- 15
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-    )
-    with
-    c as (
-        select
-             pg.unit
-            ,count(*) cnt_all
-            ,count( iif( nullif(pg.fb_gdscode,0) is null, 1, null) ) cnt_ok                -- 5
-            ,count( nullif(pg.fb_gdscode,0) ) cnt_err
-            ,100.00 * count( nullif(pg.fb_gdscode,0) ) / count(*) err_prc
-            ,min( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_min_ms
-            ,max( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_max_ms
-            ,avg( iif( nullif(pg.fb_gdscode,0) is null, pg.elapsed_ms, null) ) ok_avg_ms
-            ,count( iif(pg.fb_gdscode in( 335544347, 335544558 ), 1, null ) ) cnt_chk_viol    -- 10
-            ,count( iif(pg.fb_gdscode in( 335544665, 335544349 ), 1, null ) ) cnt_unq_viol
-            ,count( iif(pg.fb_gdscode in( 335544466, 335544838, 335544839 ), 1, null ) ) cnt_fk_viol
-            ,count( iif(pg.fb_gdscode in( 335544345, 335544878, 335544336, 335544451 ), 1, null ) ) cnt_lk_confl
-            ,count( iif(pg.fb_gdscode = 335544517, 1, null) ) cnt_user_exc
-            ,count( iif(pg.fb_gdscode = 335544842, 1, null) ) cnt_stack_trc                 -- 15
-            ,count( iif(pg.fb_gdscode = 0, 1, null) ) cnt_zero_gds
-            ,count( iif( pg.fb_gdscode
-                         in (
-                                335544347, 335544558,
-                                335544665, 335544349,
-                                335544466, 335544838, 335544839,
-                                335544345, 335544878, 335544336, 335544451,
-                                335544517,
-                                335544842,
-                                0
-                            )
-                          ,null
-                          ,pg.fb_gdscode
-                       )
-                   ) cnt_other_exc
-        from v_perf_log pg
-        where
-            pg.dts_beg between :v_report_beg and :v_report_end and
-            pg.elapsed_ms >= 0 and  -- 24.09.2014: prevent from display in result 'sp_halt_on_error', 'perf_watch_interval' and so on
-            pg.unit not starting with 'srv_recalc_idx_stat_' -- not interesting about time that was spent for reindxing of some table
-        group by
-            pg.unit
-    )
-    select 
-        null ----------------- rollup_level
-       ,:v_report_beg
-       ,:v_report_end
-       ,c.*
-    from c;
-
-    insert into tmp$perf_mon(
-         rollup_level
-        ,unit
-        ,cnt_all
-        ,cnt_ok
-        ,cnt_err
-        ,err_prc
-        ,ok_min_ms
-        ,ok_max_ms
-        ,ok_avg_ms
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-        ,dts_beg
-        ,dts_end
-    )
-    select
-         1
-        ,unit
-        ,sum(cnt_all)
-        ,sum(cnt_ok)
-        ,sum(cnt_err)
-        ,100.00 * sum(cnt_err) / sum(cnt_all)
-        ,min(ok_min_ms)
-        ,max(ok_max_ms)
-        ,max(ok_avg_ms)
-        ,sum( cnt_chk_viol ) cnt_chk_viol
-        ,sum( cnt_unq_viol ) cnt_unq_viol
-        ,sum( cnt_fk_viol ) cnt_fk_viol
-        ,sum( cnt_lk_confl ) cnt_lk_confl
-        ,sum( cnt_user_exc ) cnt_user_exc
-        ,sum( cnt_stack_trc ) cnt_stack_trc
-        ,sum( cnt_zero_gds ) cnt_zero_gds
-        ,sum( cnt_other_exc ) cnt_other_exc
-        ,max( dts_beg )
-        ,max( dts_end )
-    from tmp$perf_mon
-    group by unit; -- overall totals
-
-    if ( :a_show_detl = 0 ) then
-        delete from tmp$perf_mon m where m.rollup_level is null;
-
-    -- final resultset (with overall totals first):
     for
-        select
-            unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
+        with
+        c as (
+            select
+                 pg.unit
+                ,sum( pg.total_cnt ) as cnt_all
+                ,sum( iif( pg.fb_gdscode > 0, 0, 1 ) * pg.total_cnt ) as cnt_ok
+                ,sum( iif( pg.fb_gdscode > 0, 1, 0 ) * pg.total_cnt ) as cnt_err
+                ,min( iif( pg.fb_gdscode > 0, null, 1) * pg.min_ms ) ok_min_ms
+                ,max( iif( pg.fb_gdscode > 0, null, 1) * pg.max_ms ) ok_max_ms
+                ,sum( iif( pg.fb_gdscode > 0, 0, 1 ) * pg.total_ms ) successful_sum_ms
+                ,sum( iif(pg.fb_gdscode in( 335544347, 335544558 ), pg.total_cnt, 0 ) ) cnt_chk_viol    -- isc_not_valid, isc_check_constraint
+                ,sum( iif(pg.fb_gdscode in( 335544665, 335544349 ), pg.total_cnt, 0 ) ) cnt_unq_viol    -- isc_unique_key_violation, isc_no_dup
+                ,sum( iif(pg.fb_gdscode in( 335544466, 335544838, 335544839 ), pg.total_cnt, 0 ) ) cnt_fk_viol -- isc_foreign_key, isc_foreign_key_target_doesnt_exist, isc_foreign_key_references_present
+                ,sum( iif(pg.fb_gdscode in( 335544345, 335544878, 335544336, 335544451 ), pg.total_cnt, 0 ) ) cnt_lk_confl -- isc_lock_conflict, isc_concurrent_transaction, isc_deadlock, isc_update_conflict
+                ,sum( iif(pg.fb_gdscode = 335544517, pg.total_cnt, 0) ) cnt_user_exc                    -- isc_except
+                ,sum( iif(pg.fb_gdscode = 335544842, pg.total_cnt, 0) ) cnt_stack_trc                   -- isc_stack_trace
+                ,sum( iif(pg.fb_gdscode = 0, pg.total_cnt, 0) ) cnt_zero_gds
+                ,sum( iif( pg.fb_gdscode
+                             in (
+                                    335544347, 335544558,
+                                    335544665, 335544349,
+                                    335544466, 335544838, 335544839,
+                                    335544345, 335544878, 335544336, 335544451,
+                                    335544517,
+                                    335544842,
+                                    0
+                                )
+                              ,0
+                              ,coalesce( sign(pg.fb_gdscode), 0) * pg.total_cnt
+                           )
+                       ) cnt_other_exc
+            from v_perf_agg pg
+            where
+                pg.total_ms >= 0 and  -- 24.09.2014: prevent from display in result 'sp_halt_on_error', 'perf_watch_interval' and so on
+                pg.dts_interval > 0 and
+                pg.unit not starting with 'srv_recalc_idx_stat_' -- not interesting about time that was spent for reindxing of some table
+            group by
+                pg.unit
+        )
+        select 
+            unit
+           ,cnt_all
+           ,cnt_ok
+           ,cnt_err
+           ,100.00 * cnt_err / nullif(cnt_all,0) as err_prc
+           ,ok_min_ms
+           ,ok_max_ms
+           ,1.00 * successful_sum_ms / nullif(cnt_ok, 0) as ok_avg_ms
+           ,cnt_chk_viol
+           ,cnt_unq_viol
+           ,cnt_fk_viol
+           ,cnt_lk_confl
+           ,cnt_user_exc
+           ,cnt_stack_trc
+           ,cnt_zero_gds
+           ,cnt_other_exc
+        from c
+        into
+            unit
+            ,cnt_all
+            ,cnt_ok
+            ,cnt_err
+            ,err_prc
+            ,ok_min_ms
+            ,ok_max_ms
+            ,ok_avg_ms
             ,cnt_chk_viol
             ,cnt_unq_viol
             ,cnt_fk_viol
@@ -945,162 +865,127 @@ begin
             ,cnt_stack_trc
             ,cnt_zero_gds
             ,cnt_other_exc
-            ,left(cast(dts_beg as varchar(24)),16)
-            ,left(cast(dts_end as varchar(24)),16)
-        from tmp$perf_mon
-        --order by dy desc nulls first,hr desc, unit
-    into unit, cnt_all, cnt_ok, cnt_err, err_prc, ok_min_ms, ok_max_ms, ok_avg_ms
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_fk_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_stack_trc
-        ,cnt_zero_gds
-        ,cnt_other_exc
-        ,job_beg
-        ,job_end
     do
         suspend;
 
 end
 
-^ -- srv_mon_perf_detailed
+^ -- report_perf_detailed
 
-create or alter procedure srv_mon_business_perf_with_exc (
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-    info dm_info,
-    unit dm_unit,
-    cnt_all integer,
-    cnt_ok integer,
-    cnt_err integer,
-    err_prc numeric(6,2),
-    cnt_chk_viol integer,
-    cnt_unq_viol integer,
-    cnt_lk_confl integer,
-    cnt_user_exc integer,
-    cnt_other_exc integer,
-    job_beg varchar(16),
-    job_end varchar(16)
-)
-AS
-declare v_dummy int;
+-- old name: s`rv_mon_business_perf_with_exc
+create or alter procedure report_business_perf_with_exc as
 begin
+    -- not used ; todo: remove it.
+end
 
-    a_last_hours = abs( coalesce(a_last_hours, 3) );
-    a_last_mins = coalesce(a_last_mins, 0);
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+^ -- report_business_perf_with_exc
 
-    delete from tmp$perf_mon where 1=1; -- will be fulfilled in SP srv_mon_perf_detailed
-
-    select count(*) from srv_mon_perf_detailed(:a_last_hours, :a_last_mins, 0) into v_dummy;
-    
-    -- result: tmp$perf_mon is fulfilled now with aggregated result of query:
-    -- select sum(...), sum(...) from v_perf_log pg where <timestamp filter> group by pg.unit
-
+create or alter procedure report_exceptions
+returns (
+    fb_gdscode int
+    ,fb_mnemona type of column fb_errors.fb_mnemona
+    ,unit type of dm_unit
+    ,cnt int
+)
+as
+begin
 
     for
         select
-             o.info,s.unit, s.cnt_all, s.cnt_ok,s.cnt_err,s.err_prc
-            ,s.cnt_chk_viol
-            ,s.cnt_unq_viol
-            ,s.cnt_lk_confl
-            ,s.cnt_user_exc
-            ,s.cnt_other_exc
-            ,left(cast(s.dts_beg as varchar(24)),16)
-            ,left(cast(s.dts_end as varchar(24)),16)
-        from business_ops o
-        left join tmp$perf_mon s on o.unit=s.unit
-        order by o.sort_prior
-    into
-        info
-        ,unit
-        ,cnt_all
-        ,cnt_ok
-        ,cnt_err
-        ,err_prc
-        ,cnt_chk_viol
-        ,cnt_unq_viol
-        ,cnt_lk_confl
-        ,cnt_user_exc
-        ,cnt_other_exc
-        ,job_beg
-        ,job_end
-    do
-        suspend;
-
-end
-
-^ -- srv_mon_business_perf_with_exc
-
-create or alter procedure srv_mon_exceptions(
-    a_last_hours smallint default 3,
-    a_last_mins smallint default 0)
-returns (
-    fb_gdscode int,
-    fb_mnemona type of column fb_errors.fb_mnemona,
-    unit type of dm_unit,
-    cnt int,
-    dts_min timestamp,
-    dts_max timestamp
-)
-as
-    declare v_last_job_start_dts timestamp;
-begin
-    a_last_hours = abs( a_last_hours );
-    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
-
-    -- reduce needed number of minutes from most last event of some SP starts:
-    -- 18.07.2014: handle only data which belongs to LAST job.
-    -- Record with p.unit = 'perf_watch_interval' is added in
-    -- oltp_isql_run_worker.bat before FIRST isql will be launched
-    -- for each mode ('sales', 'logist' etc)
-
-    --#######################################################################################################################
-    -- 13.10.2018: split complex queryL materializing its intermediate reults (poor performance when deal with unioned-view!)
-    --#######################################################################################################################
-    select maxvalue( x.last_job_start_dts, y.last_job_finish_dts ) as last_job_start_dts
-    from (
-        select p.dts_beg as last_job_start_dts
-        from perf_log p -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
-        where p.unit = 'perf_watch_interval'
-        order by dts_beg desc rows 1
-    ) x
-    cross join
-    (
-        select dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to p.dts_beg) as last_job_finish_dts
-        from business_ops b
-        -- NB: unioned-view must be in RIGHT (driven) part of outer join if we want to involve indices of its tables!
-        LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-            on p.unit=b.unit
-        order by p.dts_beg desc
-        rows 1
-    ) y
-    into v_last_job_start_dts; -- materialize intermediate result: save it in variable!
-
-    for
-        select p.fb_gdscode, e.fb_mnemona, p.unit, count(*) cnt, min(p.dts_beg) dts_min, max(p.dts_beg) dts_max
-        from v_perf_log p
+            p.fb_gdscode
+            ,e.fb_mnemona
+            ,p.unit
+            ,sum( p.total_cnt ) cnt
+        from v_perf_agg p
         LEFT -- ::: NB ::: some exceptions can missing in fb_errors when it becomes obsolete
             join fb_errors e on p.fb_gdscode = e.fb_gdscode
         where
-            p.dts_beg >= :v_last_job_start_dts
-            and p.fb_gdscode > 0
+            p.fb_gdscode is not null
             and p.exc_unit='#' -- 10.01.2015, see sp_add_to_abend_log: take in account only those units where exception occured, and skip callers of them
-        group by 1,2,3
+        group by
+            p.fb_gdscode
+            ,e.fb_mnemona
+            ,p.unit
     into
-       fb_gdscode, fb_mnemona, unit, cnt, dts_min, dts_max
+       fb_gdscode, fb_mnemona, unit, cnt
     do
         suspend;
 end
 
-^ -- srv_mon_exceptions
+^ -- report_exceptions
 
-create or alter procedure srv_mon_perf_trace (
+-- 26.03.2019
+create or alter procedure report_perf_per_minute
+returns (
+        test_phase_name varchar(20)
+       ,minutes_passed int
+       ,perf_score int
+       ,distinct_workers smallint
+)
+as
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+    declare v_warm_time int;
+    declare v_this dm_dbobj = 'report_perf_est_per_minute';
+begin
+
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
+
+    select s.svalue
+    from settings s
+    where s.working_mode='COMMON' and s.mcode = 'WARM_TIME'
+    into v_warm_time;
+
+    delete from tmp$perf_est_whole where 1=1;
+    insert into tmp$perf_est_whole(test_phase_sign, earliest_cnt_for_phase)
+    select
+         sign( datediff(millisecond from p.test_time_dts_beg to e.dts) )
+         -- here we have to find number of success_count for EARLIEST moment of each phase:
+        ,cast( substring( min( lpad(e.id, 18,' ') || ' ' || e.success_count ) from 20 ) as int )
+    from v_perf_estimated e
+    cross join sp_get_test_time_dts p
+    group by 1;
+
+    --------------------------------------
+    for
+        select
+             iif( u.test_phase_sign < 0, 'WARM_TIME', 'TEST_TIME' ) as test_phase_name
+            ,u.minutes_passed
+            ,( u.last_cnt_per_minute - x.earliest_cnt_for_phase ) / nullif( u.minutes_passed, 0 ) perf_score
+            ,u.distinct_workers
+        from (
+            select
+                 sign( datediff(millisecond from :v_test_time_dts_beg to e.dts) ) as test_phase_sign
+                ,iif(  :v_test_time_dts_beg > e.dts
+                      ,:v_warm_time + e.minute_since_test_start
+                      ,e.minute_since_test_start
+                     ) as minutes_passed
+                ,max(e.success_count) last_cnt_per_minute
+                ,count(distinct e.worker_id) distinct_workers
+            from v_perf_estimated e
+            group by 1,2
+        ) u
+        join tmp$perf_est_whole x on u.test_phase_sign = x.test_phase_sign
+        where u.minutes_passed <> 0
+        order by u.test_phase_sign, u.minutes_passed
+    into
+        test_phase_name
+       ,minutes_passed
+       ,perf_score
+       ,distinct_workers
+    do
+        suspend;
+
+end
+
+^ -- report_perf_per_minute
+
+
+create or alter procedure report_perf_trace (
     a_intervals_number smallint default 20,
-    a_last_hours smallint default 3,
+    a_last_hours smallint default 0,
     a_last_mins smallint default 0
 )
 returns (
@@ -1115,6 +1000,9 @@ returns (
     ,interval_beg timestamp
     ,interval_end timestamp
 ) as
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+    declare v_sec_per_one_interval int;
 begin
 
     -- Report based on result of parsing TRACE log which was started by
@@ -1125,75 +1013,43 @@ begin
     -- and also values of speed (fetches and marks per second) instead of
     -- absolute their values.
 
+    -- 17.02.2019: this SP was replaced with report_perf_trace_pivot
+    -- but its code can be useful for some other purposes. Do not kill it.
+
     a_intervals_number = iif( a_intervals_number <= 0, 20, a_intervals_number);
     a_last_hours = abs( a_last_hours );
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
+    if ( a_last_hours > 0 or a_last_mins > 0 ) then
+        v_test_time_dts_beg =
+            maxvalue(   v_test_time_dts_beg,
+                        dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to v_test_time_dts_end )
+                    );
+
+    v_sec_per_one_interval = 1 + datediff(second from v_test_time_dts_beg to v_test_time_dts_end) / a_intervals_number;
+
     for
         with
-        a as(
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select
-                maxvalue( x.last_added_watch_row_dts, y.first_measured_start_dts ) as first_job_start_dts
-                ,y.last_job_finish_dts
-                ,y.intervals_number
-            from (
-                select p.dts_beg as last_added_watch_row_dts
-                from perf_log p
-                where p.unit = 'perf_watch_interval'
-                order by dts_beg desc rows 1
-            ) x
-            cross join 
-            (
-                select
-                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_measured_start_dts
-                    ,p.dts_beg as last_job_finish_dts
-                    ,p.intervals_number
-                from
-                ( -- since 03.09.2015:
-                    select
-                        p.*
-                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                        , :a_intervals_number as intervals_number
-                    from business_ops b
-                    LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-                        on p.unit=b.unit
-                    order by p.dts_beg desc
-                    rows 1
-                ) p
-            ) y
-        )
-        ,d as(
-            select
-                a.first_job_start_dts
-                ,a.last_job_finish_dts
-                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
-            from a
-        )
-        --select * from d
-        ,p as(
+        p as(
             select
                 t.unit
                 ,b.info
-                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
+                ,1+cast(datediff(second from :v_test_time_dts_beg to t.dts_end) / :v_sec_per_one_interval as int) as interval_no
                 ,count(*) cnt_success
                 ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
                 ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
                 ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
                 ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
-                --,count( nullif(t.success,0) ) cnt_ok
-                --,count( nullif(t.success,1) ) cnt_err
-                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
-                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-                ,min(d.first_job_start_dts) as first_job_start_dts
-                ,min(d.sec_for_one_interval) as sec_for_one_interval
+                ,min( :v_test_time_dts_beg ) as first_job_start_dts
+                ,min( :v_sec_per_one_interval ) as sec_for_one_interval
             from trace_stat t
             join business_ops b on t.unit = b.unit
-            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from THIS measured test run!
-            where t.success = 1
+            where
+                t.success = 1
+                and t.dts_end between :v_test_time_dts_beg and :v_test_time_dts_end
             group by 1,2,3
         )
         --select * from p
@@ -1241,11 +1097,12 @@ begin
         suspend;
 end
 
-^ -- srv_mon_perf_trace
+^ -- report_perf_trace
 
-create or alter procedure srv_mon_perf_trace_pivot (
+-- old name: s`rv_mon_perf_trace_pivot
+create or alter procedure report_perf_trace_pivot (
     a_intervals_number smallint default 20,
-    a_last_hours smallint default 3,
+    a_last_hours smallint default 0,
     a_last_mins smallint default 0
 )
 returns (
@@ -1273,6 +1130,9 @@ returns (
     interval_beg timestamp,
     interval_end  timestamp
 ) as
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+    declare v_sec_per_one_interval int;
 begin
 
     -- ::: NB ::: This SP is called from temply created .sql in oltp_isql_run_worker.bat 
@@ -1289,71 +1149,42 @@ begin
     a_last_hours = abs( a_last_hours );
     a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
 
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
+    if ( a_last_hours > 0 or a_last_mins > 0 ) then
+        v_test_time_dts_beg =
+            maxvalue(   v_test_time_dts_beg,
+                        dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to v_test_time_dts_end )
+                    );
+
+    v_sec_per_one_interval = 1 + datediff(second from v_test_time_dts_beg to v_test_time_dts_end) / a_intervals_number;
+
+
     for
         with recursive
-        a as(
-            -- reduce needed number of minutes from most last event of some SP starts:
-            -- 18.07.2014: handle only data which belongs to LAST job.
-            -- Record with p.unit = 'perf_watch_interval' is added in
-            -- oltp_isql_run_worker.bat before FIRST isql will be launched
-            select
-                maxvalue( x.last_added_watch_row_dts, y.first_trace_start_dts ) as first_job_start_dts
-                ,y.last_job_finish_dts
-                ,y.intervals_number
-            from (
-                select p.dts_beg as last_added_watch_row_dts
-                from perf_log p
-                where p.unit = 'perf_watch_interval'
-                order by dts_beg desc rows 1
-            ) x
-            cross join
-            (
-                select
-                    dateadd( p.scan_bak_minutes minute to p.dts_beg) as first_trace_start_dts
-                    ,p.dts_beg as last_job_finish_dts
-                    ,p.intervals_number
-                from
-                ( -- since 03.09.2015:
-                    select
-                        p.*
-                        , -abs( :a_last_hours * 60 + :a_last_mins ) as scan_bak_minutes
-                        , :a_intervals_number as intervals_number
-                    from business_ops b
-                    LEFT join v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-                        on p.unit=b.unit
-                    order by p.dts_beg desc
-                    rows 1
-                ) p
-            ) y
+        n as (
+            select 1 i from rdb$database
+            union all
+            select n.i+1 from n where n.i+1<=4
         )
-        ,d as(
-            select
-                a.first_job_start_dts
-                ,a.last_job_finish_dts
-                ,1+datediff(second from a.first_job_start_dts to a.last_job_finish_dts) / a.intervals_number as sec_for_one_interval
-            from a
-        )
-        --select * from d
         ,p as(
             select
                 t.unit
                 ,b.info
-                ,1+cast(datediff(second from d.first_job_start_dts to t.dts_end) / d.sec_for_one_interval as int) as interval_no
+                ,1+cast(datediff(second from :v_test_time_dts_beg to t.dts_end) / :v_sec_per_one_interval as int) as interval_no
                 ,count(*) cnt_success
                 ,avg( 1000 * t.fetches / nullif(t.elapsed_ms,0) ) fetches_per_second
                 ,avg( 1000 * t.marks / nullif(t.elapsed_ms,0) ) marks_per_second
                 ,avg( 100.00 * t.reads/nullif(t.fetches,0) ) reads_to_fetches_prc
                 ,avg( 100.00 * t.writes/nullif(t.marks,0) ) writes_to_marks_prc
-                --,count( nullif(t.success,0) ) cnt_ok
-                --,count( nullif(t.success,1) ) cnt_err
-                --,100.00 * count( nullif(t.success,1) ) / count(*) err_prc
-                --,avg(  iif( g.fb_gdscode is null, g.elapsed_ms, null ) ) ok_avg_ms
-                ,min(d.first_job_start_dts) as first_job_start_dts
-                ,min(d.sec_for_one_interval) as sec_for_one_interval
+                ,min( :v_test_time_dts_beg ) as first_job_start_dts
+                ,min( :v_sec_per_one_interval ) as sec_for_one_interval
             from trace_stat t
             join business_ops b on t.unit = b.unit
-            join d on t.dts_end between d.first_job_start_dts and d.last_job_finish_dts -- only rows which are from trace sessions that relate to THIS test run!
-            where t.success = 1
+            where
+                t.success = 1
+                and t.dts_end between :v_test_time_dts_beg and :v_test_time_dts_end
             group by 1,2,3
         )
         --select * from p
@@ -1374,10 +1205,6 @@ begin
             from p
         )
          --select * from q
-        , n as (
-          select 1 i from rdb$database union all
-          select n.i+1 from n where n.i+1<=4
-        )
 
         select
             decode(n.i, 1, 'fetches per second', 2, 'marks per second', 3, 'reads/fetches*100', 'writes/marks*100') as trace_stat
@@ -1434,7 +1261,7 @@ begin
         suspend;
 end
 
-^ -- srv_mon_perf_trace_pivot
+^ -- report_perf_trace_pivot
 
 
 create or alter procedure srv_mon_idx
@@ -1513,7 +1340,7 @@ begin
 end
 ^ -- srv_get_page_cache_info
 
-create or alter procedure srv_mon_cache_dynamic
+create or alter procedure report_cache_dynamic
 returns (
      measurement_timestamp timestamp
     ,measurement_elapsed_ms int
@@ -1566,9 +1393,213 @@ begin
     do
         suspend;
 end
-^ -- srv_mon_cache_dynamic
+^ -- report_cache_dynamic
 
---############################################
+-- old name: s`rv_mon_stat_per_units; moved here 17.02.2019
+create or alter procedure report_stat_per_units (
+    a_last_hours smallint default 0,
+    a_last_mins smallint default 0 )
+returns (
+    unit dm_unit
+   ,iter_counts bigint
+   ,avg_elap_ms bigint
+   ,avg_rec_reads_sec numeric(12,2)
+   ,avg_rec_dmls_sec numeric(12,2)
+   ,avg_bkos_sec numeric(12,2)
+   ,avg_purg_sec numeric(12,2)
+   ,avg_xpng_sec numeric(12,2)
+   ,avg_fetches_sec numeric(12,2)
+   ,avg_marks_sec numeric(12,2)
+   ,avg_reads_sec numeric(12,2)
+   ,avg_writes_sec numeric(12,2)
+   ,avg_seq bigint
+   ,avg_idx bigint
+   ,avg_rpt bigint
+   ,avg_bkv bigint
+   ,avg_frg bigint
+   ,avg_bkv_per_rec numeric(12,2)
+   ,avg_frg_per_rec numeric(12,2)
+   ,avg_ins bigint
+   ,avg_upd bigint
+   ,avg_del bigint
+   ,avg_bko bigint
+   ,avg_pur bigint
+   ,avg_exp bigint
+   ,avg_fetches bigint
+   ,avg_marks bigint
+   ,avg_reads bigint
+   ,avg_writes bigint
+   ,avg_locks bigint
+   ,avg_confl bigint
+   ,max_seq bigint
+   ,max_idx bigint
+   ,max_rpt bigint
+   ,max_bkv bigint
+   ,max_frg bigint
+   ,max_bkv_per_rec numeric(12,2)
+   ,max_frg_per_rec numeric(12,2)
+   ,max_ins bigint
+   ,max_upd bigint
+   ,max_del bigint
+   ,max_bko bigint
+   ,max_pur bigint
+   ,max_exp bigint
+   ,max_fetches bigint
+   ,max_marks bigint
+   ,max_reads bigint
+   ,max_writes bigint
+   ,max_locks bigint
+   ,max_confl bigint
+   ,job_beg varchar(16)
+   ,job_end varchar(16)
+) as
+    declare v_test_time_dts_beg timestamp;
+    declare v_test_time_dts_end timestamp;
+begin
+
+    a_last_hours = abs( a_last_hours );
+    a_last_mins = coalesce(a_last_mins, 0);
+    a_last_mins = iif( a_last_mins between 0 and 59, a_last_mins, 0 );
+
+    select p.test_time_dts_beg, p.test_time_dts_end
+    from sp_get_test_time_dts p
+    into v_test_time_dts_beg, v_test_time_dts_end;
+    if ( a_last_hours > 0 or a_last_mins > 0 ) then
+        v_test_time_dts_beg =
+            maxvalue(   v_test_time_dts_beg,
+                        dateadd( -abs( :a_last_hours * 60 + :a_last_mins ) minute to v_test_time_dts_end )
+                    );
+
+    for
+        -- 29.08.2014: data from measuring statistics per each unit
+        -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
+        -- 25.01.2015: added rec_locks, rec_confl.
+        -- 06.02.2015: reorder columns, made all `max` values most-right
+        select
+             m.unit
+            ,count(*) iter_counts
+            -------------- speed -------------
+            ,avg(m.elapsed_ms) avg_elap_ms
+            ,avg(1000.00 * ( (m.rec_seq_reads + m.rec_idx_reads + m.bkv_reads ) / nullif(m.elapsed_ms,0))  ) avg_rec_reads_sec
+            ,avg(1000.00 * ( (m.rec_inserts + m.rec_updates + m.rec_deletes ) / nullif(m.elapsed_ms,0))  ) avg_rec_dmls_sec
+            ,avg(1000.00 * ( m.rec_backouts / nullif(m.elapsed_ms,0))  ) avg_bkos_sec
+            ,avg(1000.00 * ( m.rec_purges / nullif(m.elapsed_ms,0))  ) avg_purg_sec
+            ,avg(1000.00 * ( m.rec_expunges / nullif(m.elapsed_ms,0))  ) avg_xpng_sec
+            ,avg(1000.00 * ( m.pg_fetches / nullif(m.elapsed_ms,0)) ) avg_fetches_sec
+            ,avg(1000.00 * ( m.pg_marks / nullif(m.elapsed_ms,0)) ) avg_marks_sec
+            ,avg(1000.00 * ( m.pg_reads / nullif(m.elapsed_ms,0)) ) avg_reads_sec
+            ,avg(1000.00 * ( m.pg_writes / nullif(m.elapsed_ms,0)) ) avg_writes_sec
+            -------------- reads ---------------
+            ,avg(m.rec_seq_reads) avg_seq
+            ,avg(m.rec_idx_reads) avg_idx
+            ,avg(m.rec_rpt_reads) avg_rpt
+            ,avg(m.bkv_reads) avg_bkv
+            ,avg(m.frg_reads) avg_frg
+            ,avg(m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
+            ,avg(m.frg_per_seq_idx_rpt) avg_frg_per_rec
+            ---------- modifications ----------
+            ,avg(m.rec_inserts) avg_ins
+            ,avg(m.rec_updates) avg_upd
+            ,avg(m.rec_deletes) avg_del
+            ,avg(m.rec_backouts) avg_bko
+            ,avg(m.rec_purges) avg_pur
+            ,avg(m.rec_expunges) avg_exp
+            --------------- io -----------------
+            ,avg(m.pg_fetches) avg_fetches
+            ,avg(m.pg_marks) avg_marks
+            ,avg(m.pg_reads) avg_reads
+            ,avg(m.pg_writes) avg_writes
+            ----------- locks and conflicts ----------
+            ,avg(m.rec_locks) avg_locks
+            ,avg(m.rec_confl) avg_confl
+            --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
+            ,max(m.rec_seq_reads) max_seq
+            ,max(m.rec_idx_reads) max_idx
+            ,max(m.rec_rpt_reads) max_rpt
+            ,max(m.bkv_reads) max_bkv
+            ,max(m.frg_reads) max_frg
+            ,max(m.bkv_per_seq_idx_rpt) max_bkv_per_rec
+            ,max(m.frg_per_seq_idx_rpt) max_frg_per_rec
+            ,max(m.rec_inserts) max_ins
+            ,max(m.rec_updates) max_upd
+            ,max(m.rec_deletes) max_del
+            ,max(m.rec_backouts) max_bko
+            ,max(m.rec_purges) max_pur
+            ,max(m.rec_expunges) max_exp
+            ,max(m.pg_fetches) max_fetches
+            ,max(m.pg_marks) max_marks
+            ,max(m.pg_reads) max_reads
+            ,max(m.pg_writes) max_writes
+            ,max(m.rec_locks) max_locks
+            ,max(m.rec_confl) max_confl
+            ,left(cast(:v_test_time_dts_beg as varchar(24)),16)
+            ,left(cast(:v_test_time_dts_end as varchar(24)),16)
+        from mon_log m
+        where m.dts between :v_test_time_dts_beg and :v_test_time_dts_end
+        group by unit
+    into
+        unit
+       ,iter_counts
+       ,avg_elap_ms
+       ,avg_rec_reads_sec
+       ,avg_rec_dmls_sec
+       ,avg_bkos_sec
+       ,avg_purg_sec
+       ,avg_xpng_sec
+       ,avg_fetches_sec
+       ,avg_marks_sec
+       ,avg_reads_sec
+       ,avg_writes_sec
+       ,avg_seq
+       ,avg_idx
+       ,avg_rpt
+       ,avg_bkv
+       ,avg_frg
+       ,avg_bkv_per_rec
+       ,avg_frg_per_rec
+       ,avg_ins
+       ,avg_upd
+       ,avg_del
+       ,avg_bko
+       ,avg_pur
+       ,avg_exp
+       ,avg_fetches
+       ,avg_marks
+       ,avg_reads
+       ,avg_writes
+       ,avg_locks
+       ,avg_confl
+       ,max_seq
+       ,max_idx
+       ,max_rpt
+       ,max_bkv
+       ,max_frg
+       ,max_bkv_per_rec
+       ,max_frg_per_rec
+       ,max_ins
+       ,max_upd
+       ,max_del
+       ,max_bko
+       ,max_pur
+       ,max_exp
+       ,max_fetches
+       ,max_marks
+       ,max_reads
+       ,max_writes
+       ,max_locks
+       ,max_confl
+       ,job_beg
+       ,job_end
+    do
+        suspend;
+end
+
+^ -- report_stat_per_units
+
+-- ################################################################
+-- ###         a u x i l i a r y        p r o c e d u r e s     ###
+-- ################################################################
+
 create or alter procedure srv_get_report_name(
      a_format varchar(20) default 'regular' -- 'regular' | 'benchmark'
     ,a_build varchar(50) default '' -- WI-V3.0.0.32136 or just '32136'
@@ -1679,11 +1710,19 @@ begin
     load_time = lpad(cast(v_test_time/60 as int),2,'_')||'h' || lpad(mod(v_test_time,60),2,'0')||'m';
 
     if ( a_num_of_sessions = -1 ) then
-        -- Use *actual* number of ISQL sessions that were participate in this test run.
-        -- This case is used when final report is created AFTER test finish, from oltp_isql_run_worker.bat (.sh):
-        select count(distinct e.att_id)
-        from perf_estimated e
-        into v_num_of_sessions;
+        begin
+            -- Use *actual* number of ISQL sessions that were participate in this test run.
+            -- This case is used when final report is created AFTER test finish, from oltp_isql_run_worker.bat (.sh):
+            select s.svalue
+            from settings s
+            where upper(s.mcode) = upper('WORKERS_COUNT')
+            into v_num_of_sessions;
+
+            if ( v_num_of_sessions is null ) then
+            begin
+                exception ex_record_not_found;
+            end
+        end
     else
         -- Use *declared* number of ISQL sessions that *will* be participate in this test run:
         -- (this case is used when we diplay name of report BEFORE launching ISQL sessions, in 1run_oltp_emul.bat (.sh) script):
@@ -2607,4 +2646,3 @@ commit;
 -- End of script oltp_common_sp.sql;  next to be run: oltp_main_filling.sql
 -- (common for both FB 2.5 and 3.0)
 -- ###################################################################
-

@@ -20,22 +20,133 @@ msg_noarg() {
 sho() {
   local msg=$1
   local log=$2
-  local dts=$(date +'%d.%m.%y %H:%M:%S')
+  local use_ms=${3:-0}
+  local dts
+  if [[ $use_ms -eq 0 ]]; then
+     dts=$(date +'%d.%m.%y %H:%M:%S')
+  else
+     dts=$(date +'%d.%m.%y %H:%M:%S.%3N')
+  fi
   echo $dts. $msg
   echo $dts. $msg>>$log
 }
 
 
 log_elapsed_time() {
-    local s1=$s1
+    local s1=$1
     local plog=$2
     local s2=$(date +%s)
     local sd=$(date -u -d "0 $s2 sec - $s1 sec" +"%H:%M:%S")
     local msg="Done for $sd, from $(date -d @$s1 +'%d-%m-%Y %H:%M:%S') to $(date -d @$s2 +'%d-%m-%Y %H:%M:%S')."
-    echo $msg >>$plog
+    sho "$msg" $plog
 }
 
+get_diff_fblog() {
+    local mode=$1
+    local fb_major=$2
+    local sid=$3
+    local fblog_beg=$4
+    local log4sid=$5
+
+    sho "Routine $FUNCNAME: start." $log4sid
+
+    local get_log_switch
+    local fb_home_dir
+    local abend_flag=0
+    local tmpdiff=$tmpdir/tmp_fb_diff.$sid.tmp
+    local tmp_sql=$tmpdir/tmp_g_stop.$sid.tmp
+    local fb_log_end=$tmpdir/tmp_fb_end.$sid.tmp
+
+    [[ $fb_major -eq 25 ]] && get_log_switch=action_get_ib_log || get_log_switch=action_get_fb_log
+    local run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
+
+    # fbc, host,port, dbconn, dbauth -- must be known here
+    rm -f $tmpdir/tmp_fb_diff.$sid.tmp
+    
+    sho "SID=$sid. Gathering firebird.log, mode=$mode" $log4sid
+
+    # fblog_beg = $tmpdir/fb_log_when_test_started.$fb.log
+    if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+        fb_home_dir="$(dirname "$fbc")"
+        sho "SID=$sid. ISQL session is running on server-side, we can open $fb_home_dir/firebird.log directly call fbsvcmgr to get its content." $log4sid
+        echo -e 'Command: diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log' >> $log4sid
+	echo --- start of diff output --- >>$tmpdiff
+	diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log 1>>$tmpdiff 2>&1
+	echo --- start of diff output --- >>$tmpdiff
+    else
+        sho "SID=$sid. Use command $run_fbs to get content of firebird.log" $log4sid
+        $run_fbs 1>$fblog_end 2>>$log4sid
+        sho "SID=$sid. Done, size of $fblog_end: $(stat -c%s $fblog_end). Starting comparison of old and new firebird log" $log4sid
+	cat <<-EOF >$tmpdiff
+		--- start of diff output ---
+		diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end
+		--- end of diff output ---
+	EOF
+    fi
+    cat $tmpdiff
+    cat $tmpdiff >> $log4sid
+
+    if  [ "$mode" == "check_for_crash" ] ; then
+        if grep -q -i -E "(/firebird|/fb_smp_server).*terminated.*abnormally" $tmpdiff; then
+            sho "SID=$sid. At least one message about FB crash detected in the diff file of firebird.log" $log4sid
+            sho "SID=$sid. Test must be prematurely terminated. Trying to change sequence g_stop_test to negative value." $log4sid
+            ###########################################################################################################
+            ###   F O R C E D L Y     T E R M I N A T E     B E C A U S E     O F     F I R E B I R D    C R A S H  ###
+            ###########################################################################################################
+		cat <<-EOF >$tmp_sql
+		set list on;
+		set echo on;
+		set bail on;
+		-- ::: NOTE::: Command 'show sequence <g>' actually does:
+		-- select gen_id(<G>,0) from rdb$database, i.e. it queries database table.
+		-- It can take valuable time in case of extremely high workload (1500+ attachments).
+		-- We can avoid such query this by using execute block
+		set term ^;
+		execute block returns( dts timestamp, g_stop_current bigint ) as
+		begin
+		    dts = 'now';
+		    g_stop_current = gen_id( g_stop_test, 0 );
+		    suspend;
+		    if ( g_stop_current < 0 ) then
+		       exception ex_test_cancellation;
+		end^
+		set term ;^
+		set stat on;
+		alter sequence g_stop_test restart with -999999999;
+		commit;
+		set stat off;
+		set term ^;
+		execute block returns( dts timestamp, g_stop_changed bigint ) as
+		begin
+		    dts = 'now';
+		    g_stop_changed = gen_id( g_stop_test, 0 );
+		    suspend;
+		end^
+		set term ;^
+		exit;
+		EOF
+	    $fbc/isql $dbconn $dbauth -q -n -nod -i $tmp_sql 1>>$log4sid 2>&1
+            #echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $fbc/isql $dbconn $dbauth -q -n -nod 1>>$log4sid 2>&1
+            sho "SID=$sid. Done. All workers soon will stop their job." $log4sid
+            rm -f $tmp_sql
+
+            abend_flag=1
+
+        fi
+    fi
+    rm -f $tmpdiff
+    rm -f $fb_log_end
+
+    sho "Routine $FUNCNAME: finish." $log4sid
+    if [ $abend_flag -eq 1 ]; then
+        rm -f $sid_starter_sql
+        exit 1
+    fi
+}
+# get_diff_fblog
+
 #.......................................... m a i n     p a r t ................................
+
 export shname=$(cd `dirname "${BASH_SOURCE[0]}"` && pwd)/`basename "${BASH_SOURCE[0]}"`
 export shdir=$(cd "$(dirname "$0")" && pwd)
 
@@ -148,10 +259,12 @@ else
   dbconn=$host/$port:$dbnm
 fi
 
+
+s1=$(date +%s)
 #run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
 # since 12.08.2018
 run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sid_starter_sql $dbauth"
-
+log_elapsed_time $s1 $log
 
 cat << EOF >>$sts
 $(date +'%Y.%m.%d %H:%M:%S'). Batch running now: $0 - check start command:
@@ -198,6 +311,35 @@ if [ -z "$sleep_min" ]; then
     sleep_min=1
 fi
 
+random_delay=1
+min_delay=$(( 1 + sid/25 ))
+max_delay=$(( 2 + sid/max_cps ))
+
+use_cps=0
+if [[ $max_cps -ge 10 && $max_cps -le 100 ]]; then
+    # Max rate of new attachments appearance set to some reasonable value.
+    use_cps=1
+fi
+
+if [ $use_cps -eq 1 ]; then
+    if [ $winq -gt $max_cps ]; then
+        min_delay=$(( 1 + sid/max_cps ))
+        max_delay=$(( 1 + sid/max_cps ))
+        sho "SID=$sid. Use parameter 'max_cps'=$max_cps connections per second for evaluating delay." $sts
+    else
+        min_delay=1
+        max_delay=4
+        sho "SID=$sid. Number of sessions is too small, delay will be from $min_delay fo $max_delay seconds." $sts
+    fi
+else
+    if [ $max_cps -eq 0 ]; then
+        min_delay=0
+        max_delay=0
+        sho "SID=$sid. Config parameter 'max_cps' is 0. Heavy workload will be for big number of sessions." $sts
+    else
+        sho "SID=$sid. Config parameter 'max_cps' is $max_cps - out of reasonable scope. Delay will be from $min_delay fo $max_delay seconds." $sts
+    fi
+fi
 
 sho "ISQL session SID=$sid. Start loop until limit of $(( warm_time + test_time )) minutes will expire." $log
 
@@ -206,79 +348,46 @@ while :
 do
 
   if [ $sid -gt 1 ]; then
-
-      sho "SID=$sid. Point before execution packet $packet. Evaluate required delay before attempt to make attachment." $sts 
-          
-      min_delay=1
-      if [ $max_cps -gt 0 ] ; then
-          if [ $winq -gt $max_cps ]; then
-              min_delay=$(( 1 + $sid / $max_cps ))
-              max_delay=$(( 1 + $sid / $max_cps ))
+      if [ $packet -eq 1 ]; then
+          sho "SID=$sid. Point before execution packet $packet. Evaluate required delay before attempt to make attachment." $sts 
+          if [ $min_delay -eq $max_delay ]; then
+              random_delay=$min_delay
+              msg_suff="Fixed delay for $min_delay seconds"
           else
-              max_delay=30
+              random_delay=$(( $min_delay+ ( RANDOM % (1+$max_delay-$min_delay) ) ))
+              msg_suff="Random delay for $random_delay seconds from scope $min_delay ... $max_delay"
           fi
-          sho "SID=$sid. Use parameter 'max_cps'=$max_cps connections per second for evaluating." $sts
-      else
-          if [ $warm_time -eq 0 ]; then
-              max_delay=30
-          else
-              min_delay=30
-              max_delay=$(( 60*$warm_time+30 ))
-          fi
-          sho "SID=$sid. Use parameter 'warm_time'=$warm_time minutes for evaluating." $sts
-      fi
-      if [ $min_delay -eq $max_delay ]; then
-          random_delay=$min_delay
-          msg_suff="Fixed delay for $min_delay seconds"
-      else
-          random_delay=$(( $min_delay+ ( RANDOM % (1+$max_delay-$min_delay) ) ))
-          msg_suff="Random delay for $random_delay seconds from scope $min_delay ... $max_delay"
-      fi
-      sho "SID=$sid. $msg_suff" $sts
+          sho "SID=$sid. $msg_suff" $sts
 
-      sleep $random_delay
-      sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $sts
+          sleep $random_delay
+          sho "SID=$sid. Pause finished. Start ISQL to make attachment and work..." $sts
+      else
+          sho "SID=$sid. Packet=$k. Pause is skipped for all packets starting from 2nd." $sts
+      fi
   else
       # 26.10.2018. If SID=1 will get client error and this message in STDERR:
       #     Statement failed, SQLSTATE = 08004
       #     connection rejected by remote interface
       # -- then no report will exist after test finish!
-      sho "SID=1: SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $sts
+      sho "SID=1. SKIP pause before attempt to attach. This session will make reports thus we allow it to make attach w/o any delay." $sts
   fi
 
   if [ -s $log ]; then
     if [ $(stat -c%s $log) -gt $maxlog ]; then
 
-      # Before removing log we have to save in database data about performance
-      # that we have evaluated on-the-fly in this session after each call
-      # of business operation:
-      msg="$(date +'%Y.%m.%d %H:%M:%S'). Preserving data about estimated performance for displaying later in final report."
-      echo $msg>>$sts
-      echo $msg
-
-      grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
-      while read s
-      do
-        a=( $s )
-        echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
-      done < $tmpsidlog >$tmpsidsql
-      echo commit\;>>$tmpsidsql
-
-      $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
-
-      echo size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it >> $sts
+      sho "SID=$sid. Size of $log = $(stat -c%s $log) - exceeds limit $maxlog, remove it" $sts
       rm -f $log $tmpsidlog $tmpsiderr
     fi
   fi
   if [ -s $err ]; then
     if [ $(stat -c%s $err) -gt $maxerr ]; then
-      echo size of $err = $(stat -c%s $err) - exceeds limit $maxerr, remove it >> $sts
+      sho "SID=$sid. Size of $err = $(stat -c%s $err) - exceeds limit $maxerr, remove it" $sts
       rm -f $err
     fi
   fi
 
+  sho "SID=$sid. Starting packet $packet." $sts
 	cat <<- EOF >>$tmpsidlog
-		$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Starting packet $packet.
 		RUNCMD: $run_isql
 		STDLOG: $log
 		STDERR: $err
@@ -323,6 +432,14 @@ do
       # ....................  e x i t ...................
       ###################################################
       break
+  elif [ $crashes_cnt -gt 1 ]; then
+      # When at least one of messages with SQLSTATE=08003 or 08006 appear we have to chek
+      # that there wa not crash of firebird process since this test started. We can do it
+      # by checking DIFFERENCE of $fblog_beg and $fblog_end for presense of string which
+      # proves crash: firebird\fb_smp_server terminated abnormally. If such row exists then
+      # test must be terminated ASAP.
+      get_diff_fblog check_for_crash $fb $sid $fblog_beg $sts
+      #                    1          2    3      4        5
   else
       sho "SID=$sid. No FB craches detected during last package was run." $sts
   fi
@@ -331,12 +448,10 @@ do
   # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error // token unkown et al
   # 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
   # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
-  # 22001 ==> string/num overflow // when resulting string within auto-generated EB can not fit in declared size of output variable
-  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000\|SQLSTATE = 22001"
+  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000"
   syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
   if [ $syntax_err_cnt -gt 0 ] ; then
-      sho "SID=$sid. Syntax / string-arith-overflow errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern." $sts
-      sho "SID=$sid. Session has finished its job: auto-generated .SQL script is invalid." $sts
+      sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
       ###################################################
       # ....................  e x i t ...................
       ###################################################
@@ -412,6 +527,7 @@ do
                   # ....................  e x i t ...................
                   ###################################################
                   sho "SID=$sid exceeds limit $GET_FB_REPLY_MAX_TRIES for attempts to get reply from FB server. Job is terminated." $sts
+                  rm -f $sid_starter_sql
                   exit
               else
                   sho "Try to solve failure: iteration $k of total $GET_FB_REPLY_MAX_TRIES. Loop to next attempt after small pause." $sts
@@ -424,78 +540,81 @@ do
               ###################################################
               sho "Failure seems to be on SERVER-SIDE. Job is terminated" $sts
               rm -f $tmpsiderr
+              rm -f $sid_starter_sql
               exit
           fi
       else
           sho "SID=$sid. Firebird is alive, test can be continued." $sts
           cat $tmpsidlog>>$sts
-          rm -f $tmpsidlog
+          rm -f $tmpsidlog $tmpsiderr
           break
       fi
   done
 
   if [ $cancel_test -eq 1 ]; then
 
-    sho "SID=$sid. Filtering $log for phrase EST_OVERALL..." $sts
-    grep EST_OVERALL_AT_MINUTE_SINCE_BEG $log >$tmpsidlog
+    sho "SID=$sid. Test has been CANCELLED." $sts
 
-    sho "SID=$sid. Process result of filtering: generate script for insert rows into PERF_ESTIMATED table" $sts
-
-    while read s
-    do
-        a=( $s )
-        echo insert into perf_estimated\( minute_since_test_start, success_count \) values\( ${a[2]}, ${a[1]}\)\;
-    done < $tmpsidlog >$tmpsidsql
-    echo commit\;>>$tmpsidsql
-
-    sho "SID=$sid. Generation of INSERT statements completed. Now execute script $tmpsidsql" $sts
-
-    $fbc/isql $dbconn -nod -q -n -i $tmpsidsql $dbauth 2>>$tmpsiderr
-    rm -f $tmpsidsql $tmpsidlog $tmpsiderr
-
-    # -------------------------------------------------------------------------------------------------------
-    # E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   I d   g r e a t e r   t h a n   "1".
-    # -------------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # E X I T    i f   c u r r e n t    S I D     g r e a t e r   t h a n    1.
+    # ~~~~~~~------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
         sho "SID=$sid. Leave from loop because SID greater than 1." $sts
         break
     fi
 
-    #run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Forcedly drop all other attachments: change DB state to full shutdown."
-    echo
-    echo $msg
+    sho "SID=$sid. Forcedly drop all other attachments: change DB state to full shutdown." $rpt
     # rpt =$5 -- final report where sid N1 has to ADD info about performanc, its name: $tmpdir/oltpNN.report.txt
-    echo $msg >>$rpt
 
+    run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
+
+    sho "Command: $run_fbs_dbshut" $rpt 1
     # ---------------------------------------------------
     # t e m p - l y    s h u t d o w n    d a t a b a s e
     # ---------------------------------------------------
-    run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
-    echo Command: $run_fbs_dbshut >>$rpt
     $run_fbs_dbshut 2>>$rpt
+    sho "Return to shell. Database now must be in full shutdown state." $rpt 1
 
     run_fbs_dbattr="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_hdr_pages -dbname $dbnm"
     $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
-    
+
     # If we are here then one may sure that ALL attachments now are dropped and there is NO any activity of internal FB processes against DB.
     # Now we can turn DB online and continue work with it using only SINGLE attachment which SID=1
 
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Return DB online."
-    echo $msg
-    echo $msg >>$rpt
+    if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+	#cat <<-EOF >$tmpauxtmp
+	#	thread apply all bt
+	#	shell $fbc/fb_lock_print -a -d $dbnm 1>$tmpdir/gdb-firebird-lock-print.txt 2>&1
+	#	quit
+	#	yes
+	#EOF
+	#gdb -q -x $tmpauxtmp $fbs/firebird $(pgrep firebird) 1>$tmpdir/gdb-firebird-stack-trace.txt 2>&1
+
+        sho "SID=$sid. Check output of fb_lock_print: get header of LM for $dbnm:" $rpt
+        while read line; do
+            #sho "$line" $rpt
+            echo -e "\t$line"
+            echo $line >>$rpt
+        done < <($fbc/fb_lock_print -c -d $dbnm)
+        #$fbc/fb_lock_print -c -d $dbnm 1>$rpt 2>&1
+    else
+        sho "SID=$sid. Test uses REMOTE Firebird instance, utility fb_lock_print can not be used." $rpt
+    fi
+    #^-- [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]
+
+    run_fbs_online="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_db_online dbname $dbnm"
+    sho "SID=$sid. Return DB to online state." $rpt 1
+    sho "Command: $run_fbs_online" $rpt 1
     # -----------------------------------
     # r e t u r n     D B     o n l i n e 
     # -----------------------------------
-    run_fbs_online="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_db_online dbname $dbnm"
-    echo Command: $run_fbs_online >>$rpt
-
     $run_fbs_online 2>>$rpt
+    sho "Return to shell. Database now must be online." $rpt 1
     $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
 
-    
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Start final performance analysys."
-    echo $msg >>$sts
+
+    #sho "SID=$sid. Start final performance analisys." $sts
+
     psql=$prf.performance_report.tmp
 
     # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
@@ -516,9 +635,9 @@ do
 		   p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona,
 		      coalesce(p.stack,'') as stack,
 		         p.ip,p.trn_id, p.att_id,p.exc_unit
-		from perf_log p -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
+		from rdb$database r
+		left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
 		left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-		where p.unit = 'sp_halt_on_error'
 		order by p.dts_beg desc
 		rows 1;
 		set list off;
@@ -527,36 +646,35 @@ do
 		select 'Attachments that still alive:' as " " from rdb$database;
 		set heading on;
 		set list on;
+		set blob all;
 		set count on;
-                select mon$attachment_id, mon$server_pid, mon$state, mon$remote_protocol, mon$remote_address, mon$remote_pid, mon$timestamp
-                from mon$attachments where mon$attachment_id != current_connection and mon$remote_address is not null;
+        select 
+            a.mon$attachment_id as attachment_id
+            ,a.mon$server_pid as server_pid
+            ,a.mon$state as attachment_state
+            ,a.mon$remote_protocol as remote_protocol
+            ,a.mon$remote_address as remote_address
+            ,a.mon$remote_pid as remote_pid
+            ,a.mon$timestamp as attachment_timestamp
+            ,s.mon$state as statement_state
+            ,s.mon$timestamp as statement_timestamp
+            ,s.mon$sql_text as statement_sql
+        from mon$attachments a
+        left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id
+        where a.mon$attachment_id != current_connection and a.mon$remote_address is not null
+        ;
 		set count off;
-                set list off;
+		set list off;
 
+		set heading off;
+		select 'Final aggregation of data from PERF_FPLIT_nn tables to perf_agg' as " " from rdb$database;
+		set heading on;
+		commit;
+        set transaction no wait;
+        select * from srv_aggregate_perf_data( 1 ); -- 1 = ignore stop-flag, do aggregation anyway.
+        commit;
 	EOF
 
-    cat <<- EOF >$tmpauxtmp
-                set list on;
-                set term ^;
-                -- get SQL statements 'create index ... on perf_split_NN' for applying them below (need for reports)
-                execute block returns(" " varchar(32765)) as
-                begin
-                    for 
-                        select sql_sttm from srv_gen_sql_4tmp_idx_perf_split into " "
-                    do
-                        suspend;
-                end
-                ^
-                set term ;^
-                commit;
-                set list off;
-EOF
-
-    # Generate SQL code for create indexes on perf_split_NN tables 
-    # (we need these indices only for reports):
-    $fbc/isql $dbconn -now -q -n -i $tmpauxtmp $dbauth 1>$tmpauxsql 2>$tmpauxerr
-
-    cat $tmpauxsql >> $psql
     # psql = /var/tmp/logs.oltp30/oltp30_localhost.localdomain-001.performance_report.tmp
 
     echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. START additional script after all sessions completed.
@@ -567,12 +685,15 @@ EOF
     echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. FINISH additional script.
 
 
+
     rm -f $psql $tmpauxtmp $tmpauxsql $tmpauxerr
 
-    ###############################################################################################
-    ##########################   P e r f o r m a n c e    R e p o r t s    ########################
-    ###############################################################################################
-
+	cat <<- EOF >>$plog
+	###############################################
+	###  p e r f o r m a n c e    r e p o r t s ###
+	###############################################
+	EOF
+	
 	cat <<- EOF >>$plog
 		
 		Performance in TOTAL:
@@ -584,14 +705,12 @@ EOF
 	cat <<- "EOF" >>$psql
 		set width action 35;
 		select
-		   business_action as action,
-		   avg_times_per_minute,
-		   avg_elapsed_ms,
-		   successful_times_done,
-		   job_beg,
-		   job_end
+		   business_action as action
+		   ,avg_times_per_minute
+		   ,avg_elapsed_ms
+		   ,successful_times_done
 		from rdb$database
-		left join srv_mon_perf_total on 1=1;
+		left join report_perf_total on 1=1;
 		commit;
 	EOF
 	
@@ -600,7 +719,7 @@ EOF
 	s1=$(date +%s)
 	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1, $plog
+	log_elapsed_time $s1 $plog
 	rm -f $psql
 
 
@@ -610,17 +729,14 @@ EOF
 		
 		Performance in DYNAMIC:
 		=======================
-		Get performance report with split data to 10 equal time intervals for 
-		last test_time=$test_time minutes of activity.
 	EOF
 	
 	cat <<- "EOF" >$psql
-		set width action 24;
+	    -- Get performance score for N equal time intervals, where N is defined by value 'test_intervals' config parameter
 		set width itrv_no  7;
 		set width itrv_beg 8;
 		set width itrv_end 8;
-		select business_action as action
-		      ,cast(interval_no as smallint) as itrv_no
+		select cast(interval_no as smallint) as itrv_no
 		      ,cnt_ok_per_minute
 		      ,cnt_all
 		      ,cnt_ok
@@ -629,10 +745,8 @@ EOF
 		      ,substring(cast(interval_beg as varchar(24)) from 12 for 8) itrv_beg
 		      ,substring(cast(interval_end as varchar(24)) from 12 for 8) itrv_end
 		from rdb$database
-		left join srv_mon_perf_dynamic(20) p on -- 20 = number of intervals; default: 10
-		-- where
-		      p.business_action containing 'interval'
-		      and p.business_action containing 'overall';
+		left join report_perf_dynamic p on 1=1
+		;
 		commit;
 	EOF
 	cat $psql >> $plog
@@ -640,7 +754,7 @@ EOF
 	s1=$(date +%s)
 	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1, $plog
+	log_elapsed_time $s1 $plog
 	rm -f $psql
 
 
@@ -651,33 +765,28 @@ EOF
 		Performance for every MINUTE:
 		=============================
 		Extract values of ESTIMATED performance that was evaluated after EACH business
-		operation finished. View is base on table PERF_ESTIMATED which was filled up
-		by every ISQL session after it finished and before it was terminated.
+		operation finished.
 		These data can help to find proper value of config parameter 'warm_time'.
 		Current value of config parameter 'warm_time' = $warm_time.
 	EOF
 
 	cat <<- EOF >>$psql
-		set width test_phase 10;
-		select iif( minute_since_test_start <= $warm_time, 'WARM_TIME', 'TEST_TIME') test_phase
+        set width test_phase 20;
+        select
+            test_phase_name
+            ,minutes_passed
+            ,perf_score
+            ,distinct_workers
+        from report_perf_per_minute; -- since 27.03.2019
+        commit;
 	EOF
 
-	cat <<- "EOF" >>$psql
-		     ,minute_since_test_start
-		     ,avg_estimated
-		     ,min_to_avg_ratio
-		     ,max_to_avg_ratio
-		     ,rows_aggregated
-		     ,distinct_attachments -- 22.12.2015
-		from z_estimated_perf_per_minute;
-		commit;
-	EOF
 	cat $psql >> $plog
 
 	s1=$(date +%s)
 	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1, $plog
+	log_elapsed_time $s1 $plog
 	rm -f $psql
 
     #------------------------------------------------------------------------------------
@@ -705,10 +814,9 @@ EOF
 		    ,ok_max_ms
 		    ,ok_avg_ms
 		    ,cnt_lk_confl
-		    ,job_beg
-		    ,job_end
+		    ,cnt_user_exc
 		from rdb$database
-		left join srv_mon_perf_detailed on 1=1;
+		left join report_perf_detailed on 1=1;
 		commit;
 	EOF
 	cat $psql >> $plog
@@ -716,7 +824,7 @@ EOF
 	s1=$(date +%s)
 	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1, $plog
+	log_elapsed_time $s1 $plog
 	rm -f $psql
     #------------------------------------------------------------------------------------
 
@@ -733,7 +841,7 @@ EOF
 			set width unit 31;
 			select z.*
 			from rdb$database
-			left join srv_mon_stat_per_units z on 1=1;
+			left join report_stat_per_units z on 1=1;
 			commit;
 		EOF
 		cat $psql >> $plog
@@ -741,7 +849,7 @@ EOF
 		s1=$(date +%s)
 		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
-		log_elapsed_time $s1, $plog
+		log_elapsed_time $s1 $plog
 		rm -f $psql
 
 		if [ $fb -gt 25 ]; then
@@ -760,7 +868,7 @@ EOF
 				set width table_name 31;
 				select z.*
 				from rdb$database
-				left join srv_mon_stat_per_tables z on 1=1;
+				left join report_stat_per_tables z on 1=1;
 				commit;
 			EOF
 
@@ -768,7 +876,7 @@ EOF
 			s1=$(date +%s)
 			$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 			# Add timestamps of start and finish and how long last ISQL was:
-			log_elapsed_time $s1, $plog
+			log_elapsed_time $s1 $plog
 			rm -f $psql
 
 		fi # fb is 30 or higher 
@@ -803,7 +911,7 @@ EOF
 			set term ;^
 			set list off;
 			select d.*
-			from srv_mon_cache_dynamic d;
+			from report_cache_dynamic d;
 			commit;
 		EOF
 		cat $psql >> $plog
@@ -811,7 +919,7 @@ EOF
 		s1=$(date +%s)
 		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
-		log_elapsed_time $s1, $plog
+		log_elapsed_time $s1 $plog
 		rm -f $psql
     else
 		cat <<- EOF >>$plog
@@ -831,20 +939,16 @@ EOF
 	cat <<- "EOF" >>$psql
 		set width fb_mnemona 31;
 		set width unit 40;
-		set width dts_beg 16;
-		set width dts_end 16;
 		select fb_mnemona, cnt, unit, fb_gdscode
-		      ,substring(cast( dts_min as varchar(24)) from 1 for 16) dts_beg
-		      ,substring(cast( dts_max as varchar(24)) from 1 for 16) dts_end
 		from rdb$database
-		left join srv_mon_exceptions on 1=1;
+		left join report_exceptions on 1=1;
 	EOF
 
 	cat $psql >> $plog
 	s1=$(date +%s)
 	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1, $plog
+	log_elapsed_time $s1 $plog
 	rm -f $psql
 
 
@@ -878,7 +982,7 @@ EOF
 		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last action was:
-		log_elapsed_time $s1, $plog
+		log_elapsed_time $s1 $plog
 		
 		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
     else
@@ -904,7 +1008,7 @@ EOF
 		s1=$(date +%s)
 		$run_fbs 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last action was:
-		log_elapsed_time $s1, $plog
+		log_elapsed_time $s1 $plog
 
 		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
     else
@@ -946,14 +1050,10 @@ EOF
     echo --- end of diff output --- >> $plog
     rm -f $fblog_beg $fblog_end
   
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). Done."
-    echo $msg>>$sts
+    #msg="$(date +'%Y.%m.%d %H:%M:%S'). Done."
+    #echo $msg>>$sts
 
-	cat <<- EOF >>$plog
-		
-		$msg
-		$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting...
-	EOF
+    sho "SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting" $plog
 
     # 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
     # 335544347    not_valid    Validation error for column @1, value "@2".
@@ -1010,7 +1110,7 @@ EOF
     rm -f $psql
 
 
-    if [ -n "$fname" ] ; then
+	if [ -n "$fname" ] ; then
 		cat <<- EOF > $psql
 		  set heading off;
 		  select report_file from srv_get_report_name('$fname', '$build', $winq);
@@ -1051,38 +1151,40 @@ EOF
 			plog=$log_with_params_in_name
 		fi
 	else
-		echo New report has been saved with the same name as old one thus overwriting it.
-		echo Change config parameter 'file_name_with_test_params' to 'regular' or 'benchmark'
-		echo if every new report should be saved to new name. In that case final report file
-		echo will contain info about current FB, DB and test settings.
+		cat <<- EOF > $tmpauxtmp
+			New report has been saved with the same name as old one thus overwriting it.
+			You have to change config parameter 'file_name_with_test_params' to 'regular' or 'benchmark'
+			if every new report should be saved to new name. In that case final report file will contain
+			info about current FB, DB and test settings.
+		EOF
+		cat $tmpauxtmp
+		cat $tmpauxtmp>>$plog
 	fi
-	echo
-
 	rm -f $tmpdir/1stoptest.tmp.sh
-	
-    cat <<- EOF
-		------------------------------------------------------------
-		$(date +'%Y.%m.%d %H:%M:%S'). Bye-bye from SID=1. Test has been FINISHED.
-		------------------------------------------------------------
-		
-		Final report see in: 
-		####################
-		$plog
-		####################
-		Press any key to EXIT. . .
-	EOF
-      pause
-      break
+	break
   fi
   # end of: $cancel_test= 1
 
-  msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Finished packet $packet "
-  echo $msg
-  echo $msg>>$sts
+  sho "SID=$sid. Finished packet $packet" $sts
 
   packet=$((packet+1))
 done
 
-echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Bye-by from $shname
+sho "SID=$sid. Bye-by from $shname" $sts
 rm -f $sid_starter_sql
+if [ $sid -eq 1 ]; then
+    if [ -s $plog ]; then
+	#ls -l $plog >> $sts
+	cat <<- EOF
+
+		Final report see in: 
+		####################
+		$plog
+		####################
+
+	EOF
+	sleep 1
+	touch $plog
+    fi
+fi
 exit

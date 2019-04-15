@@ -1,7 +1,3 @@
--- 1) run oltp25_DDL.sql
--- 2) run oltp25_sp.sql
--- 3) run oltp_main_filling.sql 
--- 4) run oltp_data_filling.sql
 -- ##############################
 -- Begin of script oltp25_DDL.sql
 -- ##############################
@@ -394,8 +390,9 @@ create domain dm_ip varchar(255);
 commit;
 
 -------------------------------------------------------------------------------
---  **************   G L O B A L    T E M P.    T A B L E S   *****************
+--  ****************   A P P L I C A T I O N    T A B L E S   *****************
 -------------------------------------------------------------------------------
+
 recreate global temporary table tmp$shopping_cart(
    id dm_idb, --  = ware_id
    snd_id bigint, -- nullable! ref to invoice in case when create reserve doc (one invoice for each reserve; 03.06.2014)
@@ -403,7 +400,7 @@ recreate global temporary table tmp$shopping_cart(
    optype_id bigint,
    snd_optype_id bigint,
    rcv_optype_id bigint,
-   storno_sub smallint default 1, -- see table rules_for_qistr.storno_sub
+   storno_sub smallint default 1, -- see table rules_for_qdistr.storno_sub
    qty_bak numeric(12,3) default 0, -- debug
    dup_cnt int default 0,  -- debug
    cost_purchase dm_cost, -- for sp_sp_fill_shopping_cart when create client order
@@ -411,7 +408,7 @@ recreate global temporary table tmp$shopping_cart(
    constraint tmp_shopcart_unq unique(id, snd_id) using index tmp_shopcart_unq
 ) on commit delete rows;
 commit;
--- 08.01.2015, see sp make_qty_storno, investigatin perf. for NL vs MERGE
+-- 08.01.2015, see sp make_qty_storno, performance benchmark for NL vs MERGE
 --create index tmp_shopcart_rcv_op on tmp$shopping_cart(rcv_optype_id);
 --commit;
 
@@ -469,6 +466,7 @@ commit;
 create index tmp_result_set_ware_doc on tmp$result_set(ware_id, doc_id);
 create index tmp_result_set_doc on tmp$result_set(doc_id);
 commit;
+
 -- for materializing temp results in some report SPs:
 recreate global temporary table tmp$perf_mon(
     unit dm_name,
@@ -574,35 +572,7 @@ recreate global temporary table tmp$mon_log_table_stats( -- used in tmp_random_r
 ) on commit preserve rows;
 commit;
 
--- Used only when config parameter create_with_split_heavy_tabs = 1:
--- stores INITIAL source code of sp_get_random_id as basis for generation
--- of new DB object with this name which almost fully excludes running of
--- dynamic SQL statements for getting random selection of IDs:
-recreate global temporary table tmp$autogen$source(
-    line_no int,
-    text varchar(8190),
-    line_type varchar(10)
-) on commit delete rows;
 
--- Used only when config parameter create_with_split_heavy_tabs = 1: library of known
--- views which names should be written explicitly in new sp_get_random_id code:
-recreate global temporary table tmp$autogen$rand$calls(
-    view_name_for_find varchar(31)
-    ,view_name_for_min_id varchar(31)
-    ,view_name_for_max_id varchar(31)
-) on commit delete rows;
-commit;
-
-
-------------------------------------------------------------------------------
---  ************   D E B U G   T A B L E S (can be taken out after)  *********
-------------------------------------------------------------------------------
--- moved out, see oltp_misc_debug.sql
--- (this script will be involved only when config parameter create_with_debug_objects = 1)
-
--------------------------------------------------------------------------------
---  ****************   A P P L I C A T I O N    T A B L E S   *****************
--------------------------------------------------------------------------------
 -- Some values which are constant during app work, definitions for worload modes:
 -- Values from 'svalue' field will be stored in session-level CONTEXT variables
 -- with names defined in field 'mcode' ('C_CUSTOMER_DOC_MAX_ROWS' etc):
@@ -863,16 +833,13 @@ recreate table pdistr(
     ,constraint pdistr_snd_op_diff_rcv_op check( snd_optype_id is distinct from rcv_optype_id )
 );
 
--- disabled here 05.10.2018, see 'oltp_adjust_DDL.sql':
--- key must be either (worker_id,snd_id) or (snd_id): create index pdistr_snd_id on pdistr(snd_id); -- for fast seek when emul cascade deleting in s`p_kill_cost_storno
+-- Index on (worker_id,snd_id) or (snd_id) will be created using dynamic SQL, depending on value
+-- on config parameter separate_workers, see 'oltp_adjust_DDL.sql' (05.10.2018)
 -- 09.09.2014: attempt to speed-up random choise of non-paid realizations and invoices
 -- plus reduce number of doc_list IRs (see v_r`andom_find_non_paid_*, v_min_non_paid_*, v_max_non_paid_*)
 create index pdistr_sndop_rcvop_sndid_asc on pdistr (snd_optype_id, rcv_optype_id, snd_id); -- see plan in V_MIN_NON_PAID_xxx
 create descending index pdistr_sndop_rcvop_sndid_desc on pdistr (snd_optype_id, rcv_optype_id, snd_id); -- see plan in V_MAX_NON_PAID_xxx
 create index pdistr_agent_id on pdistr(agent_id); -- confirmed, 16.09.2014: see s`p_make_cost_storno
-
--- 27.08.2018 do NOT put here this, instead inject actual value of config parameter 'separate_workers' in main batch when build DB: 
--- index pdistr_worker_id on pdistr(worker_id); -- 12.08.2018
 commit;
 
 -- Storage for records which are removed from Pdistr when they are 'storned'
@@ -894,8 +861,8 @@ recreate table pstorned(
 );
 create index pstorned_snd_id on pstorned(snd_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
 create index pstorned_rcv_id on pstorned(rcv_id); -- confirmed, 16.09.2014: see s`p_kill_cost_storno
-
--- disabled here 05.10.2018, see 'oltp_adjust_DDL.sql': index pstorned_worker_id on pstorned(worker_id); -- 12.08.2018
+-- Index on worker_id will be created using dynamic SQL when value on config
+-- parameter separate_workers is 1, see 'oltp_adjust_DDL.sql' (05.10.2018)
 commit;
 
 -- Definitions for "value-to-rows" COST distribution:
@@ -953,7 +920,6 @@ recreate table semaphores(
 );
 commit;
 
-
 -- Log for all changes in doc_data.qty (including DELETION of rows from doc_data).
 -- Only INSERTION is allowed to this table for 'common' business operations.
 -- Fields qty_diff & cost_diff can be NEGATIVE when document is removed ('cancelled')
@@ -990,7 +956,25 @@ create index business_ops_rnd_wgth on business_ops(random_selection_weight); -- 
 create index business_ops_predict_prior on business_ops(predictable_selection_priority);
 commit;
 
--- standard Firebird error list with descriptions:
+-- Standard Firebird error list with descriptions.
+-- Declarations with descriptions can be found in:
+-- 1) src\include\gen\iberror.h (ISC error codes) -- declarations like:
+--     const ISC_STATUS isc_arith_except                     = 335544321L;
+--     const ISC_STATUS isc_update_conflict                  = 335544451L;
+-- 2) src\include\gen\msgs.h -- multi-dim array like:
+--     {335544321, "arithmetic exception, numeric overflow, or string truncation"},        /* arith_except */
+--     {335544451, "update conflicts with concurrent update"},        /* update_conflict */
+-- 3) src\include\gen\sql_code.h -- multi-dim array like:
+--     {335544321, -802}, /*   1 arith_except */
+--     {335544451, -904}, /* 131 update_conflict */
+-- 4) src\include\gen\sql_state.h -- multi-dim array like:
+--     {335544321, "22000"}, //   1 arith_except
+--     {335544451, "40001"}, // 131 update_conflict
+-- See also src\msgs\messages2.sql for set of messages that are used when exceptions raise:
+-- set bulk_insert INSERT INTO MESSAGES ...
+-- ('arith_except', NULL, NULL, NULL, 0, 1, NULL, 'arithmetic exception, numeric overflow, or string truncation', NULL, NULL);
+-- ('update_conflict', NULL, NULL, NULL, 0, 131, NULL, 'update conflicts with concurrent update', NULL, NULL);
+-- stop
 recreate table fb_errors(
    fb_sqlcode int,
    fb_gdscode int,
@@ -998,23 +982,6 @@ recreate table fb_errors(
    fb_errtext varchar(100),
    constraint fb_errors_gds_code_unq unique(fb_gdscode) using index fb_errors_gds_code
 );
-
--- 28.10.2015: source for view z_estimated_perf_per_minute, see oltp_isql_run_worker.bat (.sh):
--- data of estimated overall performance value with detalization to one minute, useful for
--- finding proper value of config parameter 'warm_time'. Values in the field SUCCESS_COUNT are
--- result of total count of business ops that SUCCESSFUL finished, see auto-generated script
--- $tmpdir/tmp_random_run.sql:
--- v_success_ops_increment = cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int);
--- result = gen_id( g_success_counter, v_success_ops_increment );
--- Context variable 'BUSINESS_OPS_CNT' is incremented by 1 on every invokation of each unit
--- that implements BUSINESS action: client order, order to supplier, etc, -- see table business_ops
-recreate table perf_estimated(
-    minute_since_test_start int,
-    success_count numeric(12,2),
-    att_id int default current_connection,
-    dts timestamp default 'now'
-);
-create index perf_est_minute_since_start on perf_estimated (minute_since_test_start);
 commit;
 
 -- Log of parsing ISQL statistics
@@ -1045,7 +1012,31 @@ recreate table trace_stat(
 );
 commit;
 
--- Log for performance and errors (filled via autonom. tx if exc`eptions occur)
+-- 18.03.2019
+recreate table perf_agg(
+   unit dm_unit -- name of executed SP
+  ,exc_unit char(1) -- was THIS unit the place where exception raised ? yes ==> '#'
+  ,fb_gdscode int -- how did finish this unit (0 = OK)
+  ,dts_interval int -- for ability to split data on time intervals, see sp REPORT_PERF_DYNAMIC
+  ,total_cnt bigint
+  ,total_ms bigint
+  ,min_ms bigint
+  ,max_ms bigint
+  ,id dm_idb
+  ,constraint pk_perf_agg primary key(id)
+);
+create unique index perf_agg_unq on perf_agg(unit, fb_gdscode, exc_unit, dts_interval);
+commit;
+
+-- Log for performance and errors (filled via autonom. tx if exc`eptions occur).
+-- In the past, this table was sibject of lot of pending requests which in turn
+-- had bad affect on performance.
+-- Currently is used only for storing several records when test starts/finishes.
+-- Several tables (up to 10) with the same DDL and names 'PERF_SPLIT_nn' will be
+-- created dynamically in oltp_adjust.sql. All of these tables serve as source
+-- view v_perf_log which accepts data about performance. Trigger with case-expression
+-- is defined dynamically (also in oltp_adjust.sql) for redirect data to the "final"
+-- place of storing: some concrete table with name PERF_SPLIT_nn.
 recreate table perf_log(
    id dm_idb not null -- value from sequence where record has been added into GTT tmp$perf_log; not null -- added 11.01.2017, for possible replication (PK constraint is required)
   --,id2 bigint -- value from sequence where record has been written from tmp$perf_log into fixed table perf_log (need for debug)
@@ -1065,14 +1056,8 @@ recreate table perf_log(
   ,aux2 double precision -- for srv_recalc_idx_stat: difference after recalc idx stat
   ,dump_trn bigint default current_transaction
 );
--- finally dis 09.01.2015, not needed for this table: create index perf_log_id on perf_log(id);
--- finally dis 13.10.2018, huge fetches when do query for 'perfwatch_interval' and get last record among extracted rows: create descending index perf_log_dts_beg_desc on perf_log(dts_beg);
-create descending index perf_log_unit on perf_log(unit, elapsed_ms);
--- 4 some analysis, added 25.06.2014:
--- dis 20.08.2014: create index perf_log_att on perf_log(att_id);
--- dis 13.10.2018 (seems that SP srv_mon_idx is not called from anywhere): create descending index perf_log_trn_desc on perf_log(trn_id); --  descending - for fast access to last actions, e.g. of srv_mon_idx
--- 20.08.2014:
-create index perf_log_gdscode on perf_log(fb_gdscode);
+-- No indices needed now for this table.
+commit;
 
 -- Table to store single record for every *start* point of any app. unit.
 -- When unit finishes NORMALLY (without exc.) this record is removed to fixed
@@ -1099,6 +1084,27 @@ recreate global temporary table tmp$perf_log(
   ,dump_trn bigint default current_transaction
 ) on commit delete rows;
 create index tmp$perf_log_unit_trn_dts_end on tmp$perf_log(unit, trn_id, dts_end);
+
+
+-- Table for report that shows performance score per each MINUTE of both test phases:
+recreate table perf_estimated(
+     id dm_idb not null
+    ,minute_since_test_start int
+    ,success_count numeric(12,2)
+    ,worker_id dm_ids
+    ,att_id int default current_connection
+    ,dts timestamp default 'now'
+    ,constraint pk_perf_estimated primary key(id)
+);
+commit;
+
+-- 27.03.2019, for report only (speed), see SP report_perf_per_minute
+-- (materializing intermediate result of aggregation perf_estimated table)
+recreate global temporary table tmp$perf_est_whole(
+    test_phase_sign smallint not null,
+    earliest_cnt_for_phase int
+) on commit delete rows;
+commit;
 
 -- introduced 09.08.2014, for checking mon$-tables stability: gather stats
 -- Also used when context 'MON_UNIT_LIST' is not empty (see s`p_add_to_perf_log).
@@ -1197,7 +1203,9 @@ create index mon_log_table_stats_tn_unit on mon_log_table_stats(table_name, unit
 create index mon_log_table_stats_dts on mon_log_table_stats(dts); -- 26.09.2015, for SP srv_mon_stat_per_tables
 commit;
 
--- 16.12.2018
+-- 16.12.2018: table for storing data about duration of monitoring.
+-- It was decided to query data that allows to evaluate metadata cache size
+-- (see SP srv_fill_mon_memo_consumption)
 recreate table mon_memory_consumption(
     stat_type varchar(20)
     ,sys_memo_used bigint
@@ -1209,8 +1217,7 @@ recreate table mon_memory_consumption(
     ,rowset bigint -- for grouping records that related to the same measurement
     ,id dm_idb
     ,dts timestamp default 'now'
-    --,sec int --  datediff(second from current_date-1 to current_timestamp ) sec
-    --,add_info dm_info
+    ,elap_ms int -- duration of gathering mon$ info, milliseconds
     ,constraint pk_mon_memory_consumption primary key(id)
 );
 
@@ -1261,13 +1268,11 @@ alter table wares
 
 -- do NOT: alter table money_turnover_log add constraint fk_money_turnover_log_doc_list foreign key (doc_id) references doc_list(id);
 -- (documents can be deleted but it mean that NEW record in money_turnover_log appear with cost < 0!)
-
--- dis 28.01.2015 0135, no need:
---alter table money_turnover_log
---   add constraint fk_money_turnover_log_agents foreign key (agent_id) references agents(id)
---;
-
 commit;
+
+--------------------------------------------------------------------------------
+-- # # # # #      V I E W S:   I N I T I A L    D E F I N I T I O N    # # # # #
+--------------------------------------------------------------------------------
 
 -- 08.10.2018: view for inserting rows in SP_ADD_PERF_LOG,
 -- its DDL can be replaced below with UNIONED query from several tables,
@@ -1277,11 +1282,23 @@ create or alter view v_perf_log as select * from perf_log
 ;
 commit;
 
-set term ^;
+-- 18.03.2019: datasource for reports (instead old v_perf_log):
+-- Table perf_agg is filled through DML statements on this view in
+-- autogen-proc tmp_autogen_aggregate_perf_data (see oltp_adjust_DDL.sql)
+create or alter view v_perf_agg as select * from perf_agg
+;
+commit;
+
+create or alter view v_perf_estimated as
+-- Initial creation, oltpNN_DDL.sql. Will be recreated in oltp_adjust.sql before all ISQL workers launch
+select * from perf_estimated;
+commit;
 
 --------------------------------------------------------------------------------
 -------    "S y s t e m"    f u n c s   &  s t o r e d     p r o c s   --------
 --------------------------------------------------------------------------------
+
+set term ^;
 
 -- procedures instead of stored funcs (as in FB 3.x):
 
@@ -1951,6 +1968,8 @@ begin
         -- "-1" ==> outside command to premature stop test by adding line into
         --          text file defined by 'ext_stoptest' table or running temp
         --          batch file %tmpdir%\1stoptest.tmp.bat (1stoptest.tmp.sh)
+        -- NB: external table is created from .bat / .sh when config parameter
+        -- use_external_to_stop = 1.
         suspend;
 end
 ^
@@ -2083,7 +2102,7 @@ begin
                     -- moved here from sp_check_to_stop_work: avoid excessive start auton. Tx!
                     update perf_log p set p.info = 'closed'
                     where p.unit = 'perf_watch_interval' and p.info containing 'active'
-                    order by dts_beg desc -- "+0" ?
+                    order by dts_beg desc
                     rows 1;
                 when any do
                     begin
@@ -2097,12 +2116,49 @@ end
 
 ^ -- sp_halt_on_error
 
--- NB: commit MUST be here for FB 2.5!
--- All even runs (2,4,6,...) of script containing procedures which references
--- to some SPs declared above them will faults if running is in the same connection
--- as previous one! See http://tracker.firebirdsql.org/browse/CORE-4490
-set term ;^
+create or alter procedure sp_rules_for_qdistr
+returns(
+    mode dm_name,
+    snd_optype_id  bigint,
+    rcv_optype_id  bigint,
+    storno_sub smallint
+) as
+begin
+    -- STUB! Will be defined in oltp_common.sp
+    suspend;
+end
+
+^ -- sp_rules_for_qdistr
+
+create or alter procedure sp_rules_for_pdistr
+returns(
+    mode dm_name,
+    snd_optype_id  bigint,
+    rcv_optype_id  bigint,
+    rows_to_multiply int
+)
+as
+begin
+    -- STUB! Will be defined in oltp_common.sp
+    suspend;
+end
+
+^ -- sp_rules_for_pdistr
+
+set term ^;
 commit;
+
+create or alter view v_rules_for_qdistr as
+-- 29.03.2019
+select * 
+from sp_rules_for_qdistr;
+
+create or alter view v_rules_for_pdistr as
+-- 29.03.2019
+select * 
+from sp_rules_for_pdistr;
+commit;
+
 set term ^;
 
 create or alter procedure sp_flush_tmpperf_in_auton_tx(
@@ -2142,7 +2198,7 @@ begin
             else
                 v_stack = null;
 
-            insert into v_perf_log(
+            insert into v_perf_log( -- current unit: sp_flush_tmpperf_in_auton_tx
                 id,
                 unit,
                 fb_gdscode,
@@ -2278,9 +2334,9 @@ begin
             union all
             select count(*) from doc_states -- look at fn_doc_xxx_state stored funcs
             union all
-            select count(*) from rules_for_qdistr -- look at sp_cache_rules_for_distr('QDISTR')
+            select count(*) from v_rules_for_qdistr -- 29.03.2019: replaced with view in order to remove dependencies
             union all
-            select count(*) from rules_for_pdistr -- look at sp_cache_rules_for_distr('PDISTR')
+            select count(*) from v_rules_for_pdistr -- 29.03.2019: replaced with view in order to remove dependencies
         )
         into v_ctx_lim;
         -- Get number of ROWS from tmp$perf_log to start flush data after reaching it:
@@ -2480,6 +2536,30 @@ set term ;^
 commit;
 set term ^;
 
+create or alter procedure sp_get_test_time_dts
+returns(
+    test_time_dts_beg timestamp,
+    test_time_dts_end timestamp,
+    test_intervals int
+) as
+begin
+   -- STUB! Will be redefined in oltp_common_sp.sql 
+    suspend;
+end
+
+^ -- sp_get_test_time_dts
+
+----------------
+-- 08.02.2019:
+-- moved here because now it will be called only from sp_add_perf_log
+create or alter procedure srv_increment_tx_bops_counter( a_unit dm_unit )
+as
+begin
+    -- STUB! Will be defined in oltp_common.sql
+end
+
+^ -- srv_increment_tx_bops_counter
+
 -------------------------------------------------------------------------------
 
 create or alter procedure sp_add_perf_log (
@@ -2524,6 +2604,7 @@ create or alter procedure sp_add_perf_log (
     declare v_dts_end timestamp;
     declare v_aux1 double precision;
     declare v_aux2 double precision;
+    declare v_curr_success_bop_cnt bigint;
 begin
     -- Registration of all STARTs and FINISHes (both normal and failed)
     -- for all application SPs and some service units:
@@ -2565,12 +2646,16 @@ begin
             rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', v_dts);
             rdb$set_context('USER_TRANSACTION','TPLOG_LAST_INFO', v_info);
         end
+
     else -- a_is_unit_beginning = 0 ==> this is _NORMAL_ finish of :a_unit (i.e. w/o exception)
+
+        -- ###############################################
+        -- ###   s u c c e s s f u l     f i n i s h   ###
+        -- ###############################################
         begin
             update tmp$perf_log t set
                 info = left(coalesce( info, '' ) || coalesce( trim(iif( info>'', '; ', '') || :a_info), ''), 255),
                 dts_end = :v_dts,
-                -- dis 12.01.2015, not need more: id2 = gen_id(g_perf_log, 1), -- 4 debug! 28.09.2014
                 elapsed_ms = datediff(millisecond from dts_beg to :v_dts),
                 aux1 = :a_aux1,
                 aux2 = :a_aux2
@@ -2580,12 +2665,20 @@ begin
                 and dts_end is NULL -- we are looking for record that was added at the BEG of this unit call
             ;
 
+            -- 08.02.2019 Now we can INCREASE counter of business operations which finished OK.
+            -- Increment value of context  'BUSINESS_OPS_CNT' by 1:
+            execute procedure srv_increment_tx_bops_counter( a_unit );
+
             if ( a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY') ) then
             begin
-                v_gen_inc_iter_pf = c_gen_inc_step_pf;
+                -- We are at final point of top-level unit (which started business op.)
+                -- (e.g. s`p_add_invoice_to_stock -- main SP which could call many
+                -- times auxiliary s`p_customer_reserve for creating reserves)
 
-                -- Finish of top-level unit (which start business op.):
-                -- MOVE *ALL* data currently stored in GTT tmp$perf_log to fixed table perf_log
+                -- Save *ALL* data that currently in GTT tmp$perf_log to permanent storage.
+                -- Since 08.10.2018 this is updatable view v_perf_log instead of table.
+
+                v_gen_inc_iter_pf = c_gen_inc_step_pf;
 
                 v_save_dts_beg = 'now'; -- for logging time and number of moved records
                 v_save_gtt_cnt = 0;
@@ -2642,7 +2735,7 @@ begin
 
                 v_save_dts_end = 'now';
 
-                -- Add info about timing and num. of record (tmp$ --> fixed):
+                -- 4debug only: how long data from GTT tmp$perf_log was saved:
                 insert into v_perf_log( -- current unit: sp_add_perf_log
                         id,
                         unit, info, dts_beg, dts_end, elapsed_ms, ip, aux1)
@@ -2655,6 +2748,44 @@ begin
                         rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
                         :v_save_gtt_cnt
                       );
+
+                -- #################### restored 25.03.2019 ##################################
+                -- 08.02.2019. Code control can pass here only when:
+                -- 1) :a_unit is 'top-level' business action (i.e. that was chosen in "Big SQL" execute block
+                --    by calling srv_random_unit_choice and is "STARTER" of business action),
+                -- and 
+                -- 2) this :a_unit is to be successfully finished now, i.e. no exceptions ware raise during its execution.
+                -- This means that we can here increase g_success_counter.
+
+                v_curr_success_bop_cnt = gen_id( g_success_counter, cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int) );
+
+                -- 21.02.2019: moved here from .bat/.sh. No sense to defer this up to test finish
+                -- because database state will be changed to full-shutdown and almost all of
+                -- attachments could not write all necessary info - they will be forcedly dropped
+                -- by ISQL session #1.
+                v_dts = cast('now' as timestamp);
+
+
+                -- 10.02.2019: this variable will be used in batch for show estimated perf score:
+                -- ESTIMATED_PERF_SINCE_TEST_BEG           1521    354 2019-02-21 07:50:34
+                rdb$set_context( 'USER_SESSION', 
+                                 'TOTAL_OPS_SUCCESS_INFO', 
+                                 cast(v_curr_success_bop_cnt as char(18)) || ' ' || cast( v_dts as varchar(24)) 
+                               );
+
+                -- Here we operate with VIEW rather than with table: we have to remove
+                -- any dependencies on table 'perf_estimated' from .sql because this
+                -- table will be dropped and recreated again before each test launch.
+                insert into v_perf_estimated( minute_since_test_start, success_count, worker_id, dts )
+                select
+                    datediff(minute from p.test_time_dts_beg to :v_dts ) as curr_phase_lasts_minutes -- DO NOT add "+1" here, 25.03.2019 1117
+                   ,:v_curr_success_bop_cnt
+                   ,(select result from fn_this_worker_seq_no)
+                   ,:v_dts
+                from sp_get_test_time_dts p -- 10.02.2019: will query 'perf_log' table only one time per session, then returns context variables
+                ;
+                --#############################################################################
+
             end --  a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
         end -- a_is_unit_beginning = 0
 end
@@ -2923,24 +3054,9 @@ begin
 
     if ( (select result from fn_remote_process) containing 'IBExpert' ) then exit; -- 4debug; 23.07.2014
 
-    if ( rdb$get_context('USER_SESSION','PERF_WATCH_END') is null ) then
-        begin
-            -- this record is added in 1run_oltp_emul.bat before FIRST attach
-            -- will begin it's work:
-            -- PLAN (P ORDER PERF_LOG_DTS_BEG_DESC INDEX (PERF_LOG_UNIT))
-            select p.dts_beg, p.dts_end
-            from perf_log p
-            where p.unit = 'perf_watch_interval' and p.info containing 'active'
-            order by dts_beg + 0 desc -- !! 24.09.2014, speed !! (otherwise dozen fetches!)
-            rows 1
-            into v_dts_beg, v_dts_end;
-            rdb$set_context('USER_SESSION','PERF_WATCH_BEG', v_dts_beg);
-            rdb$set_context('USER_SESSION','PERF_WATCH_END', coalesce(v_dts_end, dateadd(3 hour to current_timestamp) ) );
-        end
-    else
-        begin
-            v_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
-        end
+    select test_time_dts_beg, test_time_dts_end
+    from sp_get_test_time_dts
+    into v_dts_beg, v_dts_end;
 
     v_need_to_stop = null;
     select p.need_to_stop from sp_stoptest p rows 1 into v_need_to_stop;
@@ -3199,7 +3315,7 @@ begin
 
                 v_info = v_info ||', id_rnd='||coalesce(id_random,'<null>');
 
-                -- 19.07.2014: 'no id>=@1 in @2 found within scope @3 ... @4'
+                -- 19.07.2014: 'no id >= @1 in @2 found in @3 within scope @4 ... @5'
                 v_detailed_exc_text = 'no id >= ' || coalesce(id_random,'<?>') || ' in ' || a_view_for_search || ' found within scope ' || coalesce(id_min,'<?>') || ' ... ' || coalesce(id_max,'<?>');
                 exception ex_can_not_select_random_id ( select result from sys_stamp_exception('ex_can_not_select_random_id', :v_detailed_exc_text) );
 
@@ -3290,102 +3406,6 @@ end
 
 ^ -- sp_lock_selected_doc
 
-create or alter procedure sp_cache_rules_for_distr( a_table dm_dbobj )
-returns(
-    mode dm_name,
-    snd_optype_id  bigint,
-    rcv_optype_id  bigint,
-    rows_to_multiply int
-)
-as
-    declare v_ctx_prefix type of dm_ctxnv;
-    declare v_stt varchar(255);
-    declare i int;
-    declare v_mode dm_name;
-    declare v_snd_optype_id type of dm_idb;
-    declare v_rcv_optype_id type of dm_idb;
-    declare v_rows_to_multiply int;
-begin
-    if ( upper(coalesce(a_table,'')) not in ( upper('QDISTR'), upper('PDISTR') ) )
-    then
-      exception ex_bad_argument; --  'argument @1 passed to unit @2 is invalid';
-
-    -- cache records from rules_for_Qdistr and rules_for_Pdistr in context variables
-    -- for fast output of them (without database access)
-
-    v_ctx_prefix = 'MEM_TABLE_'||upper(a_table)||'_'; -- 'MEM_TABLE_QDISTR' or 'MEM_TABLE_PDISTR'
-    v_stt='select mode, snd_optype_id, rcv_optype_id' || iif( upper(a_table)=upper('QDISTR'),', storno_sub',', rows_to_multiply ' )
-          ||' from rules_for_'||a_table;
-    if ( rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') is null ) then
-    begin
-        i = 1;
-        for
-            execute statement( v_stt )
-            into v_mode, v_snd_optype_id, v_rcv_optype_id, v_rows_to_multiply
-        do begin
-            rdb$set_context(
-            'USER_SESSION'
-            ,v_ctx_prefix||i
-            ,rpad( v_mode ,80,' ')
-             || coalesce( cast(v_snd_optype_id as char(18)), rpad('', 18,' ') )
-             || coalesce( cast(v_rcv_optype_id as char(18)), rpad('', 18,' ') )
-             || coalesce( cast(v_rows_to_multiply as char(10)), rpad('', 10,' ') )
-            );
-            rdb$set_context('USER_SESSION', v_ctx_prefix||'CNT', i);
-            i = i+1;
-        end
-    end
-    i = 1;
-    while ( i <= cast(rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') as int) )
-    do begin
-        mode = trim( substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 1 for 80 ) );
-        snd_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 81 for 18 )), '') as dm_idb);
-        rcv_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 99 for 18 )), '') as dm_idb);
-        rows_to_multiply = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 117 for 10 )), '') as int);
-        suspend;
-        i = i+1;
-    end
-end
-
-^ -- sp_cache_rules_for_distr
-
-create or alter procedure sp_rules_for_qdistr
-returns(
-    mode dm_name,
-    snd_optype_id  bigint,
-    rcv_optype_id  bigint,
-    storno_sub smallint -- 28.07.2014
-) as
-begin
-  for
-      select p.mode,p.snd_optype_id, p.rcv_optype_id,
-             p.rows_to_multiply -- 28.07.2014
-      from sp_cache_rules_for_distr('QDISTR') p
-      into mode, snd_optype_id, rcv_optype_id,
-           storno_sub -- 28.07.2014
-  do
-      suspend;
-end
-
-^ -- sp_rules_for_qdistr
-
-create or alter procedure sp_rules_for_pdistr
-returns(
-    snd_optype_id  bigint,
-    rcv_optype_id  bigint,
-    rows_to_multiply int
-)
-as
-begin
-  for
-      select p.snd_optype_id, p.rcv_optype_id, p.rows_to_multiply
-      from sp_cache_rules_for_distr('PDISTR') p
-      into snd_optype_id, rcv_optype_id, rows_to_multiply
-  do
-      suspend;
-end
-
-^ -- sp_rules_for_pdistr
 
 set term ;^
 commit; -- mandatory for FB 2.5!
@@ -3405,11 +3425,6 @@ select * from qdistr
 create or alter view v_qdistr_multiply_2 as
 select * from qdistr
 ;
-
--- 07.09.2015: probe to replace ES in all cases of fn_get_rand_id:
-create or alter view name$to$substutite$min$id$ as select 1 id from rdb$database;
-create or alter view name$to$substutite$max$id$ as select 1 id from rdb$database;
-create or alter view name$to$substutite$search$ as select 1 id from rdb$database;
 
 -- Updatable views (one-to-one data projections) for handling rows in heavy loaded
 -- tables QDistr/QStorned (or in XQD_*, XQS_* when config par. create_with_split_heavy_tabs = 1):
@@ -3469,6 +3484,7 @@ from qstorned
 ;
 commit;
 
+
 set term ^;
 create or alter procedure sp_multiply_rows_for_qdistr(
     a_doc_list_id dm_idb,
@@ -3518,7 +3534,7 @@ begin
     -- =1 for all other operations:
     for
         select r.rcv_optype_id, c.snd_id, c.id as ware_id, c.qty, c.cost_purchase, c.cost_retail, r.storno_sub
-        from rules_for_qdistr r
+        from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         cross join tmp$shopping_cart c
         where
             r.snd_optype_id = :a_optype_id
@@ -3638,7 +3654,7 @@ begin
                     v_gen_inc_last_qd = gen_id( g_qdistr, :c_gen_inc_step_qd );
                 end
         end -- while( n_rows_to_add > 0 )
-    end -- cursor on doc_data cross join rules_for_qdistr
+    end -- cursor on doc_data cross join v_rules_for_qdistr
 
     -- add to performance log timestamp about start/finish this unit
     -- (records from GTT tmp$perf_log will be MOVED in fixed table perf_log):
@@ -3695,7 +3711,7 @@ begin
     v_internal_min_cost_4_split = cast(rdb$get_context('USER_SESSION', 'C_MIN_COST_TO_BE_SPLITTED' ) as int);
     for
         select r.rcv_optype_id, iif( :a_cost_for_distr < :v_internal_min_cost_4_split, 1, r.rows_to_multiply )
-        from sp_rules_for_pdistr r
+        from v_rules_for_pdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where r.snd_optype_id = :a_optype_id
         into v_rcv_optype_id, n_rows_to_add
     do
@@ -3837,7 +3853,7 @@ begin
     while ( v_pass <= 2 ) do
     begin
         select r.snd_optype_id -- iif( :v_pass=1, r.snd_optype_id, r.rcv_optype_id )
-        from sp_rules_for_pdistr r
+        from v_rules_for_pdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where iif( :v_pass = 1, r.rcv_optype_id, r.snd_optype_id ) = :a_optype_id
         into v_storned_doc_optype_id; -- sp_add_invoice_to_stock ==> v_storned_doc_optype_id = fn_oper_pay_to_supplier()
     
@@ -4269,7 +4285,7 @@ begin
 
 
     select r.rcv_optype_id
-    from rules_for_qdistr r
+    from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
     where
         r.snd_optype_id = :a_old_optype
         and coalesce(r.storno_sub,1) = 1 -- nb: old_op=2000 ==> storno_sub=NULL!
@@ -4696,7 +4712,7 @@ begin
     for
         select d.id, r.rcv_optype_id, r.storno_sub, d.ware_id, d.qty,  d.cost_purchase
         from doc_data d
-        cross join rules_for_qdistr r
+        cross join v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where d.doc_id = :a_doc_id and r.snd_optype_id = :a_old_optype
     into v_dd_id, v_old_rcv_optype, v_storno_sub, v_dd_ware_id, v_dd_qty, v_dd_cost
     do
@@ -4932,7 +4948,7 @@ begin
 
     for
         select r.rcv_optype_id, r.storno_sub
-        from rules_for_qdistr r
+        from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where r.snd_optype_id = :a_old_optype
         --and coalesce(r.storno_sub,1) = 1 -- do NOT! old_op=1000 ==> two rows (storno_sub=1 and 2) - needs to be processed for sp_cancel_client_order
         into v_rcv_optype_id, v_storno_sub
@@ -5148,7 +5164,7 @@ begin
 
     for
         select r.rcv_optype_id, r.storno_sub
-        from rules_for_qdistr r
+        from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where r.snd_optype_id = :a_old_optype
         into v_rcv_optype_id, v_storno_sub -- 'v_rcv_optype_id' see in WHERE condition in c_qd_rows_for_doc
     do
@@ -5574,7 +5590,7 @@ begin
     select result from fn_this_worker_seq_no into v_worker_id;
 
     select r.rcv_optype_id
-    from rules_for_qdistr r
+    from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
     where r.snd_optype_id = :a_optype_id and coalesce(r.storno_sub,1)=1
     into v_rcv_optype_id;
 
@@ -6096,11 +6112,6 @@ commit;
 -- ############################   V I E W S   #################################
 -------------------------------------------------------------------------------
 
--- 07.09.2015: probe to replace ES in all cases of fn_get_rand_id:
-create or alter view name$to$substutite$min$id$ as select 1 id from rdb$database;
-create or alter view name$to$substutite$max$id$ as select 1 id from rdb$database;
-create or alter view name$to$substutite$search$ as select 1 id from rdb$database;
-
 create or alter view v_cancel_client_order as
 -- source for random choose client_order document to be cancelled
 select h.id
@@ -6125,7 +6136,7 @@ where
 
 
 create or alter view v_cancel_supplier_invoice as
--- source for random choose invoice from supplier that will be cancelled
+-- source for random choose supplier order doc to be cancelled
 select h.id
 from doc_list h
 where
@@ -6519,8 +6530,8 @@ create or alter view v_random_find_clo_res as
                     -- 12.08.2018: sequential number of ISQL session that queries this view.
                     -- This filter is added with purpose to reduce number of lock-conflict errors:
                     and q.worker_id is not distinct from (select result from fn_this_worker_seq_no)
-                -- prevent from building bitmap, 3.0 only:
-                --order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
+                -- do NOT use here, can be applied only in 3.0+:
+                -- order by q.ware_id, q.snd_optype_id, q.rcv_optype_id
             )
             --order by d.doc_id -- prevent from building bitmap, 3.0 only
         )
@@ -6945,34 +6956,6 @@ group by t.table_name,t.unit
 ;
 commit;
 
--------------------------------------------------------------------------------
-
-create or alter view z_estimated_perf_per_minute as
--- Do NOT delete! 28.10.2015.
--- This view is used in oltp_isql_run_worker.bat (.sh) when it creates final report.
--- Table PERF_ESTIMATED is filled up by temply created .sql which scans log
--- of 1st ISQL session (which, in turn, makes final report). This log contains
--- rows like this:
--- EST_OVERALL_AT_MINUTE_SINCE_BEG         0.00      0
--- - where 1st number is estimated performance value and 2nd is datediff(minute)
--- from test start to the moment when each business transaction SUCCESSFULLY finished.
--- Data in this view is performance value in *dynamic* but with detalization per
--- ONE minute, from time when all ISQL sessions start (rather then all other reports
--- which make starting point after database was warmed up).
--- This report can help to find proper value of warm-time in oltpNN_config.
-select
-    e.minute_since_test_start
-    ,avg(e.success_count) avg_estimated
-    ,min(e.success_count) / nullif(avg(e.success_count), 0) min_to_avg_ratio
-    ,max(e.success_count) / nullif(avg(e.success_count), 0) max_to_avg_ratio
-    ,count(e.success_count) rows_aggregated
-    ,count(distinct e.att_id) distinct_attachments -- 22.12.2015: helps to ensure that all ISQL sessions were alive in every minute of test work time
-from perf_estimated e
-where e.minute_since_test_start>0
-group by e.minute_since_test_start
-;
-
-commit;
 
 -------------------------------------------------------------------------------
 --######################   d e b u g    v i e w s   ############################
@@ -7075,6 +7058,18 @@ begin
 end
 
 ^ -- pstorned_bi
+
+
+create or alter trigger perf_agg_bi for perf_agg active before insert position 0 as
+begin
+    new.id = coalesce(new.id, gen_id(g_common, 1) );
+end
+
+^ -- perf_agg_bi
+
+-- do NOT create trigger for perf_estimated here - it will be created in oltp_adjust.sql
+-- create or alter trigger perf_estimated_bi for perf_estimated active before insert position 0 as
+-- ^ -- perf_estimated_bi
 
 set term ;^
 commit;
@@ -7735,7 +7730,6 @@ as
     declare v_cq_trn_id dm_idb;
     declare v_cq_dts timestamp;
     declare v_worker_id type of dm_ids;
-
     declare c_shop_cart cursor for (
         select
             id,
@@ -7764,7 +7758,7 @@ as
                     c.qty,
                     r.storno_sub
                 from tmp$shopping_cart c
-                INNER join rules_for_qdistr r
+                INNER join v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
                   on :a_client_order_id is NOT null
                      -- ...= r.rcv_optype_id + 0 ==> PLAN MERGE (SORT (R NATURAL), SORT (C NATURAL))
                      -- ...= r.rcv_optype_id  ==> PLAN JOIN (C NATURAL, R INDEX (RULES_FOR_QDISTR_RCVOP))
@@ -7854,7 +7848,7 @@ begin
     -- 06.09.2014: doc_data: 3 idx_reads per each unique ware_id (one here, two in SP s`rv_find_qd_qs_mism)
 
     select r.rcv_optype_id
-    from rules_for_qdistr r
+    from v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
     where r.snd_optype_id = :a_optype_id
     into v_next_rcv_op;
 
@@ -8353,18 +8347,23 @@ returns(
     declare c_unit_for_gather_mon_data dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of this SP!
     declare c_unit_for_recalc_idx_stat dm_dbobj = 'srv_recalc_idx_stat'; -- do NOT change the name of this SP!
     declare fn_internal_enable_mon_query smallint;
-    declare fn_internal_reind_min_interval int;
+    declare fn_internal_reind_min_interval bigint;
 begin
     fn_internal_enable_mon_query = 0; -- always in 2.5;  in 3.0: cast(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') as smallint)
-    fn_internal_reind_min_interval = cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as int);
+
+    fn_internal_reind_min_interval = cast( rdb$get_context('USER_SESSION', 'RECALC_IDX_MIN_INTERVAL') as bigint);
+    -- since 14.04.2019:
+    if ( fn_internal_reind_min_interval <= 0 ) then
+        select result from fn_infinity into fn_internal_reind_min_interval;
+
 
     -- refactored 18.07.2014 (for usage in init data pop)
     -- sample: select * from srv_random_unit_choice( '','creation,state_next','','removal' )
     -- (will return first randomly choosen record related to creation of document
     -- or to changing its state in 'forward' way; excludes all cancellations and change
     -- doc states in 'backward')
-    a_included_modes = coalesce( a_included_modes, '');
-    a_included_kinds = coalesce( a_included_kinds, '');
+    a_included_modes = coalesce( a_included_modes, ''); -- business_ops.mode = one of: {stock, payments, service}
+    a_included_kinds = coalesce( a_included_kinds, ''); -- business_ops.mode = one of: {creation, removal, state_next, state_back, service}
     a_excluded_modes = coalesce( a_excluded_modes, '');
     a_excluded_kinds = coalesce( a_excluded_kinds, '');
 
@@ -8407,7 +8406,7 @@ begin
         rdb$set_context('USER_SESSION', 'BOP_RND_MAX', r_max);
     end
 
-    r=rand()*r_max;
+    r = rand() * r_max;
     delete from tmp$perf_log p where p.stack = :v_this;
 
     -- 12.01.2019. We add into tmp$ table for choosing:
@@ -8479,283 +8478,6 @@ begin
 end
 
 ^ -- sys_get_func_ddl
-
-create or alter procedure fn$get$random$id$subst$names (
-    a_view_for_search dm_dbobj,
-    a_view_for_min_id dm_dbobj default null,
-    a_view_for_max_id dm_dbobj default null,
-    a_raise_exc dm_sign default 1, -- raise exc`eption if no record will be found
-    a_can_skip_order_clause dm_sign default 0, -- 17.07.2014 (for some views where document is taken into processing and will be REMOVED from scope of this view after Tx is committed)
-    a_find_using_desc_index dm_sign default 0  -- 11.09.2014: if 1, then query will be: "where id <= :a order by id desc"
-)
-returns (result bigint)
-as
-
-    declare i smallint;
-    declare v_stt varchar(255);
-    declare id_min double precision;
-    declare id_max double precision;
-    declare v_rows int;
-    declare id_random bigint;
-    declare id_selected bigint = null;
-    declare msg dm_info;
-    declare v_info dm_info;
-    declare v_this dm_dbobj = 'fn_get_random_id';
-    declare v_ctxn dm_ctxnv;
-    declare v_name dm_dbobj;
-    declare fn_internal_max_rows_usage int;
-    declare v_is_known smallint = 0;
-begin
-    -- Selects random record from view <a_view_for_search>
-    -- using select first 1 id from ... where id >= :id_random order by id.
-    -- Aux. parameters:
-    -- # a_view_for_min_id and a_view_for_max_id -- separate views that
-    --   might be more effective to find min & max LIMITS than scan using a_view_for_search.
-    -- # a_raise_exc (default=1) - do we raise exc`eption if record not found.
-    -- # a_can_skip_order_clause (default=0) - can we SKIP including of 'order by' clause
-    --   in statement which will be passed to ES ? (for some cases we CAN do it for efficiency)
-    -- # a_find_using_desc_index - do we construct ES for search using DESCENDING index
-    --   (==> it will use "where id <= :r order by id DESC" rather than "where id >= :r order by id ASC")
-    -- [only when TIL = RC] Repeats <fn_internal_retry_count()> times if result is null
-    -- (possible if bounds of IDs has been changed since previous call)
-
-    v_this = trim(a_view_for_search);
-
-    -- max difference b`etween min_id and max_id to allow scan random id via
-    -- select id from <a_view_for_search> rows :x to :y, where x = y = random_int
-    fn_internal_max_rows_usage = cast( rdb$get_context('USER_SESSION','RANDOM_SEEK_VIA_ROWS_LIMIT') as int);
-
-    -- Use either stub or non-empty executing code (depends on was 'oltp_dump.sql' compiled or no):
-    -- save fact of usage views in the table `z_used_views`:
-    execute procedure z_remember_view_usage(a_view_for_search, a_view_for_min_id, a_view_for_max_id);
-
-    a_view_for_min_id = coalesce( a_view_for_min_id, a_view_for_search );
-    a_view_for_max_id = coalesce( a_view_for_max_id, a_view_for_min_id, a_view_for_search );
-
-    -- Label: $name_to_substutite_start_of_loop. Do not delete this line!
-
-    if ( upper(a_view_for_search) = upper(trim('name$to$substutite$search$'))  ) then
-    begin
-        v_is_known = 1;
-        if ( rdb$get_context('USER_TRANSACTION', upper(trim('name$to$substutite$min$id$'))||'_ID_MIN' ) is null
-               or
-               rdb$get_context('USER_TRANSACTION', upper(trim('name$to$substutite$max$id$'))||'_ID_MAX' ) is null
-             ) then
-            begin
-                execute procedure sp_add_perf_log(1, a_view_for_min_id );
-    
-                if ( a_view_for_min_id is not null ) then
-                    select min(id)-0.5 from name$to$substutite$min$id$ into id_min;
-                else
-                    select min(id)-0.5 from name$to$substutite$search$ into id_min;
-    
-                execute procedure sp_add_perf_log(0, a_view_for_min_id, null, 'static SQL, id_min='||coalesce(id_min,'<?>') );
-        
-                if ( id_min is NOT null ) then -- ==> source <a_view_for_min_id> is NOT empty
-                begin
-        
-                    execute procedure sp_add_perf_log(1, a_view_for_max_id );
-    
-                    if ( a_view_for_max_id is not null ) then
-                        select max(id)+0.5 from name$to$substutite$max$id$ into id_max;
-                    else
-                        select max(id)+0.5 from name$to$substutite$search$ into id_max;
-    
-                    execute procedure sp_add_perf_log(0, a_view_for_max_id, null, 'static SQL, id_max='||coalesce(id_max,'<?>') );
-        
-                    if ( id_max is NOT null  ) then -- ==> source <a_view_for_max_id> is NOT empty
-                    begin
-                        -- Save values for subsequent calls of this func in this tx (minimize DB access)
-                        -- (limit will never change in SNAPSHOT and can change with low probability in RC):
-                        rdb$set_context('USER_TRANSACTION', upper(trim('name$to$substutite$min$id$')) || '_ID_MIN', :id_min);
-                        rdb$set_context('USER_TRANSACTION', upper(trim('name$to$substutite$max$id$')) || '_ID_MAX', :id_max);
-                
-                        if ( id_max - id_min < fn_internal_max_rows_usage ) then
-                        begin
-                            -- when difference b`etween id_min and id_max is not too high, we can simple count rows:
-                            select count(*) from name$to$substutite$search$ into v_rows;
-                            rdb$set_context('USER_TRANSACTION', upper(trim('name$to$substutite$search$')) || '_COUNT', v_rows );
-                        end
-                    end -- id_max is NOT null 
-                end -- id_min is NOT null
-            end
-            else
-                begin
-                    -- minimize database access! Performance on 10'000 loops: 1485 ==> 590 ms
-                    id_min=cast( rdb$get_context('USER_TRANSACTION', upper(trim('name$to$substutite$min$id$')) || '_ID_MIN' ) as double precision);
-                    id_max=cast( rdb$get_context('USER_TRANSACTION', upper(trim('name$to$substutite$max$id$')) || '_ID_MAX' ) as double precision);
-                    v_rows=cast( rdb$get_context('USER_TRANSACTION', upper(trim('name$to$substutite$search$')) || '_COUNT') as int);
-                end
-        
-            if ( id_max - id_min < fn_internal_max_rows_usage ) then
-                begin
-                    --id_random = cast( 1 + rand() * (v_rows - 1) as int); -- WRONG when data skewed to low values; 30.07.2014
-                    id_random = ceiling( rand() * (v_rows) );
-                    select id
-                    from name$to$substutite$search$
-                    -- ::: nb ::: `ORDER` clause not needed here
-                    rows :id_random to :id_random
-                    into id_selected;
-                end
-            else
-                begin
-                    -- 17.07.2014: for some cases it is ALLOWED to query random ID without "ORDER BY"
-                    -- clause because this ID will be handled in such manner that it will be REMOVED
-                    -- after this handling from the scope of view! Samples of such cases are:
-                    -- sp_cancel_supplier_order, sp_cancel_supplier_invoice, sp_cancel_customer_reserve
-                    id_random = cast( id_min + rand() * (id_max - id_min) as bigint);
-
-                    if ( a_can_skip_order_clause = 0 and a_find_using_desc_index = 0 ) then
-                        select id
-                        from name$to$substutite$search$
-                        where id >= :id_random
-                        order by id ASC
-                        rows 1
-                        into id_selected;
-                    else if ( a_can_skip_order_clause = 0 and a_find_using_desc_index = 1 ) then
-                        select id
-                        from name$to$substutite$search$
-                        where id <= :id_random
-                        order by id DESC
-                        rows 1
-                        into id_selected;
-                    else if ( a_can_skip_order_clause = 1 and a_find_using_desc_index = 0 ) then
-                        select id
-                        from name$to$substutite$search$
-                        where id >= :id_random
-                        rows 1
-                        into id_selected;
-                    else if ( a_can_skip_order_clause = 1 and a_find_using_desc_index = 1 ) then
-                        select id
-                        from name$to$substutite$search$
-                        where id <= :id_random
-                        rows 1
-                        into id_selected;
-                    else
-                        exception ex_bad_argument; -- using('a_can_skip_order_clause and/or a_find_using_desc_index', v_this);
-        
-                end
-
-    end -- upper(a_view_for_search) = upper(trim('name$to$substutite$min$id$'))
-
-    -- Label: $name_to_substutite_end_of_loop. Do not delete this line!
-
-    if ( v_is_known = 0 ) then  -- passed view not from list of known names
-    begin -- use ES (old code)
-
-        if ( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) is null
-           or
-           rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) is null
-         ) then
-        begin
-            execute procedure sp_add_perf_log(1, a_view_for_min_id );
-            -- v`iew z_get_min_max_id may be used to see average, min and max elapsed time
-            -- of this sttm:
-            v_stt='select min(id)-0.5 from '|| a_view_for_min_id;
-            execute statement (:v_stt) into id_min; -- do via ES in order to see statistics in the TRACE!
-            execute procedure sp_add_perf_log(0, a_view_for_min_id, null, 'dyn SQL, id_min='||coalesce(id_min,'<?>') );
-    
-            if ( id_min is NOT null ) then -- ==> source <a_view_for_min_id> is NOT empty
-            begin
-    
-                execute procedure sp_add_perf_log(1, a_view_for_max_id );
-                -- v`iew z_get_min_max_id may be used to see average, min and max elapsed time
-                -- of this sttm:
-                v_stt='select max(id)+0.5 from '|| a_view_for_max_id;
-                execute statement (:v_stt) into id_max; -- do via ES in order to see statistics in the TRACE!
-                execute procedure sp_add_perf_log(0, a_view_for_max_id, null, 'dyn SQL, id_max='||coalesce(id_max,'<?>') );
-    
-                if ( id_max is NOT null  ) then -- ==> source <a_view_for_max_id> is NOT empty
-                begin
-                    -- Save values for subsequent calls of this func in this tx (minimize DB access)
-                    -- (limit will never change in SNAPSHOT and can change with low probability in RC):
-                    rdb$set_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN', :id_min);
-                    rdb$set_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX', :id_max);
-            
-                    if ( id_max - id_min < fn_internal_max_rows_usage ) then
-                    begin
-                        -- when difference b`etween id_min and id_max is not too high, we can simple count rows:
-                        execute statement 'select count(*) from '||a_view_for_search into v_rows;
-                        rdb$set_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT', v_rows );
-                    end
-                end -- id_max is NOT null 
-            end -- id_min is NOT null
-        end
-        else begin
-            -- minimize database access! Performance on 10'000 loops: 1485 ==> 590 ms
-            id_min=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) as double precision);
-            id_max=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_max_id)||'_ID_MAX' ) as double precision);
-            v_rows=cast( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_search)||'_COUNT') as int);
-        end
-    
-        if ( id_max - id_min < fn_internal_max_rows_usage ) then
-            begin
-                v_stt='select id from '||a_view_for_search||' rows :x to :y'; -- ::: nb ::: `ORDER` clause not needed here!
-                --id_random = cast( 1 + rand() * (v_rows - 1) as int); -- WRONG when data skewed to low values; 30.07.2014
-                id_random = ceiling( rand() * (v_rows) );
-                execute statement (:v_stt) (x := id_random, y := id_random) into id_selected;
-            end
-        else
-            begin
-                -- 17.07.2014: for some cases it is ALLOWED to query random ID without "ORDER BY"
-                -- clause because this ID will be handled in such manner that it will be REMOVED
-                -- after this handling from the scope of view! Samples of such cases are:
-                -- sp_cancel_supplier_order, sp_cancel_supplier_invoice, sp_cancel_customer_reserve
-                v_stt='select id from '
-                    ||a_view_for_search
-                    ||iif(a_find_using_desc_index = 0, ' where id >= :x', ' where id <= :x');
-                if ( a_can_skip_order_clause = 0 ) then
-                    v_stt = v_stt || iif(a_find_using_desc_index = 0, ' order by id     ', ' order by id desc');
-                v_stt = v_stt || ' rows 1';
-                id_random = cast( id_min + rand() * (id_max - id_min) as bigint);
-    
-                -- execute procedure sp_add_perf_log(1, a_view_for_search );
-                -- do via ES in order to see statistics in the TRACE:
-                execute statement (:v_stt) (x := id_random) into id_selected;
-                -- execute procedure sp_add_perf_log(0, a_view_for_search, null, 'id_sel='||coalesce(id_selected,'<?>') );
-            end
-
-    end -- v_is_known = 0 ==> use ES (old code, when passed name of view NOT from known list)
-
-
-    if ( id_selected is null and coalesce(a_raise_exc, 1) = 1 ) then
-    begin
-
-        v_info = 'view: name$to$substutite$search$';
-        if ( id_min is NOT null ) then
-           v_info = v_info || ', id_min=' || id_min || ', id_max='||id_max;
-        else
-           v_info = v_info || ' - EMPTY';
-
-        v_info = v_info ||', id_rnd='||coalesce(id_random,'<null>');
-
-        -- 19.07.2014: 'no id>=@1 in @2 found within scope @3 ... @4'
-        exception ex_can_not_select_random_id;
-    end
-
-    result = id_selected;
-    suspend;
-
-when any do
-    begin
-        -- in a`utonomous tx:
-        -- 1) add to tmp$perf_log error info + timestamp,
-        -- 2) move records from tmp$perf_log to perf_log
-        execute procedure sp_add_to_abend_log(
-            v_stt,
-            gdscode,
-            v_info,
-            v_this,
-            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
-        );
-        --#######
-        exception;  -- ::: nb ::: anonimous but in when-block!
-        --#######
-    end
-
-end -- fn$get$random$id$subst$names 
-
-^
 
 set term ;^
 set list on;

@@ -184,6 +184,7 @@ set varlist=!varlist!^
 
 set varlist=!varlist!^
 ,test_time^
+,test_intervals^
 ,tmpdir^
 ,unit_selection_method^
 ,update_conflict_percent^
@@ -896,16 +897,19 @@ del %tmperr% 2>nul
 echo Launching %winq% ISQL sessions:
 @rem ###############################
 
-
 if .1.==.0. (
     set /a sid=1
     set /a k=10000+!sid!
     echo +DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+
-    echo RUN: call oltp_isql_run_worker.bat !sid!  %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,3! %fbb%   %file_name_with_test_params%
+    echo RUN: call oltp_isql_run_worker.bat !sid!  %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
+    echo check result of select * from sp_get_test_time_dts
     pause
-    call oltp_isql_run_worker.bat !sid! %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,3! %fbb%   %file_name_with_test_params%
-    @rem                            1      2               3                4            5            6            7                  8
+
+    call oltp_isql_run_worker.bat !sid! %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
+
+    @rem                            1      2               3                4            5            6            7                 8
     echo +DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+
+    pause
     exit
 )
 
@@ -946,10 +950,11 @@ for /l %%i in (1, 1, %winq%) do (
 
     @rem Sample of %tmpdir%\%logbase%-!k:~1,4!: "C:\TEMP\logs.oltp25\oltp25_CSPROG-001"
     @rem =========
-
-    @rem #######################################################
-    @rem +++    l a u n c h   w o r k i n g     I S Q L s    +++
-    @rem #######################################################
+    if .%%i. EQU 1 (
+        @echo #########################################
+        @echo +++    l a u n c h   w o r k e r s    +++
+        @echo #########################################
+    )
 
     @start /min oltp_isql_run_worker.bat %%i %winq% !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
     @rem                                  ^     ^            ^                ^             ^             ^           ^               ^
@@ -1230,8 +1235,6 @@ goto :end_of_test
       @rem call :gen_working_sql  run_test  %tmp_run_test_sql%  !jobs_count!   %no_auto_undo%  %detailed_info% %unit_selection_method% %sleep_min% %sleep_max% %sleep_udf% 
       @rem                            1            2                 3               4               5                    6                7          8           9
 
-      @echo off
-
       set mode=%1
 
       @rem Usually smth like: C:\TEMP\logs.oltpNN\sql\tmp_random_run.sql
@@ -1292,7 +1295,7 @@ goto :end_of_test
               ) else (
                   echo         7. NO pauses between transactions.
                   echo            *** NOTE *** 
-                  echo            EXTREMELY HEAVY (UNREAL^) WORKLOAD CAN OCCUR ***
+                  echo            EXTREMELY HEAVY *UNREAL* WORKLOAD CAN OCCUR ***
               )
 
               if %mon_unit_perf% EQU 2 (
@@ -1307,9 +1310,18 @@ goto :end_of_test
       type !tmp_gen_wrk_msg! >>!log4tmp!
       del !tmp_gen_wrk_msg!
 
+      @rem Show warning about Windows Defender - it can drastically reduce speed of SQL generating
+      @rem =======================================================================================
+      call :display_win_defender_notes screen
+
       del %generated_sql% 2>nul
-      @echo -- ### WARNING: DO NOT EDIT ###>>%generated_sql%
-      @echo -- GENERATED AUTO BY %~f0>>%generated_sql%
+      (
+          echo -- ### WARNING: DO NOT EDIT ###
+          echo -- GENERATED AUTO BY %~f0.
+          echo.
+          call :display_win_defender_notes sql
+          echo.
+      ) >> %generated_sql%
 
       if /i .%mode%.==.init_pop. (
           (
@@ -1330,7 +1342,7 @@ goto :end_of_test
 
           del !tmpdir!\sql\tmp_longsleep.tmp 2>nul
           (
-            echo ' Generated AUTO by %~f0, do NOT edit.
+            echo ' Generated AUTO by %~f0 at !date! !time!, do NOT edit.
             echo ' This file is used by Windows CSCRIPT.EXE as dummy scenario.
             echo ' Cscript is called via SHELL from %generated_sql%
             echo ' after every COMMIT statement.
@@ -1340,14 +1352,15 @@ goto :end_of_test
           )>>!tmpdir!\sql\tmp_longsleep.tmp
       )
 
-      echo.>>%generated_sql%
+      echo -- SQL script generation started at !date! !time! >> %generated_sql%
       echo.
-
 
       for /l %%i in (1, 1, %lim%) do (
 
           set /a k = %%i %% 50
-          if !k! equ 0 echo Generating SQL script for work, iter # %%i of total %lim%
+          if !k! equ 0 (
+              call :sho "Generating SQL script. Iter # %%i of total %lim%" !log4tmp!
+          )
 
           (
               echo.
@@ -1509,7 +1522,7 @@ goto :end_of_test
                       (
                           echo.
                           echo -- Pause between transactions is DISABLED. HEAVY WORKLOAD CAN OCCUR BECAUSE OF THIS.
-                          echo -- For enabling them assign to 'sleep_max' parameter in !cfg! file some positive value.
+                          echo -- For enabling them assign positive value to 'sleep_max' parameter in !cfg!.
                           echo.
 
                           if .%mon_unit_perf%.==.2. (
@@ -1596,7 +1609,6 @@ goto :end_of_test
 
           @rem %%i EQU 1 --> true / false
 
-
           (
               echo.
               echo -- ################################################################
@@ -1608,9 +1620,22 @@ goto :end_of_test
               echo set term ^^;
               echo -- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
               echo -- in case of extremely high workload when number of attachments is ~1000 or more.
-              echo execute block returns(" " varchar(65^)^) as
+
+              @rem Current value of 'stop'-flag: g_stop_test = 0, test_time: 2019-03-21 09:05:31.0390 ... 2019-03-21 12:05:31.0390
+
+              echo execute block returns(" " varchar(255^)^) as
+              echo     declare v_dts_beg timestamp;
+              echo     declare v_dts_end timestamp;
               echo begin
-              echo     " " = 'Current value of ''stop''-flag: g_stop_test = ' ^|^| lpad( gen_id(g_stop_test, 0^), 18, ' '^);
+              echo     select test_time_dts_beg, test_time_dts_end
+              echo     from sp_get_test_time_dts -- this SP uses session-level context variables since its 2nd call and until reconnect
+              echo     into v_dts_beg, v_dts_end;
+              echo     " " = 'Current value of ''stop''-flag: g_stop_test = ' ^|^| gen_id(g_stop_test, 0^)
+              echo           ^|^| ', test_time: '
+              echo           ^|^| coalesce( v_dts_beg, 'null' ^)
+              echo           ^|^| ' ... '
+              echo           ^|^| coalesce( v_dts_end, 'null' ^)
+              echo     ;
               echo     suspend;
               echo end^^
               echo set term ;^^
@@ -1635,6 +1660,10 @@ goto :end_of_test
           )>>%generated_sql%
 
           if /i .%mode%.==.init_pop. (
+              @rem #########################################################
+              @rem ###    I N I T I A L     D A T A    F I L L I N G     ###
+              @rem #########################################################
+
               @rem When database is filled up by initial data one need only to:
               @rem 1. Add NEW documents or 
               @rem 2. Change state of existing docs
@@ -1699,6 +1728,9 @@ goto :end_of_test
                   echo.
                        
 
+                  echo           -- +++++++++++++++++++++++++++++++++++++++++++++++++++
+                  echo           -- +++  c h o o s e    b u s i n e s s    u n i t  +++
+                  echo           -- +++++++++++++++++++++++++++++++++++++++++++++++++++
                   echo           if ( v_unit is null ^) then
                   echo           begin
                   if /i .%unit_selection_method%.==.random. (
@@ -1721,6 +1753,7 @@ goto :end_of_test
 
               )>>%generated_sql%
           )
+
 
           (
               echo       end
@@ -1748,7 +1781,7 @@ goto :end_of_test
                       echo execute block as
                       echo   declare v_dummy bigint;
                       echo begin
-                      echo   rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', datediff(millisecond from timestamp '01.01.2015' to current_timestamp ^) ^);
+                      echo   rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', datediff( millisecond from timestamp '01.01.2015' to cast('now' as timestamp ^) ^) ^);
                       echo   -- define context var which will identify rowset field
                       echo   -- in mon_log and mon_log_table_stats:
                       echo   -- (this value is ised after call app. unit^):
@@ -1768,7 +1801,7 @@ goto :end_of_test
                       echo   -- result: tables tmp$mon_log and tmp$mon_log_table_stats
                       echo   -- are filled with counters BEFORE application unit call.
                       echo   -- Field `mult` in these tables is now negative: -1
-                      echo   rdb$set_context('USER_SESSION','MON_GATHER_0_END', datediff(millisecond from timestamp '01.01.2015' to current_timestamp ^) ^);
+                      echo   rdb$set_context('USER_SESSION','MON_GATHER_0_END', datediff( millisecond from timestamp '01.01.2015' to cast('now' as timestamp ^) ^) ^);
                       echo end
                       echo ^^
                       echo set term ;^^
@@ -1816,7 +1849,7 @@ goto :end_of_test
               echo set width unit 31;
               echo set width elapsed_ms 10;
               echo set width msg 16;
-              echo set width add_info 20;
+              echo set width add_info 30;
               echo set width mon_logging_info 20;
 
               echo --------------- before run app unit: show it's NAME --------------
@@ -1824,15 +1857,26 @@ goto :end_of_test
               echo -- 18.01.2019. Avoid from querying rdb$database: this can affect on performance
               echo -- in case of extremely high workload when number of attachments is ~1000 or more.
               echo set term ^^;
-              echo execute block returns( dts varchar(24^), trn varchar(20^), att varchar(20^), unit varchar(50^), worker_seq int, msg varchar(16^), add_info varchar(40^) ^) as
+              echo execute block returns( dts varchar(24^), trn varchar(20^), att varchar(20^), unit varchar(50^), worker_seq int, msg varchar(16^), add_info varchar(50^) ^) as
               echo begin
-              echo     dts = cast(current_timestamp as varchar(24^)^);
+              echo     dts = left(cast(current_timestamp as varchar(255^)^), 24^); -- NB, 14.04.2019: FB 4.0 adds time_zone info to current_timestamp!
               echo     trn = 'tra_' ^|^| current_transaction;
               echo     att = 'att_' ^|^| current_connection;
               echo     unit = rdb$get_context('USER_SESSION','SELECTED_UNIT'^); 
               echo     worker_seq = cast( rdb$get_context('USER_SESSION','WORKER_SEQUENTIAL_NUMBER' ^) as int ^); 
               echo     msg = 'start';
-              echo     add_info = 'iter # 1  of 300';
+              echo     select iif( current_timestamp ^< p.dts_beg, 'WARM_TIME', 'TEST_TIME'^) ^|^| ', minute N '
+              echo            ^|^| cast( iif( current_timestamp ^< p.dts_beg,
+              echo                            60*%warm_time% - datediff( second from current_timestamp to p.dts_beg ^),
+              echo                            datediff( second from p.dts_beg to current_timestamp ^)
+              echo                          ^) / 60
+              echo                          +1
+              echo                       as varchar(10^)
+              echo                     ^)
+              echo     from (
+              echo         select p.test_time_dts_beg as dts_beg from sp_get_test_time_dts p
+              echo     ^) p
+              echo     into add_info;
               echo     suspend;
               echo end^^
               echo set term ;^^
@@ -1840,8 +1884,8 @@ goto :end_of_test
               echo -- ++++++++++++++++++++++++++++++++++++++++++++++++++ Action # 4 of 300 ++++++++++++++++++++++++++++++++++++++++++++++++++
               echo.	
               echo -- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
-              echo -- ======================= ============== ============== =============================== ============ ================ ==================
-              echo -- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            iter # 4  of 300  
+              echo -- ======================= ============== ============== =============================== ============ ================ =========================
+              echo -- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            TEST_TIME, minute N 12345
               echo.
               echo SET STAT ON;
               echo -- SET BAIL ON; -- 28.09.2018: we have to cancel script if any error occured during selection business unit to be run
@@ -1869,38 +1913,31 @@ goto :end_of_test
 
           (
               echo     begin
-              echo         -- save in ctx var timestamp of START app unit:
-              echo         rdb$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp^)^);
               echo         rdb$set_context('USER_SESSION', 'GDS_RESULT', null^);
+              echo         rdb$set_context('USER_SESSION', 'TOTAL_OPS_SUCCESS_INFO', null ^);
               echo         -- save value of current_transaction because we make COMMIT
               echo         -- after gathering mon$ tables when oltp_config.NN parameter
               echo         -- mon_unit_perf=1
               echo         rdb$set_context('USER_SESSION', 'APP_TRANSACTION', current_transaction^);
+              echo.
+              echo         -- save in ctx var timestamp of START app unit:
+              echo         rdb$set_context('USER_SESSION','BAT_PHOTO_UNIT_DTS', cast('now' as timestamp^)^); -- timestamp of START business unit
               echo.
               echo         if ( rdb$get_context('USER_SESSION','SELECTED_UNIT'^)
               echo              is distinct from
               echo              'TEST_WAS_CANCELLED'
               echo           ^) then
               echo             begin
-              echo                 rdb$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null ^);
-              echo                 v_stt='select count(*^) from '
-              echo                 ^|^|rdb$get_context('USER_SESSION','SELECTED_UNIT'^);
-              echo                 -- +++++++++++++++++++++++++++++++++++++++++++++++++++
-              echo                 -- +++  r u n    a p p l i c a t i o n    u n i t  +++
-              echo                 -- +++++++++++++++++++++++++++++++++++++++++++++++++++
+              echo                 -- dis 08.02.2019 rdb$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null ^);
+              echo                 v_stt='select count(*^) from ' ^|^| rdb$get_context('USER_SESSION','SELECTED_UNIT'^);
+              echo                 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
+              echo                 -- +++  l a u n c h     b u s i n e s s    u n i t  +++
+              echo                 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
               echo                 execute statement (v_stt^) into result;
               echo.             
               echo                 rdb$set_context('USER_SESSION', 'RUN_RESULT',
               echo                                'OK, '^|^| result ^|^|' rows'^);
               echo.
-              echo                 -- Get count of 'atomic' business operations that occured 'under-cover' of SELECTED_UNIT:
-              echo                 v_success_ops_increment = cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT'^) as int^);
-              echo.
-              echo                 ---------------------------------------------------------------
-              echo                 -- Increment counter of SUCCESSFULLY finished business asctions
-              echo                 -- for using later in ESTIMATED performance value:
-              echo                 ---------------------------------------------------------------
-              echo                 result = gen_id( g_success_counter, v_success_ops_increment ^);
               echo             end
               echo         else
               echo             begin
@@ -1914,11 +1951,10 @@ goto :end_of_test
               echo                               ^);
               echo             end
               echo.
-              echo         -- add timestamp for FINISH app unit:
               echo         rdb$set_context( 'USER_SESSION','BAT_PHOTO_UNIT_DTS',
               echo                          rdb$get_context('USER_SESSION','BAT_PHOTO_UNIT_DTS'^)
               echo                          ^|^| ' '
-              echo                          ^|^| cast('now' as timestamp^)
+              echo                          ^|^| cast('now' as timestamp^) -- concatenate start timestamp with timestamp of FINISH
               echo                       ^);
               echo     when any do
               echo         begin
@@ -1947,7 +1983,6 @@ goto :end_of_test
               echo.
           )>>%generated_sql%
 
-
           if /i .%mode%.==.run_test. (
               if .%mon_unit_perf%.==.1. (
                   (
@@ -1962,7 +1997,7 @@ goto :end_of_test
                       echo execute block as
                       echo   declare v_dummy bigint;
                       echo begin
-                      echo   rdb$set_context('USER_SESSION','MON_GATHER_1_BEG', datediff(millisecond from timestamp '01.01.2015' to current_timestamp ^) ^);
+                      echo   rdb$set_context('USER_SESSION','MON_GATHER_1_BEG', datediff( millisecond from timestamp '01.01.2015' to cast('now' as timestamp ^) ^) ^);
                       echo   -- Gather mon$ tables BEFORE run app unit.
                       echo   -- Add second row to GTT tmp$mon_log - statistics on 'per unit' basis.
                       echo   -- Note: for FB 3.0 - also add first rowset into table tmp$mon_log_table_stats.
@@ -1978,7 +2013,7 @@ goto :end_of_test
                       echo          ,rdb$get_context('USER_SESSION', 'GDS_RESULT'^)   -- :a_gdscode
                       echo   ^)
                       echo   into v_dummy;
-                      echo   rdb$set_context('USER_SESSION','MON_GATHER_1_END', datediff(millisecond from timestamp '01.01.2015' to current_timestamp ^) ^);
+                      echo   rdb$set_context('USER_SESSION','MON_GATHER_1_END', datediff( millisecond from timestamp '01.01.2015' to cast('now' as timestamp ^) ^) ^);
                       echo.
                       echo   -- add pair of rows with aggregated differences of mon$
                       echo   -- counters from GTT to fixed tables
@@ -2007,87 +2042,35 @@ goto :end_of_test
 
               @rem %mon_unit_perf%==1 or 2
 
-          @rem )
-          @rem mode == run_test
-          @rem if /i .!mode!.==.run_test. (
-
               (
-                    echo -- +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                    echo -- +++   s h o w     g d s _ r e s u l t     a n d     a d d i t i o n a l     i n f o   +++
-                    echo -- +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                    echo.
-                    echo set list on;
-                    echo select
-                    echo     -- 12.08.2018 Variable 'WORKER_SEQUENTIAL_NUMBER' is defined in 'oltp_isql_run_worker' scenario.
-                    echo     -- Its value is used in procedures for storing in doc_list.worker_id field.
-                    echo     -- This is done for separation of scope that is avaliable for each ISQL session. 
-                    echo     -- Purpose - reduce frequency of lock conflicts.
-                    echo     rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER'^) as worker_sequential_number,
-                    echo     -- Variable 'PERF_WATCH_END' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
-                    echo     -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'
-                    echo     left( cast( rdb$get_context('USER_SESSION','PERF_WATCH_END'^) 
-                    echo                 as varchar(24^)
-                    echo             ^),
-                    echo           19
-                    echo        ^)
-                    echo     as test_ends_at
-                    echo     ,rdb$get_context('USER_SESSION','GDS_RESULT'^) as last_operation_gds_code
-                    echo     ,lpad( iif( minutes_since_start ^>0, 1.00 * success_ops_count / minutes_since_start, 0 ^), 12, ' ' ^)
-                    echo      ^|^|
-                    echo      lpad( minutes_since_start, 7, ' ' ^)
-                    echo      as estimated_perf_since_test_beg
-                    if .%mon_unit_perf%.==.1. (
-                        echo      -- this variable will be defined in SP srv_fill_mon:
-                        echo     ,rdb$get_context('USER_SESSION','MON_INFO'^) as mon_logging_info
-                        echo     ,cast( rdb$get_context('USER_SESSION','MON_GATHER_0_END'^) as bigint^) - cast( rdb$get_context('USER_SESSION','MON_GATHER_0_BEG'^) as bigint^) 
-                        echo    + cast( rdb$get_context('USER_SESSION','MON_GATHER_1_END'^) as bigint^) - cast( rdb$get_context('USER_SESSION','MON_GATHER_1_BEG'^) as bigint^) 
-                        echo     as mon_gathering_time_ms
-                        echo     ,rdb$get_context('USER_SESSION','TRACED_UNITS'^) as traced_units
-                    ) else if .%mon_unit_perf%.==.2. (
-                        echo    ,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
-                    ) else (
-                        echo    ,'MON$ statistics is NOT gathered, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
-                    )
-                    echo    ,rdb$get_context('USER_SESSION','WORKING_MODE'^) as workload_type
-                    echo    ,rdb$get_context('USER_SESSION','HALT_TEST_ON_ERRORS'^) as halt_test_on_errors
-                    echo    ,rdb$get_context('USER_SESSION','QMISM_VERIFY_BITSET'^) as qmism_verify_bitset
-              )>>%generated_sql%
-
-              (
-                  echo from
-                  echo (
-                  echo     select 
-                  echo         gen_id( g_success_counter, 0 ^) as success_ops_count
-                  echo        ,datediff( minute
-                  echo                   -- Variable 'PERF_WATCH_BEG' is assigned with value from table PERF_LOG, see SP sp_check_to_stop_work:
-                  echo                   -- ... from perf_log where p.unit = 'perf_watch_interval' and p.info containing 'active'.
-                  echo                   -- We need to substract %warm_time% from the moment PERF_WATCH_BEG because sequence
-                  echo                   -- of successfully finished business ops is increased from ACTUAL start rather than 
-                  echo                   -- timestamp PERF_WATCH_BEG which is used for reports:
-                  echo                   from dateadd( -%warm_time% minute to cast( rdb$get_context('USER_SESSION','PERF_WATCH_BEG'^) as timestamp^) ^) 
-                  echo                     to current_timestamp
-                  echo                ^)   -- datediff minus config "warm_time" value
-                  echo         as minutes_since_start
-                  if %%i equ 1 (
-                      echo        ,p.dts_end
-                      echo     from %log_tab% p
-                      echo     where p.unit = 'perf_watch_interval'
-                      echo     order by dts_beg desc
-                      echo     rows 1
+                  echo -- ##############################################################
+                  echo -- ###   S H O W    R E S U L T S    O F   E X E C U T I O N  ###
+                  echo -- ##############################################################
+                  echo.
+                  echo set list on;
+                  echo select
+                  echo     v.worker_sequential_number
+                  echo     ,v.test_ends_at
+                  echo     ,v.last_operation_gds_code
+                  echo     ,v.estimated_perf_since_test_beg
+                  if .%mon_unit_perf%.==.1. (
+                      echo      -- this variable will be defined in SP srv_fill_mon:
+                      echo     ,v.mon_logging_info
+                      echo     ,v.mon_gathering_time_ms
+                      echo     ,v.traced_units
+                  ) else if .%mon_unit_perf%.==.2. (
+                      echo    ,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
                   ) else (
-                      echo     from rdb$database
+                      echo    ,'MON$ statistics is NOT gathered, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
                   )
-                  echo ^) p
-                  echo where -- 27.08.2016, otherwise output can contain "null" for 'est_overall_at_minute_since_beg' field
-                  echo     rdb$get_context('USER_SESSION','SELECTED_UNIT'^) is distinct from 'TEST_WAS_CANCELLED'
-                  echo ;
+                  echo    ,v.workload_type
+                  echo    ,v.halt_test_on_errors
+                  echo from v_est_perf_for_last_minute v;
                   echo set list off;
               ) >> %generated_sql%
           )
           @rem mode == run_test
 
-
-          
           (
             echo -- ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
             echo -- +++   s h o w     b u s i n e s s  _ u n i t,   e l a p s e d _ m s,     r e s u l t   m e s s a g e,   etc  +++
@@ -2107,7 +2090,7 @@ goto :end_of_test
             echo set term ^^;
             echo execute block returns ( dts varchar(24^), unit varchar(50^), elapsed_ms int, msg varchar(80^), add_info varchar(80^) ^) as
             echo begin
-            echo     dts = cast(current_timestamp as varchar(24^)^);
+            echo     dts = left(cast(current_timestamp as varchar(255^)^), 24^); -- 14.04.2019: FB adds time_zone info to current_timestamp
             echo     -- trn = 'tra_' ^|^| rdb$get_context('USER_SESSION','APP_TRANSACTION'^);
             echo     unit = rdb$get_context('USER_SESSION','SELECTED_UNIT'^); ------------ BUSINESS OP THAT JUST HAS COMPLETED
             echo     elapsed_ms = datediff( millisecond 
@@ -2165,6 +2148,7 @@ goto :end_of_test
               echo     rdb$set_context('USER_SESSION','GDS_RESULT',       null^);
               echo     rdb$set_context('USER_SESSION','ADD_INFO',         null^);
               echo     rdb$set_context('USER_SESSION','APP_TRANSACTION',  null^);
+              echo     rdb$set_context('USER_SESSION','TOTAL_OPS_SUCCESS_INFO', null^);
               if /i .%mode%.==.run_test. (
                   echo     rdb$set_context('USER_SESSION','MON_GATHER_0_BEG', null^);
                   echo     rdb$set_context('USER_SESSION','MON_GATHER_0_END', null^);
@@ -2245,17 +2229,37 @@ goto :end_of_test
       )
       @rem end of: for /l %%i in (1, 1, %lim%)
 
+      echo -- SQL script generation finished at !date! !time! >> %generated_sql%
+
       for /f "usebackq tokens=*" %%a in ('%generated_sql%') do (
           call :sho "Generating finished. Size of script '%generated_sql%', bytes: %%~za" %log4tmp%
       )
 
     call :sho "Leaving routine: gen_working_sql" %log4tmp%
+
     endlocal
     @rem end of `gen_working_sql`
 
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+
+:display_win_defender_notes
+    setlocal
+    set mode=%1
+    set prefix=
+    if .%mode%.==.sql. (
+        set prefix= --
+    )
+    echo!prefix! ----------------------------------------------------------------------------------------------------
+    echo!prefix! NOTE: in case when this script is generated too slow consider adding folder '%tmpdir%'
+    echo!prefix! to the list of items that must be excluded from Windows Defender Antivirus scan.
+    echo!prefix! See instructions here:
+    echo!prefix!     https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
+    echo!prefix! Registry key for folders that must be excluded:
+    echo!prefix!     HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths
+    echo!prefix! ----------------------------------------------------------------------------------------------------
+goto:eof
 
 :getFileDTS
     @rem http://www.dostips.com/DtTutoFunctions.php
@@ -3180,16 +3184,26 @@ goto:eof
           echo set width working_mode 12;
           echo set width setting_name 40;
           echo set width setting_value 20;
+
+          
+          echo set heading off;
+          echo select 'Workload level settings (see definitions in oltp_main_filling.sql^):' as " " from rdb$database;
+          echo set heading on;
           echo select * from z_settings_pivot;
+
+          echo set heading off;
+          echo select 'Current launch settings:' as " " from rdb$database;
+          echo set heading on;
           echo select z.setting_name, z.setting_value from z_current_test_settings z;
 
           echo set width tab_name 13;
           echo set width idx_name 31;
           echo set width idx_key 65;
-          echo set heading off;
-          echo select 'Index(es^) for heavy-loaded table(s^):' as " " from rdb$database;
-          echo set heading on;
-          echo select * from z_qd_indices_ddl;
+          echo -- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES.
+          echo -- set heading off;
+          echo -- select 'Index(es^) for heavy-loaded table(s^):' as " " from rdb$database;
+          echo -- set heading on;
+          echo -- select * from z_qd_indices_ddl;
     ) > !tmpsql!
 
     (
@@ -3273,7 +3287,7 @@ goto:eof
          echo !date! !time!. Test uses config file '%cfg%' with following parameters:
          echo.
          @rem for /f "tokens=*" %%a in ('findstr /r /c:"^[^#;]" %cfg% ^| findstr /i /c:"=" ^| sort') do (
-         for /f "tokens=*" %%a in ('findstr /r /v /c:"#" C:\-\--\20181011\oltp30_config.win ^| findstr /i /c:"=" ^| sort') do (
+         for /f "tokens=*" %%a in ('findstr /r /v /c:"#" %~dp0oltp30_config.win ^| findstr /i /c:"=" ^| sort') do (
 
              echo.     %%a
          )
@@ -4159,7 +4173,8 @@ goto:eof
         echo execute block as
         echo begin
         echo     begin
-        echo         delete from perf_estimated; -- this table will be used in report "Performance for every MINUTE", see query to z_estimated_perf_per_minute
+  		echo         -- this view is one-to-one projection to the table perf_agg which is used in report "Performance for every MINUTE":
+		echo         delete from v_perf_agg;
         echo     when any do 
         echo         begin 
         echo           -- nop ---
@@ -4191,34 +4206,30 @@ goto:eof
         echo set term ;^^
         echo commit;
         echo.
-        echo insert into %log_tab%( unit,                  info,     exc_info,
+        echo insert into perf_log( unit,                  info,     exc_info,
         echo                       dts_beg, dts_end, elapsed_ms^)
         echo               values( 'perf_watch_interval', 'active', 'by %~f0',
-        echo         dateadd( %warm_time% minute to current_timestamp^),
-        echo         dateadd( %warm_time% + %test_time% minute to current_timestamp^),
-        echo         -1 -- skip this record from being displayed in srv_mon_perf_detailed
-        echo         ^);
-        echo insert into %log_tab%( unit,                        info,  stack,
+        echo                       dateadd( %warm_time% minute to current_timestamp^),
+        echo                       dateadd( %warm_time% + %test_time% minute to current_timestamp^),
+        echo                       -1 -- skip this record from being displayed in srv_mon_perf_detailed
+        echo                    ^);
+        echo insert into perf_log( unit,                        info,  stack,
         echo                       dts_beg, dts_end, elapsed_ms^)
         echo               values( 'dump_dirty_data_semaphore', '',    'by %~f0',
         echo                       null, null, -1^);
         echo alter sequence g_success_counter restart with 0;
         echo commit;
     
-        echo set width unit 20;
-        echo set width add_info 30;
-        echo set width dts_measure_beg 19;
-        echo set width dts_measure_end 19;
         echo set list on;
-    
         echo select
-        echo        '%log_tab%' as log_table
-        echo       ,g.dts_measure_beg
+        echo        g.dts_measure_beg
         echo       ,g.dts_measure_end
         echo       ,g.add_info
         echo from
         echo (
-        echo   select p.unit, p.exc_info as add_info,
+        echo   select 
+        echo      p.unit,
+        echo      p.exc_info as add_info, -- name of this .bat that did insert this record
         echo      left(replace(cast(p.dts_beg as varchar(24^)^),' ','_'^),19^) as dts_measure_beg,
         echo      left(replace(cast(p.dts_end as varchar(24^)^),' ','_'^),19^) as dts_measure_end
         echo   from %log_tab% p
@@ -4264,6 +4275,7 @@ goto:eof
     endlocal
 
 goto:eof
+@rem end of :show_time_limits
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
 
@@ -4299,6 +4311,9 @@ goto:eof
     cmd /c !run_isql! 1>!tmpsql! 2>!tmperr!
     call :catch_err run_isql !tmperr! n/a
 
+    for /f "usebackq tokens=*" %%a in ('!tmpsql!') do set size=%%~za
+    call :sho "Size of generated file !tmpsql!: !size!" !log4tmp!
+
     call :sho "    Step-2: apply temporary SQL." !log4tmp!
 
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i !tmpsql!
@@ -4306,10 +4321,14 @@ goto:eof
 
     call :catch_err run_isql !tmperr! n/a
 
+    type !tmpclg! >> !log4tmp!
+
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
         del %%f
     )
     call :sho "Leaving routine: adjust_sep_wrk_count." %log4tmp%
+
+   
     endlocal
 
 goto:eof
@@ -4523,6 +4542,7 @@ goto:eof
 
             echo %working_mode% | findstr /i /c:"debug_01" /c:"debug_02" >nul
             if NOT errorlevel 1 (
+                @rem For DEBUG modes we turn off complex logic related to adding invoices:
                 call :inject_actual_setting %fb% common ENABLE_RESERVES_WHEN_ADD_INVOICE '0'
                 call :inject_actual_setting %fb% common ORDER_FOR_OUR_FIRM_PERCENT '0'
             ) else (
@@ -4546,7 +4566,10 @@ goto:eof
 
             call :inject_actual_setting %fb% common update_conflict_percent '%update_conflict_percent%'
 
-            call :inject_actual_setting %fb% common connect_str "'connect ''%host%/%port%:%dbnm%'' user ''%usr%'' password ''%pwd%'';'"  1
+            @rem  Script oltp_replication_DDL.sql has query to table SETTINGS with WHERE-expr: mcode='CONNECT_STR' for obtaining
+            @rem  proper connection string to currently used database (see letters to dimitr et al, 01.11.2018, box pz@ibase.ru).
+            @rem :inject_actual_setting %fb% common connect_str "'connect ''%host%/%port%:%dbnm%'' user ''%usr%'' password ''%pwd%'';'"  1
+            call :inject_actual_setting %fb%  init  connect_str "'connect ''%host%/%port%:%dbnm%'' user ''%usr%'' password ''%pwd%'';'"  1
             @rem                        ---- ------ ----------  ----------------------------------------------------------------------- ---
             @rem                         ^      ^       ^                                           ^                                    ^
             @rem                         1      2       3                                           4                                    5 
@@ -4559,8 +4582,17 @@ goto:eof
             call :inject_actual_setting %fb% common mon_unit_list '%mon_unit_list%'
             call :inject_actual_setting %fb% common halt_test_on_errors '%halt_test_on_errors%'
             call :inject_actual_setting %fb% common qmism_verify_bitset '%qmism_verify_bitset%'
-            call :inject_actual_setting %fb% common recalc_idx_min_interval '%recalc_idx_min_interval%'
-            @rem ################
+            if .!recalc_idx_min_interval!.==.0. (
+                @rem 14.04.2019
+                set recalc_idx_min_interval=99999999
+            )
+            call :inject_actual_setting %fb% common recalc_idx_min_interval '!recalc_idx_min_interval!'
+
+            @rem Added 21.02.2019:
+            call :inject_actual_setting %fb% common warm_time '%warm_time%' 1
+
+            @rem Added 21.03.2019
+            call :inject_actual_setting %fb% common test_intervals '%test_intervals%' 1
 
         echo end
         echo ^^

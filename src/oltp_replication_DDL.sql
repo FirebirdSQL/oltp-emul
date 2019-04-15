@@ -44,7 +44,7 @@ select
 recreate view tmp_v_tabs_wo_pkid_and_constr as
 select 
     'trace_stat' as s from rdb$database union all select
-    'perf_estimated' as s from rdb$database union all select
+    -- 09.02.2019, dis: 'perf_estimated' as s from rdb$database union all select
     'perf_isql_stat' as s from rdb$database union all select
     'zdoc_data' from rdb$database union all select
     'zdoc_list' from rdb$database union all select
@@ -114,12 +114,12 @@ begin
     -- as result of concatenations config parameters: host, port, usr and pwd.
     -- This record is added/chganged in SETTINGS table by statement:
     -- update or insert into settings(working_mode, mcode, svalue)
-    -- values( upper( 'common' ), upper( 'connect_str' ),  'connect ''localhost/3050:/Data/oltp-emul/oltp30_test.fdb'' user ''SYSDBA'' password ''masterkey'';')
+    -- values( upper( 'common/init' ), upper( 'connect_str' ),  'connect ''localhost/3050:/Data/oltp-emul/oltp30_test.fdb'' user ''SYSDBA'' password ''masterkey'';')
     -- matching (working_mode, mcode);
 
     select t.svalue
     from settings t
-    where t.mcode='CONNECT_STR'
+    where t.mcode = upper('CONNECT_STR')
     into v_connect_str;
     if ( v_connect_str is null ) then
         exception ex_record_not_found;
