@@ -890,9 +890,8 @@ if .1.==.0. (
         echo !msg! >>%sts%
         goto end
     ) else (
-        set msg=SID=1. Return to %~f0. Now we can forcedly detach all remaining sessions and make final reports.
-        echo !msg! >> %sts%
-        call :sho "!msg!" %log4all%
+        call :sho "SID=1. Return to %~f0. Now we can forcedly detach all remaining sessions and make final reports." %sts%
+        @rem -- do NOT! will be shown in html -- call :sho "!msg!" %log4all%
     )
     
     @rem All other attachment have to be FINISH before we start to creaing report.
@@ -1201,9 +1200,9 @@ if .1.==.0. (
     del %rpt% 2>nul
 
 
-    @rem ###########################
-    @rem beg of block for debug only
-    if .1.==.0. (
+    @rem ###################################
+    @rem do NOT disable when debug finished:
+    if .1.==.1. (
         (
           echo.
           echo #####################################################
@@ -1211,23 +1210,21 @@ if .1.==.0. (
           echo #####################################################
         ) >> %log4all%
 
-        if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> Current test settings ^</a^> !htm_secc! >> %htm_file%
+        if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> Workload settings ^</a^> !htm_secc! >> %htm_file%
 
         (
 
-          echo set width category 12;
-          echo set width setting 32;
-          echo set width val 80; --- connection string can be too long
-
-          echo select 
-          echo    s.working_mode as category, 
-          echo    s.mcode as setting, 
-          echo    s.svalue as val
-          echo from settings s
-          echo where s.working_mode='COMMON'
-
-          echo union all
-
+          @rem echo set width category 12;
+          @rem echo set width setting 32;
+          @rem echo set width val 80; --- connection string can be too long
+          @rem           echo select 
+          @rem echo    s.working_mode as category, 
+          @rem echo    s.mcode as setting, 
+          @rem echo    s.svalue as val
+          @rem echo from settings s
+          @rem echo where s.working_mode='COMMON'
+          @rem echo union all
+          
           echo select s.working_mode, s.mcode as setting, s.svalue
           echo from settings s
           echo join (
@@ -1261,8 +1258,8 @@ if .1.==.0. (
 
         set msg=Indexes for heavy-loaded tables
 
-        echo %msg%: >>%log4all%
-        if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> %msg% ^</a^> !htm_secc! >> %htm_file%
+        echo !msg!: >>%log4all%
+        if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> !msg! ^</a^> !htm_secc! >> %htm_file%
 
         %run_repo% 1>>%log4all% 2>&1
         if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
@@ -1497,43 +1494,32 @@ if .1.==.0. (
           echo set width itrv_end 8;         
           echo select
           echo      traced_data
-          echo      ,cast(interval_no as smallint^) as itrv_no
-          echo      ,sp_client_order
-          echo      ,sp_cancel_client_order
-          echo      ,sp_supplier_order
-          echo      ,sp_cancel_supplier_order
-          echo      ,sp_supplier_invoice
-          echo      ,sp_cancel_supplier_invoice
-          echo      ,sp_add_invoice_to_stock
-          echo      ,sp_cancel_adding_invoice
-          echo      ,sp_customer_reserve
-          echo      ,sp_cancel_customer_reserve
-          echo      ,sp_reserve_write_off
-          echo      ,sp_cancel_write_off
-          echo      ,sp_pay_from_customer
-          echo      ,sp_cancel_pay_from_customer
-          echo      ,sp_pay_to_supplier
-          echo      ,sp_cancel_pay_to_supplier
-          echo      ,srv_make_invnt_saldo
-          echo      ,srv_make_money_saldo
-          echo      ,srv_recalc_idx_stat
-          echo      ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
-          echo      ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
+          echo      ,cast(interval_no as smallint^) as "interval no"
+          echo      ,sp_client_order                as "create client order"
+          echo      ,sp_cancel_client_order         as "cancel client order"
+          echo      ,sp_supplier_order              as "create supplier order"
+          echo      ,sp_cancel_supplier_order       as "cancel supplier order"
+          echo      ,sp_supplier_invoice            as "create supplier invoice"
+          echo      ,sp_cancel_supplier_invoice     as "cancel supplier invoice"
+          echo      ,sp_add_invoice_to_stock        as "add invoice to stock"
+          echo      ,sp_cancel_adding_invoice       as "cancel added invoice"
+          echo      ,sp_customer_reserve            as "create customer reserve"
+          echo      ,sp_cancel_customer_reserve     as "cancel customer reserve"
+          echo      ,sp_reserve_write_off           as "shipment to customer"
+          echo      ,sp_cancel_write_off            as "cancel shipment"
+          echo      ,sp_pay_from_customer           as "create payment from customer"
+          echo      ,sp_cancel_pay_from_customer    as "cancel customer payment"
+          echo      ,sp_pay_to_supplier             as "create payment to supplier"
+          echo      ,sp_cancel_pay_to_supplier      as "cancel payment to supplier"
+          echo      ,srv_make_invnt_saldo           as "srv total invnt turnovers"
+          echo      ,srv_make_money_saldo           as "srv total money turnovers"
+          echo      ,srv_recalc_idx_stat            as "srv recalc idx statistics"
+          @rem                                          12345678901234567890123456789012
+          echo      ,substring(cast(interval_beg    as varchar(24^)^) from 12 for 8^) as "interval start"
+          echo      ,substring(cast(interval_end    as varchar(24^)^) from 12 for 8^) as "interval finish"
           echo from rdb$database left join report_perf_trace_pivot on 1=1;
           echo commit;
 
-          @rem echo select info as action
-          @rem echo       ,cast(interval_no as smallint^) as itrv_no
-          @rem echo       ,cnt_success
-          @rem echo       ,fetches_per_second
-          @rem echo       ,marks_per_second
-          @rem echo       ,reads_to_fetches_prc
-          @rem echo       ,writes_to_marks_prc
-          @rem echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
-          @rem echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
-          @rem echo from rdb$database 
-          @rem echo left join report_perf_trace p on 1=1;
-          @rem echo commit;
         ) > %rpt%
         
         type %rpt% >>%log4all%

@@ -7,9 +7,13 @@
 # # #                                                                   # # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-Last version can be found here:
+Get actual version from here:
 
-git clone https://github.com/FirebirdSQL/oltp-emul .
+* if you are on WINDOWS:
+    git clone --config core.autocrlf=true https://github.com/FirebirdSQL/oltp-emul .
+
+* if you are on POSIX:
+    git clone --config core.autocrlf=false https://github.com/FirebirdSQL/oltp-emul .
 
 ===============================================================================
 
