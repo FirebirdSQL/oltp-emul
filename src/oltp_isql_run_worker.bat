@@ -699,25 +699,26 @@ if .1.==.0. (
     @rem c h e c k    t h a t   n o    s y n t a x    e r r o r s    o c c u r e d
     @rem -------------------------------------------------------------------------
 
-    @rem 18.12.2018
-    @rem 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
-    @rem 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
-    @rem 42S02 ==> -204     335544580   Table unknown
-    @rem 22001 ==> arith overflow / string truncation
+    @rem 1. 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
+    @rem 2. 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+    @rem 3. 42S02 ==> -204  335544580   Table unknown
+    @rem 4. 22001 ==> arith overflow / string truncation
+    @rem 5. 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
     set syntax_msg1="SQLSTATE = 42000"
     set syntax_msg2="SQLSTATE = 42S22"
     set syntax_msg3="SQLSTATE = 42S02"
     set syntax_msg4="SQLSTATE = 22001"
-    
-    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3!  /c:!syntax_msg4!   %err% >%tmp%
+    set syntax_msg5="SQLSTATE = 39000"
+
+    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! %err% >%tmp%
     if NOT errorlevel 1 (
         (
             echo At least one syntax-compile / string-arith error found during SQL script execution.
-            for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! %err% ^| find /i /c "SQLSTATE"') do (
+            for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! %err% ^| find /i /c "SQLSTATE"') do (
                 echo Total number of errors: %%x
             )
             echo.
-            echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!, !syntax_msg4!
+            echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!, !syntax_msg4!, !syntax_msg5!
             echo Details see in file: %err%. Job terminated.
             echo.
         ) >%tmp%
@@ -3421,6 +3422,8 @@ endlocal & goto:eof
     endlocal
 
 goto:eof
+
+
 
 :err_setenv
   @echo off

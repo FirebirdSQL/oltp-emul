@@ -236,10 +236,10 @@
 #::::::::::::::::::::::::::::::::::::
 
 
-    # Add in ISQL logs detailed info for each iteration (select from perf_log...) ?
-    # Recommended value: 0
+    # Do we add in ISQL logs detailed info for each actions that was registered while current transaction was performed ?
     # Note: value = 1 significantly increases disk I/O on client machine.
-    # Do not use it if you are not interested on data of table 'perf_log'.
+    # Do not use it if you are not interested on these data.
+    # Recommended value: 0
     #
     detailed_info = 0
 

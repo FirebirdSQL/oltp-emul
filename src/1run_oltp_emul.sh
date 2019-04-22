@@ -1188,7 +1188,9 @@ EOF
 			-- Delay must be done here if current session has number = 1.
 
 		EOF
-                if [ $test_time -ge 10 ]; then
+                # if [ $test_time -ge 10 ]; then
+		# 22.04.2019:
+                if [ $test_time -ge 0 ]; then
 			cat <<-EOF >>$sql
 			-- Because of depening on session number, it can be implemented only using UDF call:
 			-- we can not make SHELL call from PSQL "if/else" code branches.
@@ -1549,12 +1551,10 @@ EOF
 		set term ^;
 
 		-- *** RESULT: ***
-		-- ++++++++++++++++++++++++++++++++++++++++ Action # 4 of NNN ++++++++++++++++++++++++++++++++++++++++ 
-		
-		-- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
-		-- ======================= ============== ============== =============================== ============ ================ =========================
-		-- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            TEST_TIME, minute N 12345
-
+		--     +++++++++++++++++++++++++++++++++++++++++++++++++++++++ Action # mmm of NNN +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+		--     DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO
+		--     ======================= ============== ============== =============================== ============ ================ =========================
+		--     2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            TEST_TIME, minute N 12345
 
 		SET STAT ON;
 
@@ -1843,20 +1843,20 @@ EOF
 			-- Begin block to output DETAILED results of iteration.
 			-- To disable this output change "detailed_info" setting to 0
 			-- in test configuration file "$cfg"
+			set list off;
 			set heading off;
-			set list on;
-			select '+++++++++  perf_log data for this Tx: ++++++++' as msg
-			from rdb\$database;
+			select 'Current Tx actions:' as msg from rdb\$database;
 			set heading on;
 			set list on;
-			set width unit 35;
-			set width info 80;
-			select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
+			set count on;
+			select 
+				-- g.id, -- useless, always is NULL
+				g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
 			       g.elapsed_ms, g.dts_beg, g.dts_end
-            from tmp$perf_log g ------------------------ GTT on commit DELETE rows
-            order by id;
+			from tmp\$perf_log g ------------------------ GTT on commit DELETE rows
+			order by dts_beg;
+			set count off;
 			set list off;
-			-- Finish block to output DETAILED results of iteration.
 		EOF
       else
 		cat <<- EOF >>$sql
