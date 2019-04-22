@@ -3422,8 +3422,6 @@ endlocal & goto:eof
 
 goto:eof
 
-
-
 :err_setenv
   @echo off
   echo.
