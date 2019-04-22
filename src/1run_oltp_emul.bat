@@ -1974,9 +1974,9 @@ goto :end_of_test
               echo                          ^|^| ' '
               echo                          ^|^| cast('now' as timestamp^) -- concatenate start timestamp with timestamp of FINISH
               echo                       ^);
-              echo         -- ensure that AFTER call application unit table tmp$perf_log is really EMPTY // 21.04.2019
-              echo         delete from tmp$perf_log;
-              echo         rdb$set_context('USER_TRANSACTION','LOG_PERF_STARTED_BY', null ^); -- 21.04.2019
+              @rem echo         -- ensure that AFTER call application unit table tmp$perf_log is really EMPTY // 21.04.2019
+              @rem echo         delete from tmp$perf_log;
+              @rem echo         rdb$set_context('USER_TRANSACTION','LOG_PERF_STARTED_BY', null ^); -- 21.04.2019
               echo     when any do
               echo         begin
               echo            rdb$set_context('USER_SESSION', 'GDS_RESULT', gdscode^);
@@ -2048,8 +2048,9 @@ goto :end_of_test
                       echo end
                       echo ^^
                       echo set term ;^^
-                      echo commit; --  ##### C O M M I T  #####  after gathering mon$data
-                      echo set transaction no wait %nau%;
+                      @rem 22.04.2019:
+                      @rem -- do NOT otherwise tmp$perf_log become empty -- echo commit; --  ##### C O M M I T  #####  after gathering mon$data
+                      @rem -- echo set transaction no wait %nau%;
                   )>>%generated_sql%
               
               ) else if .%mon_unit_perf%.==.2. (
@@ -2191,18 +2192,19 @@ goto :end_of_test
                   echo -- Begin block to output DETAILED results of iteration.
                   echo -- To disable this output change "detailed_info" setting to 0
                   echo -- in test configuration file "%cfg%"
+                  echo set list off;
                   echo set heading off;
-                  echo set list on;
-                  echo select '+++++++++  perf_log data for this Tx: ++++++++' as msg
-                  echo from rdb$database;
+                  echo select 'Current Tx actions:' as msg from rdb$database;
                   echo set heading on;
                   echo set list on;
-                  echo set width unit 35;
-                  echo set width info 80;
-                  echo select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
-                  echo        g.elapsed_ms, g.dts_beg, g.dts_end
+                  echo set count on;
+                  echo select
+                  echo     -- g.id,  -- useless, always is NULL
+                  echo     g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
+                  echo     g.elapsed_ms, g.dts_beg, g.dts_end
                   echo from tmp$perf_log g ------------------------ GTT on commit DELETE rows
-                  echo order by id;
+                  echo order by dts_beg;
+                  echo set count off;
                   echo set list off;
                   echo -- Finish block to output DETAILED results of iteration.
               )>>%generated_sql%

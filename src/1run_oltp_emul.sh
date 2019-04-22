@@ -1696,8 +1696,9 @@ EOF
 			    ,rdb\$get_context('USER_SESSION','MON_GATHER_1_END') as mon_gather_1_end
 			from rdb\$database;
 			set list off;
-			commit; --  ##### C O M M I T  #####  after gathering mon$data
-			set transaction no wait $nau;
+			-- 22.04.2019:
+			-- do NOT otherwise tmp\$perf_log become empty -- commit; --  ##### C O M M I T  #####  after gathering mon$data
+			-- set transaction no wait $nau;
 		EOF
       fi # mon_unit_perf = 1
 
