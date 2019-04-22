@@ -798,11 +798,18 @@ if .%skipGenSQL%.==.0. (
         call :sho "Script will contain !jobs_count! calls." %log4tmp%
     )
 
+    @rem set /a jobs_count=3
 
     @rem ##########################################################################################################################################################
     call :gen_working_sql  run_test  %tmp_run_test_sql%  !jobs_count!   %no_auto_undo%  %detailed_info% %unit_selection_method% %sleep_min% %sleep_max% %sleep_udf% 
     @rem                      1               2              3                 4                 5           6                       7           8           9
     @rem ##########################################################################################################################################################
+
+    if !jobs_count! LEQ 3 (
+        echo DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG
+        echo restore normal value for jobs_count
+        exit
+    )
 
 )
 
@@ -904,6 +911,7 @@ if .1.==.0. (
     echo RUN: call oltp_isql_run_worker.bat !sid!  %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
     echo check result of select * from sp_get_test_time_dts
     pause
+    exit
 
     call oltp_isql_run_worker.bat !sid! %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
 
@@ -1529,56 +1537,67 @@ goto :end_of_test
                               echo -- 16.12.2018. Config parameter 'mon_unit_perf' = 2.
                               echo -- Statistics from mon$ tables is gathered in the session N1.
                               echo -- Delay must be done here if current session has number = 1.
-                              if %test_time% GEQ 10 (
+                              @rem if %test_time% GEQ 10 (
+                              @rem 22.04.2019:
+                              if %test_time% GEQ 0 (
                                   echo -- Because of depening on session number, it can be implemented only using UDF call:
                                   echo -- we can not make SHELL call from PSQL "if/else" code branches.
                                   if NOT .!sleep_udf!.==.. (
-                                      echo -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
-                                      echo -- oOo    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  oOo
-                                      echo -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoO
+                                      echo -- .:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:
+                                      echo -- :.:    d e l a y    b e t w n.     m o n $    q u e r i e s,   O N L Y   i n    s e s s i o n   N 1  .:.
+                                      echo -- .:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:.:
                                       echo set transaction read only read committed;
-                                      echo set list on;
+                                      echo set heading off;
                                       echo set term ^^;
-                                      echo execute block returns( ssn1_delay_between_mon_queries numeric(12,3^) ^) as
+                                      echo execute block returns( " " varchar(128^) ^) as
+                                      echo begin
+                                      echo     if ( rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER'^) = 1 and rdb$get_context('USER_SESSION','ENABLE_MON_QUERY'^) = 2 ^) then
+                                      echo     begin
+                                      echo         " " = cast('now' as timestamp^) ^|^| ' SID=1. This sesion is dedicated for gathering data from mon$ tables. Take pause: use UDF !sleep_udf!...';
+                                      echo         suspend;
+                                      echo     end
+                                      echo end
+                                      echo ^^
+                                      echo.
+                                      echo execute block returns( " " varchar( 128 ^) ^) as
                                       echo     declare c int;
                                       echo     declare d int;
                                       echo     declare t timestamp;
                                       echo     declare SECONDS_IN_MINUTE smallint = 60;
+                                      echo     declare session1_delay_before_mon_query numeric( 10, 3 ^);
                                       echo begin
                                       echo     if ( rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER'^) = 1 and rdb$get_context('USER_SESSION','ENABLE_MON_QUERY'^) = 2 ^) then
                                       echo     begin
                                       echo         -- CONSTANT DELAY:
                                       echo         -- %mon_query_interval%: see config parameter 'mon_query_interval'
-                                      echo         -- maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
-                                      echo         c = minvalue( %mon_query_interval%, maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
+                                      echo         -- maxvalue(1, %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
+                                      echo         c = minvalue( %mon_query_interval%, maxvalue(1, %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
                                       echo         t = 'now';
                                       echo         while (c ^> 0^) do
                                       echo         begin
-                                      echo             -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
-                                      echo             -- oOo C A L L     U D F   F O R    S L E E P  oOo
-                                      echo             -- oOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOoOo
+                                      echo             -- #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-
+                                      echo             -- #-#   C A L L     U D F   F O R    S L E E P   #-#
+                                      echo             -- #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-
                                       echo             d = !sleep_udf!( !sleep_mul! ^); -- here we wait only 1 second: we have to BREAK from this loop ASAP when test is prematurely cancelled.
                                       echo.        
                                       echo             execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
                                       echo.        
                                       echo             c = c - 1;
-                                      echo             when any do
+                                      echo         when any do
                                       echo             begin
                                       echo                 rdb$set_context('USER_SESSION','SELECTED_UNIT', 'TEST_WAS_CANCELLED'^);
                                       echo                 exception;
                                       echo             end
                                       echo         end
-                                      echo         ssn1_delay_between_mon_queries = datediff(millisecond from t to cast('now' as timestamp^)^) * 1.000 / 1000;
-                                      echo         -- c = c  * !sleep_mul!; -- 14.11.2018: UDF can accept arg as number of PART of seconds, e.g. MILLISECONDS.
-                                      echo         -- c = !sleep_udf!( c ^);
-                                      echo         -- ssn1_delay_between_mon_queries = c * 1.000 / !sleep_mul!;
+                                      echo         session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp^)^) * 1.000 / 1000;
+                                      echo         " " = cast('now' as timestamp^) ^|^| ' SID=1. Completed pause between gathering data from mon$ tables, s: ' ^|^| session1_delay_before_mon_query;
                                       echo         suspend;
                                       echo     end
                                       echo end
                                       echo ^^
                                       echo set term ;^^
                                       echo commit; ------------------------ [ 2b ]
-                                      echo set list off;
+                                      echo set heading on;
                                   ) else (
                                       echo -- * WARNING * mon_unit_perf = 2: config parameter 'sleep_ddl' must be UNCOMMENTED 
                                       echo -- and has to point on existing SQL script that defined UDF declaration for delays.
@@ -1881,11 +1900,11 @@ goto :end_of_test
               echo end^^
               echo set term ;^^
               echo -- *** RESULT: ***
-              echo -- ++++++++++++++++++++++++++++++++++++++++++++++++++ Action # 4 of 300 ++++++++++++++++++++++++++++++++++++++++++++++++++
+              echo --     +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ Action # M of NNN +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
               echo.	
-              echo -- DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
-              echo -- ======================= ============== ============== =============================== ============ ================ =========================
-              echo -- 2019-01-16 12:09:12.802 tra_663        att_61         sp_supplier_order                         30 start            TEST_TIME, minute N 12345
+              echo --     DTS                     TRN            ATT            UNIT                              WORKER_SEQ MSG              ADD_INFO          
+              echo --     ======================= ============== ============== =============================== ============ ================ =========================
+              echo --     2019-01-16 12:09:12.802 tra_663        att_61         name_of_selected_business_unit            30 start            TEST_TIME, minute N 12345
               echo.
               echo SET STAT ON;
               echo -- SET BAIL ON; -- 28.09.2018: we have to cancel script if any error occured during selection business unit to be run
@@ -1928,7 +1947,6 @@ goto :end_of_test
               echo              'TEST_WAS_CANCELLED'
               echo           ^) then
               echo             begin
-              echo                 -- dis 08.02.2019 rdb$set_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT', null ^);
               echo                 v_stt='select count(*^) from ' ^|^| rdb$get_context('USER_SESSION','SELECTED_UNIT'^);
               echo                 -- ++++++++++++++++++++++++++++++++++++++++++++++++++++
               echo                 -- +++  l a u n c h     b u s i n e s s    u n i t  +++
@@ -1956,6 +1974,9 @@ goto :end_of_test
               echo                          ^|^| ' '
               echo                          ^|^| cast('now' as timestamp^) -- concatenate start timestamp with timestamp of FINISH
               echo                       ^);
+              echo         -- ensure that AFTER call application unit table tmp$perf_log is really EMPTY // 21.04.2019
+              echo         delete from tmp$perf_log;
+              echo         rdb$set_context('USER_TRANSACTION','LOG_PERF_STARTED_BY', null ^); -- 21.04.2019
               echo     when any do
               echo         begin
               echo            rdb$set_context('USER_SESSION', 'GDS_RESULT', gdscode^);
@@ -2180,9 +2201,8 @@ goto :end_of_test
                   echo set width info 80;
                   echo select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
                   echo        g.elapsed_ms, g.dts_beg, g.dts_end
-                  echo from perf_log g
-                  echo where g.trn_id = current_transaction;
-                  @rem do NOT:   echo order by id;
+                  echo from tmp$perf_log g ------------------------ GTT on commit DELETE rows
+                  echo order by id;
                   echo set list off;
                   echo -- Finish block to output DETAILED results of iteration.
               )>>%generated_sql%

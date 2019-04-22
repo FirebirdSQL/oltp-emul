@@ -2162,7 +2162,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_flush_tmpperf_in_auton_tx(
-    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context(...,'LOG_PERF_STARTED_BY')
     a_context_rows_cnt int, -- how many 'records' with context vars need to be processed
     a_gdscode int default null
 )
@@ -2193,7 +2193,9 @@ begin
         while (i < a_context_rows_cnt) do
         begin
             v_exc_unit =  rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI');
-            if ( v_exc_unit = '#' ) then -- ==> call from unit <U> where exception occured (not from callers of <U>)
+            if ( v_exc_unit = '#'
+                 or a_starter is null -- 21.04.2019 not yet fixed ...
+               ) then -- ==> call from unit <U> where exception occured (not from callers of <U>)
                 select result from fn_get_stack( (select result from fn_halt_sign(:a_gdscode)) ) into v_stack;
             else
                 v_stack = null;
@@ -2257,14 +2259,16 @@ begin
             ,trn_id
             ,ip
             ,aux1
+            ,stack
         ) values(
-             't$perf-abend:' || :a_starter                         -- unit
+             't$perf-abend:' || coalesce(:a_starter, 'unknown')    -- unit -- ?? 21.04.2019, not yet fixed ...
             ,'gds='|| :a_gdscode||', saved ' ||:i||' rows in ATx'  -- info
             ,:v_dts_beg                                            -- dts_beg
             ,'now'                                                 -- dts_end
             ,:v_curr_tx                                            -- trn_id
             ,:v_remote_addr                                        -- IP
             ,:i                                                    -- aux1
+            ,iif( :a_starter is null, ( select result from fn_get_stack( 1 ) ), null) -- ?? 21.04.2019, not yet fixed ...
          );
 
     end -- in autonom. tx
@@ -2281,7 +2285,7 @@ commit;
 set term ^;
 
 create or alter procedure sp_flush_perf_log_on_abend(
-    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context(...,'LOG_PERF_STARTED_BY')
     a_unit dm_unit, -- name of module where trouble occured
     a_gdscode int default null,
     a_info dm_info default null, -- additional info for debug
@@ -2549,17 +2553,6 @@ end
 
 ^ -- sp_get_test_time_dts
 
-----------------
--- 08.02.2019:
--- moved here because now it will be called only from sp_add_perf_log
-create or alter procedure srv_increment_tx_bops_counter( a_unit dm_unit )
-as
-begin
-    -- STUB! Will be defined in oltp_common.sql
-end
-
-^ -- srv_increment_tx_bops_counter
-
 -------------------------------------------------------------------------------
 
 create or alter procedure sp_add_perf_log (
@@ -2570,227 +2563,11 @@ create or alter procedure sp_add_perf_log (
     a_aux1 dm_aux default null,
     a_aux2 dm_aux default null
 ) as
-    declare v_curr_tx bigint;
-    declare v_dts timestamp;
-    declare v_save_dts_beg timestamp;
-    declare v_save_dts_end timestamp;
-    declare v_save_gtt_cnt int;
-    declare v_id dm_idb;
-    declare v_unit dm_unit;
-    declare v_info dm_info;
-    declare c_gen_inc_step_pf int = 20; -- size of `batch` for get at once new IDs for perf_log (reduce lock-contention of gen page)
-    declare v_gen_inc_iter_pf int; -- increments from 1  up to c_gen_inc_step_pf and then restarts again from 1
-    declare v_gen_inc_last_pf dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_pf)
-    declare v_pf_new_id dm_idb;
-    declare v_exc_unit char(1);
-    declare c_tmp_perf_log cursor for (
-        select
-             unit, exc_unit
-            ,fb_gdscode, trn_id, att_id, elapsed_ms
-            ,info, exc_info, stack
-            ,ip, dts_beg, dts_end
-            ,aux1, aux2
-        from tmp$perf_log g
-    );
-    declare v_fb_gdscode int;
-    declare v_trn_id dm_idb;
-    declare v_att_id dm_idb;
-    declare v_elapsed_ms int;
-
-    declare v_exc_info dm_info;
-    declare v_stack dm_stack;
-    declare v_ip dm_ip;
-    declare v_dts_beg timestamp;
-    declare v_dts_end timestamp;
-    declare v_aux1 double precision;
-    declare v_aux2 double precision;
-    declare v_curr_success_bop_cnt bigint;
 begin
-    -- Registration of all STARTs and FINISHes (both normal and failed)
-    -- for all application SPs and some service units:
-    v_curr_tx = current_transaction;
-    v_dts = cast('now' as timestamp);
-
-    -- 08.10.2018: usage of updatable view v_perf_log instead of table perf_log.
-
-    -- Gather all avaliable mon info about caller module if its name belongs
-    -- to list specified in `MON_UNIT_LIST` context var: add pair of row sets
-    -- (for beg and end) and then calculate DIFFERENCES of mon. counters with
-    -- logging in tables `mon_log` and `mon_log_table_stats`.
-    execute procedure srv_log_mon_for_traced_units( a_unit, a_gdscode, a_info );
-
-    if ( not exists(select * from tmp$perf_log) ) then
-    begin
-       rdb$set_context('USER_SESSION','LOG_PERF_STARTED_BY', a_unit);
-       a_is_unit_beginning = 1;
-    end
-
-    if ( a_is_unit_beginning = 1 ) then -- this is call from ENTRY of :a_unit
-        begin
-            insert into tmp$perf_log(
-                 unit,
-                 info,
-                 ip,
-                 trn_id,
-                 dts_beg
-            )
-            values(
-                 :a_unit,
-                 :a_info,
-                 rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
-                 :v_curr_tx,
-                 :v_dts
-            );
-            -- save info about last started unit (which can raise exc):
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', a_unit);
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_BEG', v_dts);
-            rdb$set_context('USER_TRANSACTION','TPLOG_LAST_INFO', v_info);
-        end
-
-    else -- a_is_unit_beginning = 0 ==> this is _NORMAL_ finish of :a_unit (i.e. w/o exception)
-
-        -- ###############################################
-        -- ###   s u c c e s s f u l     f i n i s h   ###
-        -- ###############################################
-        begin
-            update tmp$perf_log t set
-                info = left(coalesce( info, '' ) || coalesce( trim(iif( info>'', '; ', '') || :a_info), ''), 255),
-                dts_end = :v_dts,
-                elapsed_ms = datediff(millisecond from dts_beg to :v_dts),
-                aux1 = :a_aux1,
-                aux2 = :a_aux2
-            where -- Bitmap Index "TMP$PERF_LOG_UNIT_TRN" Range Scan (full match)
-                t.unit = :a_unit
-                and t.trn_id = :v_curr_tx
-                and dts_end is NULL -- we are looking for record that was added at the BEG of this unit call
-            ;
-
-            -- 08.02.2019 Now we can INCREASE counter of business operations which finished OK.
-            -- Increment value of context  'BUSINESS_OPS_CNT' by 1:
-            execute procedure srv_increment_tx_bops_counter( a_unit );
-
-            if ( a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY') ) then
-            begin
-                -- We are at final point of top-level unit (which started business op.)
-                -- (e.g. s`p_add_invoice_to_stock -- main SP which could call many
-                -- times auxiliary s`p_customer_reserve for creating reserves)
-
-                -- Save *ALL* data that currently in GTT tmp$perf_log to permanent storage.
-                -- Since 08.10.2018 this is updatable view v_perf_log instead of table.
-
-                v_gen_inc_iter_pf = c_gen_inc_step_pf;
-
-                v_save_dts_beg = 'now'; -- for logging time and number of moved records
-                v_save_gtt_cnt = 0;
-
-                open c_tmp_perf_log;
-                while (1=1) do
-                begin
-                    fetch c_tmp_perf_log into
-                         v_unit
-                        ,v_exc_unit
-                        ,v_fb_gdscode
-                        ,v_trn_id
-                        ,v_att_id
-                        ,v_elapsed_ms
-                        ,v_info
-                        ,v_exc_info
-                        ,v_stack
-                        ,v_ip
-                        ,v_dts_beg
-                        ,v_dts_end
-                        ,v_aux1
-                        ,v_aux2;
-                    if (row_count = 0) then leave;
-
-                    if ( v_gen_inc_iter_pf = c_gen_inc_step_pf ) then -- its time to get another batch of IDs
-                    begin
-                        v_gen_inc_iter_pf = 1;
-                        -- take subsequent bulk IDs at once (reduce lock-contention for GEN page)
-                        v_gen_inc_last_pf = gen_id( g_perf_log, :c_gen_inc_step_pf );
-                    end
-                    v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
-                    v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
-
-                    insert into v_perf_log( -- current unit: sp_add_perf_log
-                        id
-                        ,unit, exc_unit
-                        ,fb_gdscode, trn_id, att_id, elapsed_ms
-                        ,info, exc_info, stack
-                        ,ip, dts_beg, dts_end
-                        ,aux1, aux2
-                    ) values (
-                        :v_pf_new_id
-                        ,:v_unit, :v_exc_unit
-                        ,:v_fb_gdscode, :v_trn_id, :v_att_id, :v_elapsed_ms
-                        ,:v_info, :v_exc_info, :v_stack
-                        ,:v_ip, :v_dts_beg, :v_dts_end
-                        ,:v_aux1, :v_aux2
-                    );
-                    v_save_gtt_cnt = v_save_gtt_cnt + 1;
-
-                    delete from tmp$perf_log where current of c_tmp_perf_log;
-                end -- end of loop moving rows from GTT tmp$perf_log to fixed perf_log
-                close c_tmp_perf_log;
-
-                v_save_dts_end = 'now';
-
-                -- 4debug only: how long data from GTT tmp$perf_log was saved:
-                insert into v_perf_log( -- current unit: sp_add_perf_log
-                        id,
-                        unit, info, dts_beg, dts_end, elapsed_ms, ip, aux1)
-                values( iif( :v_gen_inc_iter_pf < :c_gen_inc_step_pf, :v_pf_new_id+1, gen_id( g_perf_log, 1 )  ),
-                        't$perf-norm:'||:a_unit,
-                        'ok saved '||:v_save_gtt_cnt||' rows',
-                        :v_save_dts_beg,
-                        :v_save_dts_end,
-                        datediff( millisecond from :v_save_dts_beg to :v_save_dts_end ),
-                        rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
-                        :v_save_gtt_cnt
-                      );
-
-                -- #################### restored 25.03.2019 ##################################
-                -- 08.02.2019. Code control can pass here only when:
-                -- 1) :a_unit is 'top-level' business action (i.e. that was chosen in "Big SQL" execute block
-                --    by calling srv_random_unit_choice and is "STARTER" of business action),
-                -- and 
-                -- 2) this :a_unit is to be successfully finished now, i.e. no exceptions ware raise during its execution.
-                -- This means that we can here increase g_success_counter.
-
-                v_curr_success_bop_cnt = gen_id( g_success_counter, cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int) );
-
-                -- 21.02.2019: moved here from .bat/.sh. No sense to defer this up to test finish
-                -- because database state will be changed to full-shutdown and almost all of
-                -- attachments could not write all necessary info - they will be forcedly dropped
-                -- by ISQL session #1.
-                v_dts = cast('now' as timestamp);
-
-
-                -- 10.02.2019: this variable will be used in batch for show estimated perf score:
-                -- ESTIMATED_PERF_SINCE_TEST_BEG           1521    354 2019-02-21 07:50:34
-                rdb$set_context( 'USER_SESSION', 
-                                 'TOTAL_OPS_SUCCESS_INFO', 
-                                 cast(v_curr_success_bop_cnt as char(18)) || ' ' || cast( v_dts as varchar(24)) 
-                               );
-
-                -- Here we operate with VIEW rather than with table: we have to remove
-                -- any dependencies on table 'perf_estimated' from .sql because this
-                -- table will be dropped and recreated again before each test launch.
-                insert into v_perf_estimated( minute_since_test_start, success_count, worker_id, dts )
-                select
-                    datediff(minute from p.test_time_dts_beg to :v_dts ) as curr_phase_lasts_minutes -- DO NOT add "+1" here, 25.03.2019 1117
-                   ,:v_curr_success_bop_cnt
-                   ,(select result from fn_this_worker_seq_no)
-                   ,:v_dts
-                from sp_get_test_time_dts p -- 10.02.2019: will query 'perf_log' table only one time per session, then returns context variables
-                ;
-                --#############################################################################
-
-            end --  a_unit = rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY')
-        end -- a_is_unit_beginning = 0
+    -- STUB! Actual code see in oltp_common_sp.sql
 end
 
-^ -- sp_add_perf_log
+^ -- sp_add_perf_log  // STUB!
 
 create or alter procedure sp_upd_in_perf_log(
     a_unit dm_unit,
@@ -2798,19 +2575,10 @@ create or alter procedure sp_upd_in_perf_log(
     a_info dm_info default null
 ) as
 begin
-    -- need in case when we want to update info in just added row
-    -- (e.g. info about selected doc etc)
-    update tmp$perf_log t set
-        t.fb_gdscode = coalesce(t.fb_gdscode, :a_gdscode),
-        t.info = coalesce( t.info, '' ) || coalesce( trim(iif( t.info>'', '; ', '') || :a_info), '')
-    where
-        t.unit = :a_unit
-        and t.trn_id = current_transaction
-        and t.dts_end is NULL
-        and coalesce(t.info,'') NOT containing coalesce(trim(:a_info),'');
+    -- STUB! Actual code see in oltp_common_sp.sql
 end
 
-^  -- sp_upd_in_perf_log
+^  -- sp_upd_in_perf_log // STUB!
 
 -- stub, will be overwritten, see below:
 create or alter procedure zdump4dbg(
@@ -2824,7 +2592,7 @@ create or alter procedure zdump4dbg(
   -- proc and some other aux tables (named with "Z_" prefix) to be created.
 end
 
-^ -- zdump4dbg (STUB!)
+^ -- zdump4dbg // STUB!
 
 create or alter procedure sp_add_to_abend_log(
        a_exc_info dm_info,
@@ -2833,112 +2601,11 @@ create or alter procedure sp_add_to_abend_log(
        a_caller dm_unit default null,
        a_halt_due_to_error smallint default 0 --  1 ==> forcely extract FULL STACK ignoring settings, because of error + halt test
 ) as
-    declare v_last_unit dm_unit;
-    declare v_last_info dm_info;
-    declare v_last_beg timestamp;
-    declare v_last_end timestamp;
 begin
-    -- SP for register info about e`xception occured in application module.
-    -- When each module starts, it call sp_add_to_perf_log and creates record in
-    -- perf_log table for this event. If some e`xception occurs in that module
-    -- than code jumps into when_any section with call of this SP.
-    -- Now we have to call sp_add_to_perf_log with special argument ('!abend!')
-    -- signalling that all data from GTT tmp$perf_log should be saved now via ATx.
-    if ( a_gdscode is NOT null and nullif(a_exc_info, '') is null ) then -- this is standard error
-    begin
-        select f.fb_mnemona
-        from fb_errors f
-        where f.fb_gdscode = :a_gdscode
-        into a_exc_info;
-    end
-    -- For displaying in ISQL session logs:
-    rdb$set_context('USER_SESSION','ADD_INFO', left( coalesce(a_exc_info, 'no-mnemona'), 255));
-
-    v_last_unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT');
-
-    if ( a_caller = v_last_unit ) then
-    begin
-        -- CORE-4483. "Changed data not visible in WHEN-section if exception
-        -- occured inside SP that has been called from this code" ==> last record
-        -- in tmp$perf_log that has been added in SP_ADD_PERF_LOG which has been
-        -- called at the START point of this SP CALLER, will be backed out (REMOVED!)
-        -- when exception occurs later in the intermediate point of caller, so
-        -- HERE we get tmp$perf_log WITHOUT last record!
-        -- 10.01.2015: replaced 'update' with 'update or insert': record in
-        -- tmp$perf_log can be 'lost' in case of exc in caller before we come
-        -- in this SP (sp_cancel_client_order => sp_lock_selected_doc).
-        v_last_beg = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_BEG');
-        v_last_end = cast('now' as timestamp);
-        v_last_info = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_INFO');
-
-        update tmp$perf_log t
-        set
-            fb_gdscode = :a_gdscode,
-            info = :a_info, --  coalesce( :v_last_info, '<null-1>'),
-            exc_unit = '#', -- exc_unit: direct CALLER of this SP is the SOURCE of raised exception
-            dts_end = :v_last_end,
-            elapsed_ms = datediff(millisecond from :v_last_beg to :v_last_end)
-        where
-            t.unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT')
-            and t.trn_id = current_transaction
-            and dts_end is NULL; -- index key: UNIT,TRN_ID,DTS_END
-
-        if ( row_count = 0 ) then
-            insert into tmp$perf_log(
-                 unit
-                ,fb_gdscode
-                ,info
-                ,exc_unit
-                ,dts_beg
-                ,dts_end
-                ,elapsed_ms
-                ,trn_id
-            ) values (
-                 :a_caller
-                ,:a_gdscode
-                ,:a_info --- coalesce( :v_last_info, '<null-2>')
-                ,'#' -- ==> module :a_caller IS the source of raised exception
-                ,:v_last_beg
-                ,:v_last_end
-                ,datediff(millisecond from :v_last_beg to :v_last_end)
-                ,current_transaction
-            );
-
-        -- before 10.01.2015:
-        -- update tmp$perf_log set ... where t.unit = :a_caller and and t.trn_id = current_transaction and dts_end is NULL;
-        rdb$set_context('USER_TRANSACTION','TPLOG_LAST_UNIT', null);
-
-        -- Save uncommitted data from tmp$perf_log to perf_log (via autonom. tx):
-        -- NB: All records in GTT tmp$perf_log are visible ONLY at the "deepest" point
-        -- when exc` occured. If SP_03 add records to tmp$perf_log and then raises exc
-        -- then all its callers (SP_00==>SP_01==>SP_02) will NOT see these record because
-        -- these changes will be rolled back when exc. comes into these caller.
-        -- So, we must flush records from GTT to fixed table only in the "deepest" point,
-        -- i.e. just in that SP where exc raises.
-        execute procedure sp_flush_perf_log_on_abend(
-            rdb$get_context('USER_SESSION','LOG_PERF_STARTED_BY'), -- unit which start this job
-            a_caller,
-            a_gdscode,
-            a_info, -- info for analysis
-            a_exc_info -- info about user-defined or standard e`xception which occured now
-        );
-
-    end --  a_caller = v_last_unit 
-
-    -- ########################   H A L T   T E S T   ######################
-    if ( a_halt_due_to_error = 1 ) then
-    begin
-        execute procedure sp_halt_on_error('1', a_gdscode);
-        if ( ( select result from fn_halt_sign( :a_gdscode ) ) = 1 ) then -- 27.07.2014 1003
-        begin
-             execute procedure zdump4dbg;
-        end
-    end
-    -- #####################################################################
-
+    -- STUB! Actual code see in oltp_common_sp.sql
 end
 
-^ -- sp_add_to_abend_log
+^ -- sp_add_to_abend_log // STUB!
 
 -- NB: commit MUST be here for FB 2.5!
 -- All even runs (2,4,6,...) of script containing procedures which references

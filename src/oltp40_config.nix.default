@@ -256,7 +256,7 @@
     # It will call special SP 'srv_fill_mon_memo_consumption' every 'mon_query_interval'-th second.
     # NOTE: pauses for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined.
     #
-    mon_unit_perf = 1
+    mon_unit_perf = 0
 
 
     # This setting can be used only when config parameter 'enable_mon_query' is 1.

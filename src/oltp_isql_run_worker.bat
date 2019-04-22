@@ -1042,10 +1042,16 @@ if .1.==.0. (
         echo     ^<li^>^<a href="#perfminute"^>Performance, per MINUTE, since launch^</a^> ^</li^>
         echo     ^<li^>^<a href="#perftrace"^>Performance, TRACE data for ISQL #1^</a^> ^</li^>
         echo     ^<li^>^<a href="#perfdetail"^>Performance, DETAILS per units^</a^> ^</li^>
-        echo     ^<li^>^<a href="#perfmon4unit"^>MON$-analysis, per business units^</a^> ^</li^>
-        if .%mon_unit_perf%.==.1. if not .%fb%.==.25. (
-            echo     ^<li^>^<a href="#perfmon4tabs"^>MON$-analysis, per business units and tables^</a^> ^</li^>
+
+        @rem Link either to report data OR to comment about need to set mon_unit_perf = 1:
+        echo     ^<li^>^<a href="#perfmon4unit"^>MON$-analysis, per UNITS^</a^> ^</li^>
+        if .%mon_unit_perf%.==.1. (
+            if not .%fb%.==.25. (
+                echo     ^<li^>^<a href="#perfmon4tabs"^>MON$-analysis, per units and TABLES^</a^> ^</li^>
+            )
         )
+        @rem Link either to report data OR to comment about need to set mon_unit_perf = 2:
+        echo     ^<li^>^<a href="#perfmon4meta"^>MON$-analysis: METADATA cache^</a^> ^</li^>
 
         echo     ^<li^>^<a href="#exceptions"^>Exceptions during test run^</a^> ^</li^>
         echo ^</ol^>
@@ -1214,9 +1220,10 @@ if .1.==.0. (
 
         (
 
-          @rem echo set width category 12;
-          @rem echo set width setting 32;
-          @rem echo set width val 80; --- connection string can be too long
+          echo set width working_mode 12;
+          echo set width setting 32;
+          echo set width val 30;
+
           @rem           echo select 
           @rem echo    s.working_mode as category, 
           @rem echo    s.mcode as setting, 
@@ -1225,7 +1232,7 @@ if .1.==.0. (
           @rem echo where s.working_mode='COMMON'
           @rem echo union all
           
-          echo select s.working_mode, s.mcode as setting, s.svalue
+          echo select s.working_mode, s.mcode as setting, s.svalue as val
           echo from settings s
           echo join (
           echo     select s.svalue as working_mode
@@ -1493,7 +1500,7 @@ if .1.==.0. (
           echo set width itrv_beg 8;         
           echo set width itrv_end 8;         
           echo select
-          echo      traced_data
+          echo      traced_data -- 22.04.2019 do NOT use alias with spaces for this column, trouble in html will be otherwise!
           echo      ,cast(interval_no as smallint^) as "interval no"
           echo      ,sp_client_order                as "create client order"
           echo      ,sp_cancel_client_order         as "cancel client order"
@@ -1742,6 +1749,11 @@ if .1.==.0. (
 
         set msg=Monitoring metadata cache size
         call :sho "SID=1. Generating report '!msg!'" %sts%
+
+        if .%make_html%.==.1. (
+            echo !htm_sect! ^<a name="perfmon4meta"^> !msg!: ^</a^> !htm_secñ! >>%htm_file%
+        )
+
         (
           echo.
           echo ################################################################################
@@ -1750,35 +1762,72 @@ if .1.==.0. (
         ) >> %log4all%
 
         (
-          echo.
-          echo !msg!:
-          echo.
-          echo Get report about metadata cache, attachments and statements memory usage.
-          echo.
-          echo PAGE_CACHE_MEMO_USED            = page cache total size, bytes:
-          echo METADATA_CACHE_MEMO_USED        = metadata cache, bytes;
-          echo METADATA_CACHE_PERCENT_OF_TOTAL = ratio between metadata cache and sum of metadata cache and page cache;
-          echo TOTAL_ATTACHMENTS_CNT           = total number of attachments, regardless of state;
-          echo ACTIVE_ATTACHMENTS_CNT          = number of attachments with mon$state = 1;
-          echo RUNNING_STATEMENTS_CNT          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
-          echo STALLED_STATEMENTS_CNT          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
-          echo MEMO_USED_BY_ATTACHMENTS        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
-          echo MEMO_USED_BY_TRANSACTIONS       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
-          echo MEMO_USED_BY_STATEMENTS         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
-          echo.
-
-        ) >> %log4all%
-
-        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
-
-        (
             echo.
             echo set heading off;
             @rem "Page cache type: dedicated, buffers: 256 per each connection, with total size: 20971520"
             echo select p.page_cache_info from srv_get_page_cache_info p;
             echo set heading on;
-            echo select d.*
-            echo from report_cache_dynamic d;
+        ) > %rpt%
+
+        type %rpt% >>%log4all%
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+        %run_repo% 1>%tmp_file% 2>&1
+
+        type %tmp_file% >>%log4all%
+       
+        if .%make_html%.==.1. (
+            echo !htm_repn! >>%htm_file%
+            call :add_html_text tmp_file htm_file
+            echo !htm_repc! >>%htm_file%
+        )
+
+        (
+          echo page cache memo used            = page cache total size, bytes:
+          echo metadata cache memo used        = metadata cache, bytes;
+          echo metadata cache percent of total = ratio between metadata cache and sum of metadata cache and page cache;
+          echo total attachments cnt           = total number of attachments, regardless of state;
+          echo active attachments cnt          = number of attachments with mon$state = 1;
+          echo running statements cnt          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
+          echo stalled statements cnt          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
+          echo memo used by attachments        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
+          echo memo used by transactions       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
+          echo memo used by statements         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
+          echo.
+        ) > %tmp_file%
+        type %tmp_file% >>%log4all%
+       
+        if .%make_html%.==.1. (
+            call :add_html_text tmp_file htm_file
+        )
+    
+
+        @rem if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+
+        (
+            echo.
+            if .1.==.1. (
+                @rem 22.04.2019: do NOT use spaces alias for 1st column of resultset otherwise routine 'add_html_table' 
+                @rem will not properly define 'fld_first' for this case and table will not have <TR> and </TR> tags!
+                @rem TODO: fix it later.
+                echo select
+                echo     measurement_timestamp as "measurement_dts" -- 21.04.2019 do NOT use alias with SPACES for the 1st field of resultset!
+                echo     ,measurement_elapsed_ms as "measurement duration ms"
+                echo     ,page_cache_memo_used as "page cache memo used"
+                echo     ,metadata_cache_memo_used as "metadata cache memo used"
+                echo     ,metadata_cache_percent_of_total as "metadata cache percent of total"
+                echo     ,total_attachments_cnt as "total attachments cnt"
+                echo     ,active_attachments_cnt as "active attachments cnt"
+                echo     ,running_statements_cnt as "running statements cnt"
+                echo     ,stalled_statements_cnt as "stalled statements cnt"
+                echo     ,memo_used_by_attachments as "memo used by attachments"
+                echo     ,memo_used_by_transactions as "memo used by transactions"
+                echo     ,memo_used_by_statements as "memo used by statements"
+                echo from report_cache_dynamic d;
+            ) else (
+                echo select d.*
+                echo from report_cache_dynamic d;
+            )
             echo commit;
         ) > %rpt%
 
@@ -1793,7 +1842,6 @@ if .1.==.0. (
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
         echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
-
         if .%make_html%.==.1. (
             set t1=!time!
             call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
@@ -1805,19 +1853,27 @@ if .1.==.0. (
         )
         del %rpt% 2>nul
     
-    ) else (
+    )
+    @rem .%mon_unit_perf%.==.1.  or ==.2. or ==.0.
 
-        set msg=Config param. mon_unit_perf=%mon_unit_perf%, data from MON$ tables were NOT gathered.
+    if not .%mon_unit_perf%.==.1. (
+        set msg=Statistics was not gathered. To get PERFORMANCE FOR UNITS data change config parameter mon_unit_perf to 1.
         (
           echo.
           echo %msg%:
           echo.
         ) >> %log4all%
-   
         if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
-
     )
-    @rem .%mon_unit_perf%.==.1.  or ==.2. or ==.0.
+    if not .%mon_unit_perf%.==.2. (
+        set msg=Statistics was not gathered. To get METADATA CACHE dynamics: change 'mon_unit_perf' to 2; ensure that UDF for delay exists, see 'sleep_ddl'.
+        (
+          echo.
+          echo %msg%:
+          echo.
+        ) >> %log4all%
+        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+    )
 
 
     @rem ------------------------------------------------------------------------------
@@ -3001,31 +3057,61 @@ goto:eof
 
 
     @rem Output HEADER of table
+    @rem ######################
     set i=1
     (
-      for /f "tokens=1-5 delims=:" %%a in ('type %sql_log%') do (
-          if .!i!.==.1. (
-              call :get_sqlda_fld_name %fb% %%d fld_first
-          )
+        for /f "tokens=1-5 delims=:" %%a in ('type %sql_log%') do (
+            if .!i!.==.1. (
+                call :get_sqlda_fld_name %fb% %%d fld_first
+            )
 
-          set fld_name=%%d
-          call :get_sqlda_fld_name %fb% %%d fld_name
+            set fld_name=%%d
+            call :get_sqlda_fld_name %fb% %%d fld_name
 
-          if not .%%d.==.. (
-              echo !tho! !fld_name! !thc!
-              @rem echo !tho! !fld_name:_= ! !thc!
-          ) else (
-              echo !tho! " " !thc!
-          )
-          set fld_last=%%d
-          call :get_sqlda_fld_name %fb% %%d fld_last
+            if not .%%d.==.. (
+                echo !tho! !fld_name! !thc!
+                @rem echo !tho! !fld_name:_= ! !thc!
+            ) else (
+                echo !tho! " " !thc!
+            )
+            set fld_last=%%d
+            call :get_sqlda_fld_name %fb% %%d fld_last
 
-          set /a i=!i!+1
-      )
+            set /a i=!i!+1
+        )
     ) >> %tmp_html%
 
     set fld_first=!fld_first: =!
     set fld_last=!fld_last: =!
+
+    if .1.==.0. (
+        @rem 22.04.2019. USE THIS ONLY FOR DEBUG! REMOVE AFTER BUG WILL BE FIXED!
+        @rem HTML COMMENT: "<!--"  - can not be read and write from tmp_html to the final html report,
+        @rem it will be "<--", i.e. WITHOUT EXCLAMATION sign!
+        @rem ----------------------------------------------------------------------------------------
+        @rem We have to output HTML-comment OUTSIDE from grouped-echo commands block!
+        echo ^<^^!-- >> %tmp_html%
+        (
+            @rem NOTE: exclamation sign can not be writtenm into file from HERE.
+            @rem does not work: echo ^<^^!--
+            @rem does not work: echo ^<^!--
+            echo     Completed parsing file '%sql_log%':
+            echo     -------------
+            set /a i=1
+            for /f "tokens=*" %%a in ('type %sql_log%') do (
+                echo.    line !i! ^|%%a^|
+                set /a i=!i!+1
+            )
+            @rem type     %sql_log%
+            echo     -------------
+            echo     fld_first=!fld_first!
+            echo     fld_last=!fld_last!
+            echo --^>
+        ) >> %tmp_html%
+    )
+
+    @rem echo after loop for /f "tokens=1-5 delims=:" %%a in 'type %sql_log%'
+    @rem copy %sql_log% C:\temp\logs.oltp30\sql_log_11111.tmp
 
     @rem echo fld_first=.!fld_first!. fld_last=.!fld_last!. - check header of table in %tmp_html%  &pause
 
@@ -3053,6 +3139,7 @@ goto:eof
     )
 
     @rem Output DATA of report:
+    @rem ######################
     (
       set fld_num=1
       for /f "tokens=*" %%a in ('type %sql_log%') do (
@@ -3109,7 +3196,9 @@ goto:eof
 
     echo ^</table^> >>%tmp_html%
 
+
     type %tmp_html% >> %htm_file%
+
 
     del %sql_temp% 2>nul
     del %sql_log% 2>nul

@@ -467,6 +467,7 @@ begin
             || v_lf || '            ,dts_end'
             || v_lf || '        from perf_split_' || i || ' as p'
             || v_lf || '        where p.dts_end >= :v_test_time_dts_beg'
+            || v_lf || '              and p.unit is not null' -- 21.04.2019: to be sure, otherwise no_dup exception can occur if unit is null.
         ;
         suspend;
 

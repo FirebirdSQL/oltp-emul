@@ -881,26 +881,28 @@ do
 
 		fi # fb is 30 or higher 
     elif [ $mon_unit_perf -eq 2 ]; then
-		cat <<- EOF >>$plog
+
+		cat <<- "EOF" >>$plog
 			
 			Monitoring data: metadata cache size
 			====================================
 			Get report about metadata cache, attachments and statements memory usage.
 			NOTE. Config parameter 'mon_unit_perf' must have value 2 for this report.
 			Fields:
-			  PAGE_CACHE_MEMO_USED            = page cache total size, bytes:
-			  METADATA_CACHE_MEMO_USED        = metadata cache, bytes;
-			  METADATA_CACHE_PERCENT_OF_TOTAL = ratio between metadata cache and sum of metadata cache and page cache;
-			  TOTAL_ATTACHMENTS_CNT           = total number of attachments, regardless of state;
-			  ACTIVE_ATTACHMENTS_CNT          = number of attachments with mon$state = 1;
-			  RUNNING_STATEMENTS_CNT          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
-			  STALLED_STATEMENTS_CNT          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
-			  MEMO_USED_BY_ATTACHMENTS        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
-			  MEMO_USED_BY_TRANSACTIONS       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
-			  MEMO_USED_BY_STATEMENTS         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
+			  page cache memo used            = page cache total size, bytes:
+			  metadata cache memo used        = metadata cache, bytes;
+			  metadata cache percent of total = ratio between metadata cache and sum of metadata cache and page cache;
+			  total attachments cnt           = total number of attachments, regardless of state;
+			  active attachments cnt          = number of attachments with mon$state = 1;
+			  running statements cnt          = number of statements that are operating with data from page cache, i.e. mon$state = 1;
+			  stalled statements cnt          = number of statements that are waiting for client request for fetching, i.e. mon$state = 2;
+			  memo used by attachments        = total of mon$memory_usage.mon$memory_used for attachment level, i.e. mon$stat_group = 1;
+			  memo used by transactions       = total of mon$memory_usage.mon$memory_used for transaction level, i.e. mon$stat_group = 2;
+			  memo used by statements         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
 		EOF
+
 		cat <<- "EOF" >$psql
-			set list on;
+			set heading off;
 			set term ^;
 			execute block returns(" " dm_info) as
 			begin
@@ -909,9 +911,22 @@ do
 			end
 			^
 			set term ;^
-			set list off;
-			select d.*
+			set heading on;
+			select
+			    measurement_timestamp as "measurement_dts" -- 21.04.2019 do NOT use alias with SPACES for the 1st field of resultset!
+			    ,measurement_elapsed_ms as "measurement duration ms"
+			    ,page_cache_memo_used as "page cache memo used"
+			    ,metadata_cache_memo_used as "metadata cache memo used"
+			    ,metadata_cache_percent_of_total as "metadata cache percent of total"
+			    ,total_attachments_cnt as "total attachments cnt"
+			    ,active_attachments_cnt as "active attachments cnt"
+			    ,running_statements_cnt as "running statements cnt"
+			    ,stalled_statements_cnt as "stalled statements cnt"
+			    ,memo_used_by_attachments as "memo used by attachments"
+			    ,memo_used_by_transactions as "memo used by transactions"
+			    ,memo_used_by_statements as "memo used by statements"
 			from report_cache_dynamic d;
+			-- select d.* from report_cache_dynamic d;
 			commit;
 		EOF
 		cat $psql >> $plog

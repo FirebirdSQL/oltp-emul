@@ -1061,9 +1061,9 @@ EOF
     else
       if [ $sleep_max -gt 0 ] ; then
 	    cat <<-EOF >>$sql
-		-- ...............................
-		-- Take delay between transactions
-		-- ...............................
+		-- -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+		-- Config parameter 'sleep_max' = $sleep_max. We have to make PAUSES between transactions.
+		-- -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 		set list on;
 		EOF
 
@@ -1205,22 +1205,24 @@ EOF
 			begin
 			    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
 			    begin
-			        " " = 'This sesion is dedicated to query mon tables only. Take pause: use UDF $sleep_udf()...';
+			        " " = cast('now' as timestamp) || ' SID=1. This sesion is dedicated for gathering data from mon\$ tables. Take pause: use UDF $sleep_udf()...';
 			        suspend;
 			    end
 			end
 			^
-			execute block returns( " " varchar(65), session1_delay_before_mon_query numeric(12,3) ) as
+
+			execute block returns( " " varchar(128) ) as
 			    declare c int;
 			    declare d int;
 			    declare t timestamp;
 			    declare SECONDS_IN_MINUTE smallint = 60;
+			    declare session1_delay_before_mon_query numeric(12,3);
 			begin
 			    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
 			    begin
 			        -- CONSTANT DELAY:
 			        -- $mon_query_interval: see config parameter 'mon_query_interval'
-			        -- ($warm_time + $test_time) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
+			        -- maxvalue(1, $warm_time + $test_time) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
 			        c = minvalue( $mon_query_interval, maxvalue(1, $warm_time + $test_time) * SECONDS_IN_MINUTE / 20 );
 			        t = 'now';
 			        while (c > 0) do
@@ -1233,14 +1235,14 @@ EOF
 			            execute procedure sp_check_to_stop_work; -- check whether we should terminate this loop because of test cancellation
 			
 			            c = c - 1;
-			            when any do
+			        when any do
 			            begin
 			                rdb\$set_context('USER_SESSION','SELECTED_UNIT', 'TEST_WAS_CANCELLED');
 			                exception;
 			            end
 			        end
-			        " " = 'SID=1. Completed pause between queries to moitoring tables, ms: ';
 			        session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
+			        " " = cast('now' as timestamp) || ' SID=1. Completed pause between gathering data from mon$ tables, s: ' || session1_delay_before_mon_query;
 			        suspend;
 			    end
 			end
@@ -1835,7 +1837,6 @@ EOF
 		set bail off;
 	EOF
 
-    #if echo $mode | grep -i "^run_test$" > /dev/null ; then # run_test
     if  [ "$mode" = "run_test" ] ; then
       if [ $nfo = 1 ]; then
 		cat <<- EOF >>$sql
@@ -1852,9 +1853,8 @@ EOF
 			set width info 80;
 			select g.id, g.unit, g.exc_unit, g.info, g.fb_gdscode,g.trn_id,
 			       g.elapsed_ms, g.dts_beg, g.dts_end
-			from perf_log g
-			where g.trn_id = current_transaction;
-			-- do NOT add:  order by id;
+            from tmp$perf_log g ------------------------ GTT on commit DELETE rows
+            order by id;
 			set list off;
 			-- Finish block to output DETAILED results of iteration.
 		EOF
