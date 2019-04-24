@@ -108,25 +108,28 @@ In case of any questions feel free to contact: p519446@yandex.ru
 5. It is highly recommended to increase values of following parameters in firebird.conf:
 
    * DefaultDBCachePages
-   * TempCacheLimit
-   * LockHashSlots 
+   * LockHashSlots and LockMemSize - if you plan to work in Classic Server or SuperClassic. 
 
+   It is NEEDED explicitly to specify parameter FileSystemCacheThreshold so that it will be greater than DefaultDBCachePages.
+   Test does not accept firebird.conf with missed or commented value of this parameter.
+   Value of DefaultDBCachePages must be so that total size of page cache will be about 25% of memory that is avaliable for FB process.
+   Do NOT assign to DefaultDBCachePages values more than 2048 if you plan test Classic Server or SuperClassic.
 
+   Database always is created with page size 8192, this value is hardcoded.
    For medium workload (about 30-40 connects) following values can be set:
 
    a) for Firebird 3.0 and above:
 
-      DefaultDbCachePages =  128K - for SuperServer; 
+      DefaultDbCachePages =  0.25 * <avail_Mb> * 1024 * 1024 / 8192 - for SuperServer; 
                              512 or 1024 - for Classic and SuperClassic;
-      TempCacheLimit = 1024M
-      LockHashSlots = 22111
+      LockHashSlots = 16001
+      LockMemSize = 16777216
 
    b) for Firebird 2.5:
 
-      DefaultDbCachePages = 65536 - for SuperServer; 
-                            512 or 1024 - for Classic and SuperClassic
-      TempCacheLimit = 1073741824
+      DefaultDbCachePages = 512 or 1024 (assuming that Classic or SuperClassic is tested).
       LockHashSlots = 22111
+      LockMemSize = 33554432
 
 6. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
 
@@ -139,9 +142,8 @@ In case of any questions feel free to contact: p519446@yandex.ru
        nostop = (optional) literal argument that forces script to skip any pauses, even if work
              will be impossible (useful when scenario is launched from scheduler)
 
-   If database that is specified in config file does not exist, script will attempt to create it for you
-   but only if it's specified as fully qualified file name (not alias).
-   If database DOES exists but is empty or it creation was not completed before test will recreate all objects. 
+   If database does not exist, script will attempt to create it for you  but only if it's specified as fully qualified file name (not alias).
+   If database already exists but is empty or it creation was not completed during previous run then test will recreate all needed objects.
 
 
 7. After <warm_time> + <test_time> minutes test will stop itself, i.e. all ISQL sessions will
@@ -169,13 +171,13 @@ In case of any questions feel free to contact: p519446@yandex.ru
    Final report contains:
 
    * FB architecture name, database and test settings;
-   * overall performance results: total, dynamic for 10 time intervals, detailed per each unit;
+   * overall performance results: total, dynamic for 30 time intervals, performance for each minute and detailed per each unit;
    * when test config setting 'mon_unit_perf' is 1: gathered monitoring data about performance
      with detalization down to: 1) for FB 2.5 - application units; for FB 3.0 and above - application
      units and tables;
    * exceptions that occured during test;
    * database statistics after test finish;
-   * report about ration "total versions" / "total records" for every table with number of records > 0.
+   * report about ratio "total versions" / "total records" for every table with number of records > 0.
    * database validation report (only for tables that are subject for modifications);
    * comparison of firebird.log that was before and after test finish, using standard console utilities
      which present on any version of underlying OS: fc.exe (on Windows) and diff (on Linux).

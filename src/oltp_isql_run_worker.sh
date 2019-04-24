@@ -444,11 +444,13 @@ do
       sho "SID=$sid. No FB craches detected during last package was run." $sts
   fi
 
-  # 18.12.2018
-  # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error // token unkown et al
+  # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
   # 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+  # 42S02 ==> -204 	335544580 	table unknown: TMP // when forgen to add backstash befor tmp$foo
+  # 22001 ==> arith overflow / string truncation
   # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
-  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 39000"
+
+  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000"
   syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
   if [ $syntax_err_cnt -gt 0 ] ; then
       sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
@@ -648,31 +650,32 @@ do
 		set list on;
 		set blob all;
 		set count on;
-        select 
-            a.mon$attachment_id as attachment_id
-            ,a.mon$server_pid as server_pid
-            ,a.mon$state as attachment_state
-            ,a.mon$remote_protocol as remote_protocol
-            ,a.mon$remote_address as remote_address
-            ,a.mon$remote_pid as remote_pid
-            ,a.mon$timestamp as attachment_timestamp
-            ,s.mon$state as statement_state
-            ,s.mon$timestamp as statement_timestamp
-            ,s.mon$sql_text as statement_sql
-        from mon$attachments a
-        left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id
-        where a.mon$attachment_id != current_connection and a.mon$remote_address is not null
-        ;
+		select
+		    a.mon$attachment_id as attachment_id
+		    ,a.mon$server_pid as server_pid
+		    ,a.mon$state as attachment_state
+		    ,a.mon$remote_protocol as remote_protocol
+		    ,a.mon$remote_address as remote_address
+		    ,a.mon$remote_pid as remote_pid
+		    ,a.mon$timestamp as attachment_timestamp
+		    ,s.mon$state as statement_state
+		    ,s.mon$timestamp as statement_timestamp
+		    ,s.mon$sql_text as statement_sql
+		from mon$attachments a
+		left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id
+		where a.mon$attachment_id != current_connection and a.mon$remote_address is not null
+		;
 		set count off;
 		set list off;
-
-		set heading off;
-		select 'Final aggregation of data from PERF_FPLIT_nn tables to perf_agg' as " " from rdb$database;
-		set heading on;
 		commit;
-        set transaction no wait;
-        select * from srv_aggregate_perf_data( 1 ); -- 1 = ignore stop-flag, do aggregation anyway.
-        commit;
+		set transaction no wait;
+		set list on;
+		select
+		    'Final data aggregation from PERF_FPLIT_nn tables to PERF_AGG' as msg
+		    ,p.msg as result
+		from srv_aggregate_perf_data( 1 ) as p; -- 1 = ignore stop-flag, do aggregation anyway.
+		commit;
+		set list off;
 	EOF
 
     # psql = /var/tmp/logs.oltp30/oltp30_localhost.localdomain-001.performance_report.tmp
