@@ -2303,6 +2303,7 @@ vars=(
     fbc
     file_name_this_host_info
     file_name_with_test_params
+    gather_hardware_info
     halt_test_on_errors
     host
     init_buff
@@ -2387,6 +2388,29 @@ if [ $mon_unit_perf -eq 2 ]; then
          pause Press any key to FINISH this script. . .
          exit 1
    fi
+fi
+
+if [[ $host = "localhost" || $host = "127.0.0.1" ]]; then
+    echo Test will run on localhost
+else
+    if [ $gather_hardware_info -eq 1 ]; then
+	###############################################################################################
+	###  C H A N G E    C O N F I G   'G A T H E R _ H A R D W A R E _ I N F O'   T O   Z E R O ###
+	###############################################################################################
+	cat <<-EOF
+		CONFIGURATION ISSUE.
+		Parameter 'gather_hardware_info' = 1 requires parameter 'host' having value 'localhost' or '127.0.0.1'.
+		Hardware and OS info will not be gathered because probably you are going to run test on REMOTE server.
+		Current value of 'host' parameter is: $host
+		
+		Open config file "$cfg" in editor and change parameter 'gather_hardware_info' to 0.
+		
+	EOF
+	gather_hardware_info=0
+        pause Press any key to FINISH this script. . .
+        # NOTE: config file is re-read in worker.sh, so better to exit here than duplicate chek again in another place.
+        exit 1
+    fi
 fi
 
 # NOTE, 16.12.2018: we have to use UDF even when sleep_max=0 but mon_unit_perf = 2:

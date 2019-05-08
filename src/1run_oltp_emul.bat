@@ -50,6 +50,26 @@ set err_setenv=0
 
 call :readcfg %cfg% !err_setenv!
 
+if .%gather_hardware_info%.==.1. (
+    echo %host% | findstr /r /i /c:"localhost" /c:"127.0.0.1" >nul
+    if errorlevel 1 (
+        echo CONFIGURATION ISSUE.
+        echo Parameter 'gather_hardware_info' = 1 requires parameter 'host' having value 'localhost' or '127.0.0.1'.
+        echo Hardware and OS info will not be gathered because probably you are going to run test on REMOTE server.
+
+        @rem ###############################################################################################
+        @rem ###  C H A N G E    C O N F I G   'G A T H E R _ H A R D W A R E _ I N F O'   T O   Z E R O ###
+        @rem ###############################################################################################
+        set gather_hardware_info=0
+
+        if .%can_stop%.==.1. (
+             echo.
+             echo Press any key to CONTINUE this batch. . .
+             pause>nul
+        )
+    )
+)
+
 @rem Removing trailing backslash from %fbc% and %tmpdir% if any.
 @rem NB: `command error` will be here in case when value ends with double quote
 @rem      so we have to remove it before comparision with trailing backslash.
@@ -160,6 +180,7 @@ create_with_compound_columns_order^
 set varlist=!varlist!^
 ,file_name_this_host_info^
 ,file_name_with_test_params^
+,gather_hardware_info^
 ,halt_test_on_errors^
 ,host^
 ,init_buff^
@@ -911,7 +932,7 @@ if .1.==.0. (
     echo RUN: call oltp_isql_run_worker.bat !sid!  %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
     echo check result of select * from sp_get_test_time_dts
     pause
-    exit
+
 
     call oltp_isql_run_worker.bat !sid! %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
 
@@ -4720,6 +4741,31 @@ goto:eof
 
     endlocal & set "%~2=%result%"
 
+goto:eof
+
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+
+:remove_CR_from_file
+@rem https://www.computing.net/answers/windows-xp/removing-carriage-returns-from-a-textfile/197677.html
+setLocal
+set sourfile=%1
+set targfile=%2
+if exist !targfile! del !targfile!
+for /f "tokens=*" %%a in ('find /n /v "" ^< !sourfile!') do (
+    set line=%%a
+    set line=!line:*]=!
+    @rem "set /p" won't take "=" at the start of a line....
+    if "!line:~0,1!"=="=" set line= !line!
+
+    @rem ::::::::::::::::: NB :::::::::::::::::::::::
+    @rem there must be a blank line after "set /p"
+    @rem and "<nul" must be at the start of the line
+    @rem ::::::::::::::::: NB :::::::::::::::::::::::
+    set /p =!line!^
+
+<nul
+) >> !targfile!
+endlocal 
 goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-

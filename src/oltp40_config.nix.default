@@ -589,6 +589,12 @@
     #
     file_name_this_host_info = no_host_info
 
+    # Do we want to include in the report details about server hardware and OS (1 = yes, 0 = no) ?
+    # NOTE: this setting has sense only when you launch ISQL sessions at the server which you are 
+    # interesting on, i.e. when value of 'host' parameter is localhost or 127.0.0.1
+    #
+    gather_hardware_info = 1
+
 
     # When setting 'postie_send_args' is defined batch will send final report to required e-mail using console
     # client POSTIE.EXE with arguments that are defined here plus add auto generated subject and

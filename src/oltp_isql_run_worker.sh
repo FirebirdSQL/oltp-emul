@@ -31,6 +31,21 @@ sho() {
   echo $dts. $msg>>$log
 }
 
+apply_cmd() {
+  local run_cmd=$1
+  local line_prefix=$2
+  local log_file=$3
+  echo
+  sho "Command: '$run_cmd'." $log_file
+  while read line; do
+    #echo ${line_prefix}: $line
+    #echo ${line_prefix}: $line >> $log_file
+    echo ${line_prefix}: $line | sed -e 's/^/    /'
+    echo ${line_prefix}: $line | sed -e 's/^/    /' >> $log_file
+  done < <( eval $run_cmd )
+  echo
+  echo >> $log_file
+}
 
 log_elapsed_time() {
     local s1=$1
@@ -625,13 +640,53 @@ do
     rm -f $psql
     # ---- do NOT ---- rm $plog
 
-    ################################################################################################
-    ###  h o w     t e s t    w a s      f i n i s h e d ?   (normally / premature termination)  ###
-    ################################################################################################
+    if [ $gather_hardware_info -eq 1 ]; then
+	cat <<- EOF >>$plog
+	
+	######################################################################
+	###  g a t h e r     h a r d w a r e    a n d     O S    i n f o   ###
+	######################################################################
+	
+	EOF
+
+        run_cmd="hostnamectl"
+        apply_cmd "$run_cmd" "host_info" $plog
+
+        run_cmd="who -b"
+        apply_cmd "$run_cmd" "bootup_info" $plog
+
+        run_cmd="dmidecode -t system|grep -i -e 'manufacturer\|product\|hypervisor'"
+        apply_cmd "$run_cmd" "mboard_info" $plog
+
+
+        run_cmd="dmesg | grep DMI"
+        apply_cmd "$run_cmd" "DMI_info" $plog
+
+        run_cmd="lscpu | grep -i -v flags"
+        apply_cmd "$run_cmd" "CPU_info" $plog
+
+        run_cmd="cat /proc/meminfo | grep -i -e 'memtotal\|memfree\|memavail\|buffers\|cached\|swapcached'"
+        apply_cmd "$run_cmd" "mem_info" $plog
+
+        run_cmd="fdisk -l"
+        apply_cmd "$run_cmd" "fdisk_info" $plog
+    else
+	cat <<- EOF >>$plog
+	
+		Config parameter gather_hardware_info=0, hardware and OS info were NOT gathered.
+		================================================================================
+		
+	EOF
+    fi
+    # end of $gather_hardware_info = 1 | 0
+
+
+	cat <<- EOF >>$plog
+	################################################################################################
+	###  h o w     t e s t    w a s      f i n i s h e d ?   (normally / premature termination)  ###
+	################################################################################################
+	EOF
 	cat <<- "EOF" >>$psql
-		set heading off;
-		select 'Test finish info:' as " " from rdb$database;
-		set heading on;
 		set list on;
 		select
 		   p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona,
@@ -692,9 +747,9 @@ do
     rm -f $psql $tmpauxtmp $tmpauxsql $tmpauxerr
 
 	cat <<- EOF >>$plog
-	###############################################
-	###  p e r f o r m a n c e    r e p o r t s ###
-	###############################################
+	###################################################
+	###   p e r f o r m a n c e     r e p o r t s   ###
+	###################################################
 	EOF
 	
 	cat <<- EOF >>$plog
