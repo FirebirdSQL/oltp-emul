@@ -474,16 +474,19 @@ if .1.==.0. (
                 @rem NB: we have to copy script to separate file for each SID otherwise strange error will raise in many of launching sessions:
                 @rem "CScript Error: Loading script ... failed (The process cannot access ... used by another process.)"
 
-                copy !tmpdir!\sql\tmp_longsleep.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-                set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
-                @rem                                               ^
-                @rem                                               |
-                @rem                                          Maximum time a script is permitted to run
-                call :sho "Command: !run_cmd!" %sts%
+                copy !tmpdir!\sql\tmp_longsleep.vbs.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp
+
+                set run_cmd=cscript //nologo //e:vbscript !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp !random_delay! !random_delay!
+
+
+                @rem -- dis 10.05.2019 -- set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp
+
+                call :sho "SID=%sid%. Pause is starting. Command: !run_cmd!" %sts%
+
                 cmd /c !run_cmd! 1>>%sts% 2>&1
 
                 call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
-                del !tmpdir!\sql\tmp_sid_%sid%_sleep.tmp
+                del !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp
             ) else (
                 call :sho "SID=%sid%. Start ISQL without pause: random_delay=!random_delay!." %sts%
             )
@@ -863,25 +866,19 @@ if .1.==.0. (
     goto end
 :test_canc
 
-    set htm_file=!tmpdir!\oltp%fb%.report.html
-    del %htm_file% 2>nul
+    @rem ::: ACHTUNG ::: 10.05.2019
+    @rem NO actions with final report files (.txt and .html) should be done here by any SIDs.
+    @rem Only SID=1 is allowed to write into final report but this can be started only after 
+    @rem all other attachments will gone.
 
-    set htm_sect=^<h3^>
-    set htm_secc=^</h3^>
-
-    set htm_repn=^<h4^>
-    set htm_repc=^</h4^>
-
-    set tmp_file=!tmpdir!\oltp%fb%.report.tmp
-
-    set msg=!date! !time!. Test has been CANCELLED.
-
-    set msg=SID=%sid%. Test has been CANCELLED.
-
+    set msg=SID=%sid%. Return to %~f0. Test has been CANCELLED.
     echo !date! !time! !msg! >>!log!
     call :sho "!msg!" %sts%
 
+    call :getRandom del_vbs %sid%
+    del !sid_starter_sql!
     if not .%sid%.==.1. (
+
         @rem ---------------------------------------------------------------------------------------------------------------
         @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
         @rem ---------------------------------------------------------------------------------------------------------------
@@ -889,9 +886,14 @@ if .1.==.0. (
         echo !msg!
         echo !msg! >>%log%
         echo !msg! >>%sts%
+        set /a k=10000+%!sid%
+        set k=!k:~1,4!
+        echo #####################################
+        echo ###   e x i t :   S I D  =  !k! ###
+        echo #####################################
         goto end
     ) else (
-        call :sho "SID=1. Return to %~f0. Now we can forcedly detach all remaining sessions and make final reports." %sts%
+        call :sho "SID=1. Now we can forcedly detach all remaining sessions and make final reports." %sts%
         @rem -- do NOT! will be shown in html -- call :sho "!msg!" %log4all%
     )
     
@@ -900,12 +902,10 @@ if .1.==.0. (
 
     call :wait4all
 
-    call :getRandom del_vbs %sid%
-
     
-    @rem ########################################################################################################################
-    @rem ###   S I D = 1:   c h a n g e     D B    s t a t e    t o   O F F L I N E    a n d    r e t u r n    t o    O N L I N E
-    @rem ########################################################################################################################
+    @echo ########################################################################################################################
+    @echo ###   S I D = 1:    c h a n g e    D B    s t a t e    t o    F U L L   S H U T D O W N  /   R E T.   O N L I N E    ###
+    @echo ########################################################################################################################
     @rem 14.11.2018
 
     call :sho "SID=1. Forcedly drop all other attachments: change DB state to full shutdown." %sts%
@@ -959,10 +959,36 @@ if .1.==.0. (
     ) > %rpt%
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
     %run_repo% 1>>%log4all% 2>&1
-    del %rpt% 2>nul
-    
-    @rem ########################################################################################
 
+    del %rpt% 2>nul
+    del !tmpdir!\sql\tmp_longsleep.vbs.tmp 2>nul
+    
+    @rem ###########################################################################
+    @rem ### 10.05.2019. Following code is allowed to be executed only for SID=1 ###
+    @rem ###########################################################################
+
+    for /f "delims=." %%a in ('wmic os get localdatetime ^| findstr /i /r /b /c:"[0-9]"') do (
+        set dts=%%a
+        set ymd=!dts:~2,6!
+        set hms=!dts:~8,6!
+    )
+    @rem 09.05.2019: it is MANDATORY to add current timestamp to HTML initial file for report
+    @rem thus makig in UNIQUE. Otherwise this report can become broken - without HEAD section 
+    @rem and some random number of lines from starting part of BODY. Reason is unknown, perhaps
+    @rem it is somewhat related to existense of two file with same part of name and "composed" extensions: 
+    @rem oltpNN.report.html and oltpNN.report.html.tmp
+
+    set htm_file=!tmpdir!\oltp%fb%.!dts!.report.html
+    set htm_file=!tmpdir!\oltp%fb%.report.html
+    del %htm_file% 2>nul
+
+    set htm_sect=^<h3^>
+    set htm_secc=^</h3^>
+
+    set htm_repn=^<h4^>
+    set htm_repc=^</h4^>
+
+    set tmp_file=!tmpdir!\oltp%fb%.report.tmp
 
     call :sho "SID=1. Starting final performance analysys." %sts%
 
@@ -1128,6 +1154,7 @@ if .1.==.0. (
             echo left join sys_get_fb_arch('%usr%', '%pwd%'^) p on 1=1;
         ) > %rpt%
 
+   
         call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
         del %rpt% 2>nul
 
@@ -2562,7 +2589,7 @@ if .1.==.0. (
       ) > !tmp_file!
 
       call :add_html_text tmp_file htm_file 0
-    
+
     )
 
     @rem Define name of final report file, see 'set name_for_saving=...' below:
@@ -2641,10 +2668,11 @@ if .1.==.0. (
                 del !final_htm! 2>nul
 
                 @rem HTML report: add DOCTYPE as 1st line and <title>...</title? tag for conveniency:
+
                 set /a k=1
                 for /f "delims=" %%a in (!htm_file!) do (
                     if .!k!.==.1. (
-                      echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
+                         echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
                     ) 
                     set "line=%%a"
                     echo !line!>>!final_htm!
@@ -2653,8 +2681,6 @@ if .1.==.0. (
                     )
                     set /a k=!k!+1
                 )
-
-                @rem old: copy %htm_file% !final_htm! >nul
 
                 if exist !final_htm! (
                     del %htm_file% 2>nul
@@ -2712,6 +2738,7 @@ if .1.==.0. (
                     @rem if .%upload_report%.==.1.
                 )
                 @rem if exist !final_htm! 
+               
 
             ) else (
                 @rem .%make_html% ==> 0
@@ -2990,10 +3017,10 @@ goto:eof
     set add_br=%3
     set line_prefix=%4
     set use_style=%5
+    set dbg=0
 
     if not defined add_br set add_br=1
     if .%line_prefix%.==.null. set line_prefix=
-
 
     (
         if not .%use_style%.==.. (
@@ -3049,7 +3076,7 @@ goto:eof
     set sql_in=!%5!
     set htm_file=!%6!
 
-    set dbg=%7
+    set dbg=0
 
     rem %fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
@@ -3213,7 +3240,6 @@ goto:eof
     )
 
     @rem echo after loop for /f "tokens=1-5 delims=:" %%a in 'type %sql_log%'
-    @rem copy %sql_log% C:\temp\logs.oltp30\sql_log_11111.tmp
 
     @rem echo fld_first=.!fld_first!. fld_last=.!fld_last!. - check header of table in %tmp_html%  &pause
 
@@ -3298,9 +3324,7 @@ goto:eof
 
     echo ^</table^> >>%tmp_html%
 
-
     type %tmp_html% >> %htm_file%
-
 
     del %sql_temp% 2>nul
     del %sql_log% 2>nul
@@ -3308,6 +3332,8 @@ goto:eof
     del %tmp_sqlda% 2>nul
     del %tmp_nums% 2>nul
     del %tmp_html% 2>nul
+
+    endlocal
 
 goto:eof
 @rem ^
@@ -3377,7 +3403,6 @@ set lang_id=409
     echo partition get BootPartition,DeviceID,DiskIndex,Name,NumberOfBlocks,Size,Type,Description
     echo pagefile get AllocatedBaseSize,Name,CurrentUsage,PeakUsage
 )>!lst!
-
 
 del !rpt! 2>nul
 set /a i=1
@@ -3571,7 +3596,9 @@ if .%outer_htm%.==.0. (
     ) >> !rph!
 ) else (
     echo ^</table^> >> !rph!
-    type !rph! >> %htm_file%
+    
+    type !rph! >> !htm_file!
+
     del !rph!
     del !rpu!
 )
@@ -3932,6 +3959,47 @@ endlocal & goto:eof
 goto:eof
 @rem ^
 @rem end of 'getRandom' subroutine
+
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+:getFileTimestamp
+    setlocal
+    
+    @rem Introduced 09.05.2019 for usage instead old routine :getFileDTS
+    @rem Sample: 
+    @rem     set this_dts=UNKNOWN
+    @rem     call :getFileTimestamp %~f0 this_dts
+    @rem Result: variable 'this_dts' will contain timestamp in form: YYYYMMDDhhmiss of this batch file
+
+    set fname=%~nx1
+    set fpath=%~dp1
+    set fpath=!fpath:\=\\!
+    set ffull=!fpath!!fname!
+
+    @rem NOTE: within for-loop we have to escape COMMA characters and, moreover, 
+    @rem use DOUBLE quotes to enclose both prefix (NAME=) and name of interested file, like this:
+    @rem "NAME='full-path-to-interested-file'"
+    @rem Otherwise wmic will issue invalid verb or invalid get expression error.
+    @rem https://superuser.com/questions/1078734/wmic-in-for-loop
+
+    @rem THIS WORKS OK:
+    @rem for /f "usebackq" %%a in (`wmic datafile where "name='C:\\pagefile.sys'" get Size^,LastModified /format:list ^| findstr /r /v "^$"`) do ...
+    @rem Full list of supported properties: wmic datafile get /?
+
+    @rem wmic datafile where "name='!ffull!'" get LastModified /format:list | more | findstr = >tmp-wmic-list.tmp
+
+    for /f "usebackq" %%a in (`wmic datafile where "name='!ffull!'" get LastModified /format:list ^| more ^| findstr /r /v "^^$"`) do (
+        set filedts=%%a
+        @rem for timestamp with millisecond: set filedts=!filedts:~13,18!
+        @rem it is enough for this test to get timetsamp only up to seconds:
+        set filedts=!filedts:~13,14!
+    )
+    
+    endlocal & set "%~2=%filedts%"
+
+goto:eof
+@rem ^
+@rem end of getFileTimestamp
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 

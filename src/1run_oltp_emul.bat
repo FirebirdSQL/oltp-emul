@@ -765,34 +765,50 @@ if exist %tmp_run_test_sql% (
     call :sho "Check that previous creation of script %tmp_run_test_sql% was not interrupted" %log4tmp%
     findstr /i /c:"FINISH packet" %tmp_run_test_sql% 1>nul
     if not errorlevel 1 (
-        call :sho "Creation of script %tmp_run_test_sql% finished w/o interruptions." %log4tmp%
-        call :getFileDTS gen_vbs
-        call :getFileDTS get_dts !tmp_run_test_sql! sqldts
-        call :getFileDTS get_dts %~f0 thisdts
+        call :sho "Generation of script %tmp_run_test_sql% was completed w/o interruptions." %log4tmp%
+        @rem call :getFileDTS gen_vbs
+        @rem call :getFileDTS get_dts !tmp_run_test_sql! sqldts
+        @rem call :getFileDTS get_dts %~f0 thisdts
+        
+        @rem -----------------------------------------------
+        @rem 09.05.2019: use WMIC instead of CScript where it is possible.
+        @rem To get exact timestamp of file:
+        @rem wmic.exe datafile where name="C:\\pagefile.sys" get filename,LastModified,size /format:list
+        @rem -----------------------------------------------
+
+        @rem Get file timestamp using WMIC:
+
+        call :getFileTimestamp !tmp_run_test_sql! sqldts
+        call :getFileTimestamp %~f0 thisdts
+
         if .!thisdts!. lss .!sqldts!. (
-            call :sho "This batch is OLDER than tmp_run_test_sql" %log4tmp%
-            call :getFileDTS get_dts !cfg! cfgdts
+            call :sho "This batch is OLDER than %tmp_run_test_sql%" %log4tmp%
+
+            @rem call :getFileDTS get_dts !cfg! cfgdts
+            call :getFileTimestamp !cfg! cfgdts
+
             if .!cfgdts!. lss .!sqldts!. (
-                call :sho "Test config file is OLDER than %tmp_run_test_sql%" %log4tmp%
+                call :sho "Test config '%cfg%' is OLDER than %tmp_run_test_sql%" %log4tmp%
                 set skipGenSQL=1
             ) else (
-                call :sho "Test config file %cfg% is NEWER than %tmp_run_test_sql%" %log4tmp%
+                call :sho "Test config '%cfg%' timestamp: !cfgdts! - NEWER than timestamp !sqldts! of %tmp_run_test_sql%" %log4tmp%
             )
         ) else (
-            call :sho "This batch is NEWER than %tmp_run_test_sql%" %log4tmp%
+            call :sho "This batch timestamp: !thisdts! - NEWER than timestamp !sqldts! of %tmp_run_test_sql%" %log4tmp%
         )
     ) else (
         call :sho "Creation of script %tmp_run_test_sql% was INTERRUPTED." %log4tmp%
     )
     echo.
     if .!skipgenSQL!.==.0. (
-        call :sho "must RECREATE %tmp_run_test_sql%" %log4tmp%
+        call :sho "We must RECREATE %tmp_run_test_sql%" %log4tmp%
     ) else (
-        call :sho "can SKIP recreating %tmp_run_test_sql%" %log4tmp%
+        call :sho "We can SKIP recreating %tmp_run_test_sql%" %log4tmp%
     )
 ) else (
-   call :sho "Main working script '%tmp_run_test_sql%' does NOT exists." %log4tmp%
+    call :sho "Main working script '%tmp_run_test_sql%' does NOT exists." %log4tmp%
 )
+
 
 if .%skipGenSQL%.==.0. (
     @rem Generating script to be used by working isqls.
@@ -1369,20 +1385,32 @@ goto :end_of_test
           @rem ###   c r e a t i n g    .v b s    f o r    p a u s e s   ###
           @rem #############################################################
 
-          del !tmpdir!\sql\tmp_longsleep.tmp 2>nul
           (
-            echo ' Generated AUTO by %~f0 at !date! !time!, do NOT edit.
-            echo ' This file is used by Windows CSCRIPT.EXE as dummy scenario.
-            echo ' Cscript is called via SHELL from %generated_sql%
-            echo ' after every COMMIT statement.
-            echo ' Sample: shell cscript //e:vbscript //t:%%selected_delay%% !tmpdir!\sql\tmp_longsleep.tmp
-            echo ' Where:  //t:nn - Maximum time a script is permitted to run
-            echo WScript.Sleep(900000^)
-          )>>!tmpdir!\sql\tmp_longsleep.tmp
+            echo ' Generated AUTO by %~f0 at !date! !time!. Called via SHELL from %generated_sql%, do NOT edit.
+            echo ' This file is used by Windows CSCRIPT.EXE for DELAYS between transactions.
+            echo ' Sample: shell cscript //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp ^<sleep_min^> ^<sleep_max^>
+            echo.
+            echo option explicit
+            echo.
+            echo dim min,max,rnx
+            echo.
+            echo min=WScript.Arguments.Item(0^)
+            echo max=WScript.Arguments.Item(1^)
+            echo Randomize
+            echo rnx = int( CDbl( min + (max - min^) * Rnd ^)*1000 ^)
+            echo.
+            echo WScript.echo "Randomly selected delay, ms: " ^& rnx
+            echo WScript.Sleep( rnx ^)
+
+          ) > !tmpdir!\sql\tmp_longsleep.vbs.tmp
       )
 
       echo -- SQL script generation started at !date! !time! >> %generated_sql%
       echo.
+
+      @rem ##################################################################################################################
+      @rem ###   g e n e r a t i n g     S Q L    s c r i p t    f o r   e v e r y    s e s s i o n s - "w o r k e r s"   ###
+      @rem ##################################################################################################################
 
       for /l %%i in (1, 1, %lim%) do (
 
@@ -1442,7 +1470,7 @@ goto :end_of_test
                               echo             taken_pause_in_seconds = cast( !sleep_min! + rand(^) * (!sleep_max! - !sleep_min!^) as int ^);
                               echo             rdb$set_context( 'USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds ^);
                               echo             " " = v_lf ^|^| cast('now' as timestamp^)
-                              echo                        ^|^| '. Point BEFORE delay in scope !sleep_min!..!sleep_max! seconds. Chosen value: ' 
+                              echo                        ^|^| '. Point BEFORE delay within scope !sleep_min!..!sleep_max! seconds. Chosen value: ' 
                               echo                        ^|^| taken_pause_in_seconds ^|^| '. Use UDF ''!sleep_udf!''.'
                               echo             ;
                               echo         end
@@ -1497,35 +1525,28 @@ goto :end_of_test
 
                           ) else (
 
-                              @rem sleep_UDF is COMMENDETED, i.e. undefined
-                              @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                              echo set transaction read write read committed lock timeout 1; -- need for sp_pause: it DOES write operation into fixed table 'tpause'.
+                              @rem Config parameter 'sleep_UDF' is COMMENDETED, i.e. undefined
+                              @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
                               echo set term ^^;
                               echo execute block returns( " " varchar(128^) ^) as
                               echo     declare v_lf char(1^);
                               echo begin
                               echo     v_lf = ascii_char(10^);
-                              echo     " " = v_lf ^|^| cast('now' as timestamp^)
-                              echo                ^|^| '. Point BEFORE delay in scope !sleep_min!..!sleep_max! seconds. Chosen value: '
-                              echo                ^|^| !random_delay! ^|^| '. Use OS shell call.'
-                              echo     ;
+                              echo     " " = v_lf ^|^| cast('now' as timestamp^) ^|^| '. '
+                              echo           ^|^| 'Point BEFORE delay within ' ^|^| %sleep_min% ^|^| ' ... ' ^|^| %sleep_max% ^|^|' s. Use OS shell call.';
                               echo     suspend;
-                              echo end
-                              echo ^^
+                              echo     rdb$set_context( 'USER_TRANSACTION', 'DELAY_START_DTS', cast( 'now' as timestamp ^) ^);
+                              echo end^^
                               echo set term ;^^
 
                               echo -- ############################################################
                               echo -- ###    p a u s e      u s i n g      S H E L L    c m d  ###
                               echo -- ############################################################
                               echo.
-                              echo -- Number after '//t:' is number of SECONDS and was evaluated as RANDOM
-                              echo -- value within scope sleep_min...sleep_max = !sleep_min! ... !sleep_max!.
+                              echo -- Delay is evaluated within scope sleep_min ... sleep_max = %sleep_min% ... %sleep_max%.
                               echo.
-                              echo shell cscript //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_longsleep.tmp ^>nul;
-                              echo                                ^^
-                              echo                                ^|
-                              echo                                +-- this is duration of delay
-                              echo --select * from sp_pause( !random_delay!, '%usr%', '%pwd%' ^);
+                              echo shell cscript //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp %sleep_min% %sleep_max% ;
 
                           )
                           @rem sleep_UDF=UNDEFINED == false / true
@@ -1533,9 +1554,24 @@ goto :end_of_test
                           echo set term ^^;
                           echo execute block returns( " " varchar(128^) ^) as
                           echo     declare v_lf char(1^);
+                          echo     declare v_dts varchar(128^);
                           echo begin
                           echo     v_lf = ascii_char(10^);
                           echo     " " = v_lf ^|^| cast('now' as timestamp^) ^|^| '. Point AFTER delay finish.';
+                          echo     v_dts = rdb$get_context( 'USER_TRANSACTION', 'DELAY_START_DTS' ^);
+                          echo     if ( v_dts is NOT null ^) then
+                          echo     begin
+                          echo         " " = " " ^|^| ' Actual delay value is: '
+                          echo                   ^|^| cast( 
+                          echo                               datediff( millisecond 
+                          echo                                         from cast( v_dts as timestamp^) 
+                          echo                                         to cast('now' as timestamp^)
+                          echo                                       ^) * 1.00 / 1000.00
+                          echo                               as numeric(12, 3^)
+                          echo                          ^) ^|^| ' s.'
+                          echo         ;
+                          echo         rdb$set_context( 'USER_TRANSACTION', 'DELAY_START_DTS', null ^);
+                          echo     end
                           echo     suspend;
                           echo end^^
                           echo set term ;^^
@@ -2304,8 +2340,52 @@ goto:eof
     echo!prefix! ----------------------------------------------------------------------------------------------------
 goto:eof
 
+
+:getFileTimestamp
+    setlocal
+    
+    @rem Introduced 09.05.2019 for usage instead old routine :getFileDTS
+    @rem Sample: 
+    @rem     set this_dts=UNKNOWN
+    @rem     call :getFileTimestamp %~f0 this_dts
+    @rem Result: variable 'this_dts' will contain timestamp in form: YYYYMMDDhhmiss of this batch file
+
+    set fname=%~nx1
+    set fpath=%~dp1
+    set fpath=!fpath:\=\\!
+    set ffull=!fpath!!fname!
+
+    @rem NOTE: within for-loop we have to escape COMMA characters and, moreover, 
+    @rem use DOUBLE quotes to enclose both prefix (NAME=) and name of interested file, like this:
+    @rem "NAME='full-path-to-interested-file'"
+    @rem Otherwise wmic will issue invalid verb or invalid get expression error.
+    @rem https://superuser.com/questions/1078734/wmic-in-for-loop
+
+    @rem THIS WORKS OK:
+    @rem for /f "usebackq" %%a in (`wmic datafile where "name='C:\\pagefile.sys'" get Size^,LastModified /format:list ^| findstr /r /v "^$"`) do ...
+    @rem Full list of supported properties: wmic datafile get /?
+
+    @rem wmic datafile where "name='!ffull!'" get LastModified /format:list | more | findstr = >tmp-wmic-list.tmp
+
+    for /f "usebackq" %%a in (`wmic datafile where "name='!ffull!'" get LastModified /format:list ^| more ^| findstr /r /v "^^$"`) do (
+        set filedts=%%a
+        @rem for timestamp with millisecond: set filedts=!filedts:~13,18!
+        @rem it is enough for this test to get timetsamp only up to seconds:
+        set filedts=!filedts:~13,14!
+    )
+    
+    endlocal & set "%~2=%filedts%"
+
+goto:eof
+@rem ^
+@rem end of getFileTimestamp
+
 :getFileDTS
     @rem http://www.dostips.com/DtTutoFunctions.php
+
+    @rem === NOT USED === since 09.05.2019: on some hosts execution of CScript can be prohibited.
+    @rem CScript Error: Execution of the Windows Script Host failed. (Access is denied. )
+
     setlocal
     set vbs=!tmpdir!\getFileTimeStamp.tmp.vbs
     set dts=!tmpdir!\getFileTimeStamp.tmp.log
@@ -4977,6 +5057,9 @@ goto:eof
         echo ^) ^> !b4stop_sql!
         echo.
         echo echo ^^!time^^!. Script that is to be executed now: !b4stop_sql!
+        echo.
+        echo echo Trying to kill all running cscript.exe
+        echo taskkill /f /im cscript.exe
         echo.
         echo !fbc!\isql !dbconn! !dbauth! -q -n -nod -i !b4stop_sql! 2^>!b4stop_err!
         echo.
