@@ -1,7 +1,7 @@
 @echo off
 @rem ----------------------------------------------
-@rem arg #1 = 25 or 30 - version of FB
-@rem arg #2 = number of ISQL sessions top be opened
+@rem arg #1 = 25, 30 or 40 - major version of FB, without dot.
+@rem arg #2 = number of ISQL sessions to be launched.
 @rem ----------------------------------------------
 @cls
 setlocal enabledelayedexpansion enableextensions

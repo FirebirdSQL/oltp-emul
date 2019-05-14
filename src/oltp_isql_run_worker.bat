@@ -893,7 +893,7 @@ if .1.==.0. (
         echo #####################################
         goto end
     ) else (
-        call :sho "SID=1. Now we can forcedly detach all remaining sessions and make final reports." %sts%
+        call :sho "SID=1. Test is to be COMPLETED. Now we can forcedly detach all remaining sessions and make final reports." %sts%
         @rem -- do NOT! will be shown in html -- call :sho "!msg!" %log4all%
     )
     

@@ -108,28 +108,27 @@ In case of any questions feel free to contact: p519446@yandex.ru
 5. It is highly recommended to increase values of following parameters in firebird.conf:
 
    * DefaultDBCachePages
-   * LockHashSlots and LockMemSize - if you plan to work in Classic Server or SuperClassic. 
+   * LockHashSlots and 
+   * LockMemSize
 
    It is NEEDED explicitly to specify parameter FileSystemCacheThreshold so that it will be greater than DefaultDBCachePages.
    Test does not accept firebird.conf with missed or commented value of this parameter.
-   Value of DefaultDBCachePages must be so that total size of page cache will be about 25% of memory that is avaliable for FB process.
+
+   Parameter DefaultDBCachePages must have value that leads total size of page cache be equal ~25% of total physical memory.
    Do NOT assign to DefaultDBCachePages values more than 2048 if you plan test Classic Server or SuperClassic.
 
    Database always is created with page size 8192, this value is hardcoded.
-   For medium workload (about 30-40 connects) following values can be set:
+   For medium workload (about 100 working sessions) following values can be set:
 
-   a) for Firebird 3.0 and above:
+    +----------------------------------------------------------------------------------------------+
+    |                           SuperServer 3.0+   |  [Super]Classic 3.0+   |   [Super]Classic 2.5 |
+    |----------------------------------------------|------------------------|----------------------|
+    |  DefaultDbCachePages      0.25 * <M> / 8192  |                1024    |             1024     |
+    |  LockHashSlots                  8191         |               16001    |            16001     |
+    |  LockMemSize                 4194304         |            33554432    |         33554432     |
+    +----------------------------------------------------------------------------------------------+
+    <M> = total physical memory
 
-      DefaultDbCachePages =  0.25 * <avail_Mb> * 1024 * 1024 / 8192 - for SuperServer; 
-                             512 or 1024 - for Classic and SuperClassic;
-      LockHashSlots = 16001
-      LockMemSize = 16777216
-
-   b) for Firebird 2.5:
-
-      DefaultDbCachePages = 512 or 1024 (assuming that Classic or SuperClassic is tested).
-      LockHashSlots = 22111
-      LockMemSize = 33554432
 
 6. Open command interpreter (Windows: "Start/Run/cmd.exe"), change to 'src' directory and run:
 
