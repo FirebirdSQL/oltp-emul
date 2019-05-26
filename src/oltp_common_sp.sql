@@ -917,7 +917,7 @@ returns(
 begin
     test_time_dts_beg = rdb$get_context('USER_SESSION','PERF_WATCH_BEG');
     test_time_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
-    test_intervals = cast( rdb$get_context('USER_SESSION','TEST_INTERVALS') as int); -- taken from config
+
     if ( test_time_dts_beg is null ) then
     begin
         -- this record is added in 1run_oltp_emul.bat before FIRST attach
@@ -932,11 +932,15 @@ begin
         rows 1
         into test_time_dts_beg, test_time_dts_end;
 
-        select s.svalue from settings s where s.mcode = upper('test_intervals') 
-        into test_intervals;
-
         rdb$set_context('USER_SESSION','PERF_WATCH_BEG', test_time_dts_beg);
         rdb$set_context('USER_SESSION','PERF_WATCH_END', test_time_dts_end);
+    end
+
+    test_intervals = cast( rdb$get_context('USER_SESSION','TEST_INTERVALS') as int); -- taken from config
+    if ( test_intervals is null ) then
+    begin
+        select s.svalue from settings s where s.mcode = upper('test_intervals') 
+        into test_intervals;
         rdb$set_context('USER_SESSION','TEST_INTERVALS', test_intervals);
     end
 
@@ -944,7 +948,6 @@ begin
 
 end
 ^ -- sp_get_test_time_dts
-
 
 create or alter procedure report_perf_total
 returns (
