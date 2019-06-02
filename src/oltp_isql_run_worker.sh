@@ -140,8 +140,8 @@ get_diff_fblog() {
 		set term ;^
 		exit;
 		EOF
-	    $fbc/isql $dbconn $dbauth -q -n -nod -i $tmp_sql 1>>$log4sid 2>&1
-            #echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $fbc/isql $dbconn $dbauth -q -n -nod 1>>$log4sid 2>&1
+	    $isql_name $dbconn $dbauth -q -n -nod -i $tmp_sql 1>>$log4sid 2>&1
+            #echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $isql_name $dbconn $dbauth -q -n -nod 1>>$log4sid 2>&1
             sho "SID=$sid. Done. All workers soon will stop their job." $log4sid
             rm -f $tmp_sql
 
@@ -230,6 +230,17 @@ do
     fi
 done < <( sed -e 's/^[ \t]*//' $cfg | grep "^[^#;]" )
 
+if [ "$clu" != "" ]; then
+    # Name of ISQL on Ubuntu/Debian when FB is installed from OS repository
+    # 'isql-fb' etc:
+    echo Config contains custom name of command-line utility for interact with Firebird.
+    echo Parameter: \'clu\', value: \|$clu\|
+else
+    echo Using standard name of command-line utility for interact with Firebird: 'isql'
+    clu=isql
+fi
+isql_name=$fbc/$clu
+
 sho "SID=$sid. Config file $cfg parsed OK." $log
 
 
@@ -276,9 +287,9 @@ fi
 
 
 s1=$(date +%s)
-#run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
+#run_isql="$isql_name $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
 # since 12.08.2018
-run_isql="$fbc/isql $dbconn -now -q -n -pag 9999 -i $sid_starter_sql $dbauth"
+run_isql="$isql_name $dbconn -now -q -n -pag 9999 -i $sid_starter_sql $dbauth"
 log_elapsed_time $s1 $log
 
 cat << EOF >>$sts
@@ -465,7 +476,11 @@ do
   # 22001 ==> arith overflow / string truncation
   # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
 
-  syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000"
+  # Ubuntu + FB 2.5.4.x from repo: "42000" can be raised by user-defined-expection for unknown reason!!!
+  # commented 01.06.2019 19:03: syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000"
+
+  syntax_pattern="Dynamic SQL Error\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000"
+  
   syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
   if [ $syntax_err_cnt -gt 0 ] ; then
       sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
@@ -737,7 +752,7 @@ do
 
     echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. START additional script after all sessions completed.
 
-    $fbc/isql $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 
     echo>>$plog
     echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. FINISH additional script.
@@ -775,7 +790,7 @@ do
 	cat $psql >> $plog
 
 	s1=$(date +%s)
-	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1 $plog
 	rm -f $psql
@@ -810,7 +825,7 @@ do
 	cat $psql >> $plog
 
 	s1=$(date +%s)
-	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1 $plog
 	rm -f $psql
@@ -842,7 +857,7 @@ do
 	cat $psql >> $plog
 
 	s1=$(date +%s)
-	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1 $plog
 	rm -f $psql
@@ -880,7 +895,7 @@ do
 	cat $psql >> $plog
 
 	s1=$(date +%s)
-	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1 $plog
 	rm -f $psql
@@ -905,7 +920,7 @@ do
 		cat $psql >> $plog
 
 		s1=$(date +%s)
-		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+		$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
 		log_elapsed_time $s1 $plog
 		rm -f $psql
@@ -932,7 +947,7 @@ do
 
 			cat $psql >> $plog
 			s1=$(date +%s)
-			$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+			$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 			# Add timestamps of start and finish and how long last ISQL was:
 			log_elapsed_time $s1 $plog
 			rm -f $psql
@@ -990,7 +1005,7 @@ do
 		cat $psql >> $plog
 		
 		s1=$(date +%s)
-		$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+		$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
 		log_elapsed_time $s1 $plog
 		rm -f $psql
@@ -1019,7 +1034,7 @@ do
 
 	cat $psql >> $plog
 	s1=$(date +%s)
-	$fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
 	log_elapsed_time $s1 $plog
 	rm -f $psql
@@ -1037,7 +1052,7 @@ do
 		set list off;
 		show version;
 	EOF
-    $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
     rm -f $psql
 
 
@@ -1174,7 +1189,7 @@ do
 	EOF
 
     if [ "$remove_isql_logs" == "if_no_severe_errors" ]; then
-        $fbc/isql $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+        $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
         if grep -i "NO_SEVERE_ERRORS_FOUND" $plog > /dev/null ; then
             rm -f $log_ptn
         fi
@@ -1197,7 +1212,7 @@ do
                 fi
                 
 		echo Evaluate new name of final report.
-		run_isql="$fbc/isql $dbconn -i $psql -q -nod -n -c 256 $dbauth"
+		run_isql="$isql_name $dbconn -i $psql -q -nod -n -c 256 $dbauth"
 		$run_isql 1>$tmpsidlog 2>$tmpsiderr
 		
 		# Wrong: one trailing space will be included into varable content:

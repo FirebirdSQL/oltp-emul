@@ -100,7 +100,7 @@ msg_nofile() {
   echo At least one of Firebird command line utilities NOT FOUND in the folder
   echo -e defined by variable \'fbc\' = \>\>\>$fbc\<\<\<
   echo
-  echo This folder must have following executable files: isql, fbsvcmgr
+  echo This folder must have following executable files: $clu, fbsvcmgr
   echo
   echo Verify value of parameter \'fbc\' in the file \'$cfg\'!
   echo Script is now terminated.
@@ -223,7 +223,7 @@ db_create() {
       exit;
 	EOF
 
-  run_isql="$fbc/isql -q -i $tmpsql"
+  run_isql="$isql_name -q -i $tmpsql"
   display_intention "Attempt to CREATE database." "$run_isql" "$tmpclg" "$tmperr"
   $run_isql 1>$tmplog 2>$tmperr
   catch_err $tmperr "Ensure that FB is running. Verify that parameter 'dbnm' is VALID: $dbnm"
@@ -422,7 +422,7 @@ db_build() {
   local err=$tmpdir/$prf.err
   local tmp=$tmpdir/$prf.tmp
 
-  local run_isql="$fbc/isql $dbconn $dbauth -nod -i $bld"
+  local run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
 
   if [[ $fb == 25 ]]; then
      vers_family=25
@@ -477,7 +477,7 @@ EOF
 
     # result: file $bld now contains SQL script with 'UPDATE SESSTINGS' statements. We have to apply it.
 
-    run_isql="$fbc/isql $dbconn $dbauth -nod -i $bld"
+    run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
     display_intention "Adjusting SETTINGS table with config, step-2: apply temporary script" "$run_isql" "$log" "$err"
     echo Command: $run_isql
 
@@ -530,7 +530,7 @@ EOF
     ###############################################
     ### b u i l d i n g    D B    o b j e c t s ###
     ###############################################
-    run_isql="$fbc/isql $dbconn $dbauth -nod -i $bld"
+    run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
     display_intention "Build database: final phase." "$run_isql" "$log" "$err"
     $run_isql 1>>$log 2>$err
     catch_err $err "Could not finish build DB. Check script $bld"
@@ -675,7 +675,7 @@ show_db_and_test_params() {
 EOF
   fi
 
-  run_isql="$fbc/isql $dbconn $dbauth -i $tmp_show_sql -pag 99999999"
+  run_isql="$isql_name $dbconn $dbauth -i $tmp_show_sql -pag 99999999"
   display_intention "Check DB parameters, workload map and current test settings." "$run_isql" "$tmp_show_log" "$tmp_show_err"
   $run_isql 1>$tmp_show_log 2>$tmp_show_err
 
@@ -751,7 +751,7 @@ check_stoptest() {
   local tmpchk=$tmpdir/$pfx.sql
   local tmpclg=$tmpdir/$pfx.log
   local tmperr=$tmpdir/$pfx.err
-  local run_isql="$fbc/isql $dbconn -nod -n -i $tmpchk $dbauth"
+  local run_isql="$isql_name $dbconn -nod -n -i $tmpchk $dbauth"
 
   rm -f $tmpchk $tmpclg $tmperr
   echo set heading off\; set list on\;>>$tmpchk
@@ -830,7 +830,7 @@ upd_init_docs() {
   local tmpchk=$tmpdir/$pfx.sql
   local tmpclg=$tmpdir/$pfx.log
   local tmperr=$tmpdir/$pfx.err
-  local run_isql="$fbc/isql $dbconn -i $tmpchk -nod -n $dbauth"
+  local run_isql="$isql_name $dbconn -i $tmpchk -nod -n $dbauth"
   rm -f $tmpchk $tmpclg $tmperr
 
   # check that total number of docs (count from doc_list table) is LESS than $init_docs
@@ -905,7 +905,7 @@ prepare_before_adding_init_data() {
   local tmperr=$tmpdir/$pfx.err
   local run_fbs
   local fbspref
-  local run_isql="$fbc/isql $dbconn -i $tmpsql -q -nod -n $dbauth"
+  local run_isql="$isql_name $dbconn -i $tmpsql -q -nod -n $dbauth"
   
   if [[ $is_embed == 0 ]]; then
      fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
@@ -1962,7 +1962,7 @@ add_init_docs() {
       echo -ne "$(date +'%Y.%m.%d %H:%M:%S'), start service SPs... "
       # --------------- perform service: srv_make*_total, recalc index statistics -------------
       cat $tmpchk>>$tmplog
-      run_isql="$fbc/isql $dbconn -i $tmpchk -c $init_buff -n $dbauth"
+      run_isql="$isql_name $dbconn -i $tmpchk -c $init_buff -n $dbauth"
 
       $run_isql 1>$tmplog 2>$tmperr
       chk4crash "$run_isql" "$tmperr" "$log4all"
@@ -1975,7 +1975,7 @@ add_init_docs() {
     # Common application unit: create several documents
     # using .sql which was made in func gen_working_sql
     ###################################################
-    run_isql="$fbc/isql $dbconn -i $tmpsql -c $init_buff -n $dbauth"
+    run_isql="$isql_name $dbconn -i $tmpsql -c $init_buff -n $dbauth"
 
     $run_isql 1>$tmplog 2>$tmperr
     chk4crash "$run_isql" "$tmperr" "$log4all"
@@ -2001,7 +2001,7 @@ add_init_docs() {
 		select gen_id( g_init_pop, 0 ) as "new_docs=" from rdb$database;
 		set list off;
 	EOF
-    run_isql="$fbc/isql $dbconn -pag 0 -i $tmpchk -n $dbauth"
+    run_isql="$isql_name $dbconn -pag 0 -i $tmpchk -n $dbauth"
 
     $run_isql 1>$tmpclg 2>$tmperr
     chk4crash "$run_isql" "$tmperr" "$log4all"
@@ -2103,7 +2103,7 @@ launch_preparing() {
   local tmpchk=$tmpdir/$prf.sql
   local tmpclg=$tmpdir/$prf.log
   local tmperr=$tmpdir/$prf.err
-  local run_isql="$fbc/isql $dbconn -i $tmpchk $dbauth"
+  local run_isql="$isql_name $dbconn -i $tmpchk $dbauth"
   
   rm -f $tmpchk $tmpclg
   echo Add record for checking work to be stopped on timeout.
@@ -2212,7 +2212,7 @@ gen_temp_sh_for_stop()
 	    # ISQL sessions or use Firebird monitoring tables.
 	    # --------------------------------------------------------------------------------
 	    echo \$(date +'%Y.%m.%d %H:%M:%S'). Running command to stop all working ISQL sessions:
-	    echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $fbc/isql $dbconn $dbauth -q -n -nod
+	    echo -e "show sequ g_stop_test; alter sequence g_stop_test restart with -999999999; commit; show sequ g_stop_test;" | $isql_name $dbconn $dbauth -q -n -nod
 	    echo \$(date +'%Y.%m.%d %H:%M:%S') Done.
 	EOF
 	chmod +x $tmpsh4stop
@@ -2285,7 +2285,6 @@ rm -f $log4all
 ##########################################
 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
-echo -ne "Check that all necessary environment variables have values. . . "
 
 # Use command:
 # sed -e 's/^[ \t]*//' ./oltp25_config.nix  | grep "^[^#;]" | sort | awk '{print $1}'
@@ -2329,7 +2328,6 @@ vars=(
     unit_selection_method
     update_conflict_percent
     used_in_replication
-    use_mtee
     usr
     wait_after_create
     wait_for_copy
@@ -2342,6 +2340,17 @@ for i in ${vars[@]}; do
   #echo -e param: $i, value: \|${!i}\|
   [[ -z ${!i} ]] && msg_novar $i $cfg && exit 1
 done
+
+if [ "$clu" != "" ]; then
+    # Name of ISQL on Ubuntu/Debian when FB is installed from OS repository
+    # 'isql-fb' etc:
+    echo Config contains custom name of command-line utility for interact with Firebird.
+    echo Parameter: \'clu\', value: \|$clu\|
+else
+    echo Using standard name of command-line utility for interact with Firebird: 'isql'
+    clu=isql
+fi
+isql_name=$fbc/$clu
 
 dbdir=$(dirname "${dbnm}")
 
@@ -2447,7 +2456,7 @@ fi
 # fi << old pos for  $sleep_max -gt 0
 
 
-vars=(isql fbsvcmgr)
+vars=($clu fbsvcmgr)
 echo -ne "Check that all necessary Firebird console utilities exist in directory '$fbc'. . . "
 for i in ${vars[@]}; do
   if [ ! -f "$fbc/${i}" ]
@@ -2459,6 +2468,7 @@ for i in ${vars[@]}; do
   #[[ -f $fbc/${i} ]] || msg_nofile
 done
 echo Ok.
+
 
 mkdir -p $tmpdir/sql 2>/dev/null
 
@@ -2575,7 +2585,7 @@ cat <<-EOF >>$tmpchk
     -- #select current_timestamp || ' - point after clear connections pool' as msg from rdb\$database;
 EOF
 
-run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
+run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
 display_intention "Check whether DB is avaliable and has all needed objects." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 
@@ -2698,7 +2708,7 @@ EOF
 #   -CONNECTIONS
 # ==
 
-run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
+run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
 display_intention "Check whether this FB has support connections pool." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 
@@ -2738,7 +2748,7 @@ cat <<-"EOF" >>$tmpchk
     set list off;
 EOF
 
-run_isql="$fbc/isql $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
+run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
 
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Table SETTINGS was not synchronized with current config values."
@@ -2752,12 +2762,12 @@ grep -i "msg " $tmpclg
 # Use file: $shdir/oltp_adjust_DDL.sql
 # 1. GENERATE temporary script "$tmpadj" which will contain dynamically generated DDL statements
 #    for PERF_SPLIT_nn tables
-run_isql="$fbc/isql $dbconn -q -nod -n -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
+run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
 $run_isql 1>$tmpadj 2>$tmperr
 catch_err $tmperr "Could not generate SQL script for change DDL of some DB objects."
 
 # 2. APPLY temporary script "$tmpadj" which contains dynamic DDL.
-run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $tmpadj"
+run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpadj"
 display_intention "Update DDL to current value of 'separate_workers' config parameter." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects remains unchanged. Check script $tmpadj"
@@ -2776,7 +2786,7 @@ catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects 
 # Script oltp_replication_DDL.sql has query to table SETTINGS with WHERE-expr: mcode='CONNECT_STR' for obtaining
 # proper connection string to currently used database (see letters to dimitr et al, 01.11.2018, box pz@ibase.ru).
 
-run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $shdir/oltp_replication_DDL.sql"
+run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $shdir/oltp_replication_DDL.sql"
 display_intention "Update DDL to 'used_in_replication' parameter: step-1: generate temporary DDL." "$run_isql" "$tmpa4r" "$tmperr"
 $run_isql 1>$tmpa4r 2>$tmperr
 catch_err $tmperr "Could not generate SQL for change indices according to 'used_in_replication' config parameter."
@@ -2784,7 +2794,7 @@ catch_err $tmperr "Could not generate SQL for change indices according to 'used_
 # 4debug4debug4debug
 # echo -e "SHOW DATABASE;">>$tmpa4r
 
-run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $tmpa4r"
+run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpa4r"
 display_intention "Update DDL to 'used_in_replication' parameter, step-2: apply generated DDL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Could not update DDL according to current value of 'used_in_replication' parameter. Check STDERR log $tmperr"
@@ -2814,7 +2824,7 @@ if [ -s "$sleep_ddl" ]; then
         #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
         #:::   d e c l a r e      e x t e r n a l     S l e e p  U D F   :::
         #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-        run_isql="$fbc/isql $dbconn -q -nod -c 256 $dbauth -i $sleep_ddl"
+        run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $sleep_ddl"
         display_intention "Attempt to apply SQL script '$sleep_ddl' that defines UDF for pauses in execution." "$run_isql" "$tmpclg" "$tmperr"
         $run_isql 1>$tmpclg 2>$tmperr
         catch_err $tmperr "Could not create/update UDF for sleep. Check file $sleep_ddl"
@@ -3001,7 +3011,7 @@ if [ -n "$file_name_with_test_params" ]; then
 		select report_file from srv_get_report_name('$file_name_with_test_params', '$fbb', $winq, $test_time);
 		set heading on;
 	EOF
-  run_isql="$fbc/isql $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
+  run_isql="$isql_name $dbconn -i $tmpchk -q -nod -n -c 256 $dbauth"
   $run_isql 1>$tmpclg 2>$tmperr
 
   log_with_params_in_name=`grep -v "^$" $tmpclg | sed 's/[ \t]*$//'`
@@ -3037,7 +3047,7 @@ if [ 0 -eq 1 ]; then
     echo "./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info AMP"
     pause ... :::DEBUG::: stop_before_launch_single_isql...
 
-    ./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info
+    bash ./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info
 
     echo +++DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+++
     exit

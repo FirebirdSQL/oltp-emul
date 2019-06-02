@@ -52,7 +52,10 @@ In case of any questions feel free to contact: p519446@yandex.ru
    Open just created copy of configuration file and change settings to be suitable for you.
    Pay attention on following settings:
 
-   * 'fbc' - path to isql executable and client library on the host where you will launch ISQL sessions
+   * 'fbc' - path to isql executable on the host where you will launch ISQL sessions.
+
+   *  'clu' - optional parameter that defines 'non-standard' name of binary ISQL: 'isql-fb' or so.
+     (actual for installation from POSIX repository when ISQL is renamed to different name).
 
    * 'dbnm' - path and name of database file on server host. Batch scenario (1run_oltp_emul.bat/.sh) can 
       create the database file if you specify it using full path and name of file, but not as existing alias.
@@ -75,6 +78,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
       Name of SHELL command depends on OS: it will be cscript.exe + .vbs on Windows or 'sleep' command on POSIX, but in any
       case this will add more workload on operating system when bulk of ISQL sessions are in work.
       It is recommended to use UDF invocation for making pauses, and you can use your own UDF or provided by this test.
+
       The latter is stored in compressed binary:
         Windows: .\util\udf64\SleepUDF.dll.zip 
         POSIX: ./util/udf64/SleepUDF.so.bz2. 
@@ -111,8 +115,9 @@ In case of any questions feel free to contact: p519446@yandex.ru
    * LockHashSlots and 
    * LockMemSize
 
-   It is NEEDED explicitly to specify parameter FileSystemCacheThreshold so that it will be greater than DefaultDBCachePages.
-   Test does not accept firebird.conf with missed or commented value of this parameter.
+   It is needed to EXPLICITLY SPECIFY parameter FileSystemCacheThreshold so that it will be greater than DefaultDBCachePages.
+   Test does not accept firebird.conf with missed or commented value of this parameter (this does not relate to FB instance
+   which was originated from POSIX repository and has actual home folder differs from parent one for parameter 'fbc').
 
    Parameter DefaultDBCachePages must have value that leads total size of page cache be equal ~25% of total physical memory.
    Do NOT assign to DefaultDBCachePages values more than 2048 if you plan test Classic Server or SuperClassic.

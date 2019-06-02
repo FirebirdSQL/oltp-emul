@@ -1,11 +1,14 @@
-####################################################################
+##########################################################################################
 # OLTP-EMUL test for Firebird database - configuration parameters.
-# To get last version type following command:
-# git clone https://github.com/FirebirdSQL/oltp-emul .
-# This file is used for launching test and ISQL sessions on POSIX host
-# with running Firebird 2.5.
+# This config file is used for launching test and ISQL sessions
+# on POSIX host with running Firebird 2.5.
 # Parameters are extracted by '1run_oltp_emul.sh' command scenario.
-####################################################################
+#
+# To get last version of test use following command:
+#
+# git clone --config core.autocrlf=false https://github.com/FirebirdSQL/oltp-emul .
+#
+##########################################################################################
 
 #::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR START AND FINISH ISQL SESSIONS
@@ -14,11 +17,21 @@
     # Folder with Firebird console utilities (isql, fbsvcmgr).
     # Trailing backslash and double quotes are optional.
     # Allows referencing to existing OS environment variable by using dollar sign.
+    # Note that path to these utilities can differ from standard ('/opt/firebird/bin')
+    # when installing Firebird in OS repository. For Ubuntu/Debian it is: '/usr/bin'.
     # Samples:
+    # fbc = /opt/firebird/bin
+    # fbc = /usr/bin
     # fbc = $FB25_HOME/bin
-    # fbc = /opt/fb25/bin
     #
-    fbc  = /opt/firebird/bin
+    fbc = /opt/firebird/bin
+
+    # POSIX only, optional: command-line utility for operate as ISQL.
+    # Actual for builds from OS repository, e.g. 'isql-fb' for Firebird in Ubuntu/Debian.
+    # Full name of this utility will be evaluated as concatenation of $fbc and $clu values.
+    # Value 'isql' will be used if you leave this parameter commented.
+    #
+    # clu = isql
 
 
     # Alias or full path and file name of database.
@@ -34,7 +47,7 @@
 
     # Parameters for remote connection and authentication.
     # Will be ignored by command scenario if FB runs in embedded mode.
-
+    #
     host = localhost
     port = 3050
     usr =  SYSDBA
@@ -44,6 +57,7 @@
     # Folder where to store logs of STDOUT and STDERR redirection for each ISQL session.
     # Trailing backslash is optional.
     # Allows referencing to existing OS environment variable by using dollar sign.
+    # Firebird account must have 'r' and 'w' file permissions in this folder.
     # Samples:
     # tmpdir = /var/tmp/logs.oltp25_emul
     # tmpdir = $TMP/logs.oltp25
@@ -65,11 +79,50 @@
     # Recommended value: if_no_severe_errors
 
     remove_isql_logs = if_no_severe_errors
-    #remove_isql_logs = never
 
-#:::::::::::::::::::::::::::::::::::::::::::
+
+#::::::::::::::::::::::::::::
+#  SETTINGS FOR TEST DURATION
+#::::::::::::::::::::::::::::
+
+    # Number of minutes since test launch for which evaluation of performance score is omited because database is 'cold' (not in cache).
+    # Means the same as 'ramp-up' period in TPC-C specification: we have to allow all sessions to establish  attachments and read some
+    # data into Firebird page cache.
+    # Recommended value: DBSize_Gb/2, where DBSize_Gb is size of database in Gb, but not less than 30 minutes.
+    # You can estimate whether value of this parameter is apropriate if run test for 2-3 hours and look after its finish in report 
+    # "Performance per minute". Performance counter at the end of <warm_time> period must be close to values for subsequent 20-30 minutes.
+    # See also TPC-C specification rev 5.11:
+    # * 5.6.4 (page 78) - graphical explanation of ramp-up period;
+    # * Appendix C (page 132) - numerical quantities summary.
+    #
+    warm_time = 30
+
+
+    # Duration of main test phase which starts after 'ramp-up'. Means the same as 'measurement interval' in TPC-C specification.
+    # Overall performance score is evaluated as total number of successfully completed transactions during this phase divided by <test_time>.
+    # At the end of this phase test will stop itself, i.e. you do not have to interrupt ISQL sessions.
+    # Note that TPC-C requires minimum 120 minutes for this phase, but your system must allows to run test during 480 minutes - and this
+    # value does not include <warm_time> phase (see TPC-C rev 5.1, 5.5.2.1, page 75).
+    # ATTENTION. Reports and performance score for test_time less than 120 minutes must be considered as unreliable (doubtful).
+    # Recommended value: at least 180.
+    #
+    test_time = 180
+
+
+#:::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR REPLICATION, WORKLOAD LEVEL AND PAUSES
-#:::::::::::::::::::::::::::::::::::::::::::
+#:::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+
+    # Test schema was developed with main goal to provide fastest performance. This required to remove all unneccessary indices.
+    # There are several tables which have *no* requirement to be supplied with primary keys (though they have another constraints).
+    # But they must be provided with PK if test database will serve as 'master' in your replication schema.
+    # Assign value of following parameter to 1 in order all necessary changes (primary keys and triggers for some tables) be added.
+    # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
+    # This parameter can be changed 'on the fly': database recreation is NOT required, but changes will be applied not instantly
+    # in case when database has valuable size.
+    #
+    used_in_replication = 0
 
 
     # Test has several settings that define how much work should be done by each business action in average.
@@ -184,17 +237,6 @@
     recalc_idx_min_interval = 0
 
 
-    # If you plan this database work in replication process, one need to add PK constraints 
-    # to all persistent tables that can be changed during test work.
-    # Assign value of following parameter to 1 in order all necessary changes be added to tables DDL
-    # (primary keys and triggers for some of tables).
-    # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
-    # This parameter can be changed 'on the fly': database recreation is NOT required, but in case
-    # when database has valuable size, changes will be applied not instantly.
-    #
-    used_in_replication = 0
-
-
 #:::::::::::::::::::::::::::::::::::
 # SETTINGS RELATED TO LOCK CONFLICTS
 #:::::::::::::::::::::::::::::::::::
@@ -279,22 +321,6 @@
     mon_query_interval = 60
 
 
-    # Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
-    # 'CK' -- halt if CHECK violation or 'not_valid' occurs (mostly this can be due to negative stock remainders)
-    # 'PK' -- halt if PK or UK violation occurs
-    # 'FK' -- halt if FK violation occurs // now n/a because test does not use foreign keys.
-    # 'ST' -- halt if exc #335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
-    # These mnemonics can be combined in list, i.e.: 'CK/PK/FK' - halt if CHECK or PK or FK violation occurs
-    # Default: '/CK/' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
-    # 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
-    # but it is due to UNDEFINED order of UNDO when some Tx must perform bulk of such work.
-    # Detailed investigation:
-    # sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
-    # (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
-    #
-    halt_test_on_errors = /CK/
-     
-
     # How stock remainders should be verified BEFORE totalling will occur in sp_make_invnt_saldo
     # (declarative CHECK constraint on qty_xxx >= 0  should NOT ever be fired in this test!):
     # bit#0 := 1 ==> perform calls of SRV_FIND_QD_QS_MISM in doc_list_aiud in order
@@ -327,42 +353,24 @@
 
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-#  SETTINGS FOR TEST DURATION AND PREMATURE WORK CANCELLATION
+#  SETTINGS TO FORCEDLY TERMINATE OF WORK BEFORE THE DUE TIME
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-    # Number of minutes since test launch for which evaluation of performance score is omited because database is 'cold' (not in cache).
-    # Means the same as 'ramp-up' period in TPC-C specification: we have to allow all sessions to establish  attachments and read some
-    # data into Firebird page cache.
-    # Recommended value: DBSize_Gb/2, where DBSize_Gb is size of database in Gb, but not less than 30 minutes.
-    # You can estimate whether value of this parameter is apropriate if run test for 2-3 hours and look after its finish in report 
-    # "Performance per minute". Performance counter at the end of <warm_time> period must be close to values for subsequent 20-30 minutes.
-    # See also TPC-C specification rev 5.11:
-    # * 5.6.4 (page 78) - graphical explanation of ramp-up period;
-    # * Appendix C (page 132) - numerical quantities summary.
+    # Mnemonics of exceptions which forces test to be stopped (see calls of fn_halt_sign(gdscode)):
+    # 'CK' -- halt if CHECK violation or 'not_valid' occurs (mostly this can be due to negative stock remainders)
+    # 'PK' -- halt if PK or UK violation occurs
+    # 'FK' -- halt if FK violation occurs // now n/a because test does not use foreign keys.
+    # 'ST' -- halt if exc #335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
+    # These mnemonics can be combined in list, i.e.: 'CK/PK/FK' - halt if CHECK or PK or FK violation occurs
+    # Default: '/CK/' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
+    # 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
+    # but it is due to UNDEFINED order of UNDO when some Tx must perform bulk of such work.
+    # Detailed investigation:
+    # sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
+    # (EXPLANATION by dimitr see in e-mail, letters date = 12.02.2015)
     #
-    warm_time = 30
-
-
-    # Duration of main test phase which starts after 'ramp-up'. Means the same as 'measurement interval' in TPC-C specification.
-    # Overall performance score is evaluated as total number of successfully completed transactions during this phase divided by <test_time>.
-    # At the end of this phase test will stop itself, i.e. you do not have to interrupt ISQL sessions.
-    # Note that TPC-C requires minimum 120 minutes for this phase, but your system must allows to run test during 480 minutes - and this
-    # value does not include <warm_time> phase (see TPC-C rev 5.1, 5.5.2.1, page 75).
-    # ATTENTION. Reports and performance score for test_time less than 120 minutes must be considered as unreliable (doubtful).
-    # Recommended value: at least 180.
-    #
-    test_time = 180
-
-
-    # Number of intervals for splitting 'test_time' for "Performance in DYNAMIC" report which shows how performance did change in time.
-    # NOTE. This report can be used only for quick and rough estimation only because it always will show small number of data.
-    # Precise performance score will be show in "Performance per minute" report.
-    # NOTE: TPC-C (rev 5.11, 5.6.4, page 78) requires that at least 240 intervals with maximum size 30 seconds will be used for such purpose.
-    # If you want to see such detailed data then assign <test_intervals> = 2 * <test_time>, but much useful is report "Performance per minute".
-    # Do not set this parameter value less than 30.
-    #
-    test_intervals = 30
-
+    halt_test_on_errors = /CK/
+     
 
     # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
     # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
@@ -393,13 +401,12 @@
     # use_external_to_stop = stoptest.txt
 
 
-
 #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR DATABASE CREATION PROCESS AND INITIAL DATA FILLING 
 #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # *** NOTE *** 
-    # These settings are ignored when DB already exist and has required number of documents.
+    # These settings are ignored when DB already exists and has required number of documents.
 
     # Following two settings actual only when database does not exist 
     # and should be created by test script itself.
@@ -409,7 +416,7 @@
     # RECOMMENDED value for create_with_sweep is 0 (zero).
     # Remember that sweep interval greater than 0 can lead to unpredictable affect on performance, especially for short test duration.
     #
-    create_with_fw = async
+    create_with_fw = sync
   
     create_with_sweep = 0
 
@@ -528,6 +535,16 @@
 #  SETTINGS FOR SCHEDULED-BASIS JOB AND TEST REPORT
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+    # Number of intervals for splitting 'test_time' for "Performance in DYNAMIC" report which shows how performance did change in time.
+    # NOTE. This report can be used only for quick and rough estimation only because it always will show small number of data.
+    # Precise performance score will be show in "Performance per minute" report.
+    # NOTE: TPC-C (rev 5.11, 5.6.4, page 78) requires that at least 240 intervals with maximum size 30 seconds will be used for such purpose.
+    # If you want to see such detailed data then assign <test_intervals> = 2 * <test_time>, but much useful is report "Performance per minute".
+    # Do not set this parameter value less than 30.
+    #
+    test_intervals = 30
+
+
     # Windows only. Not implemented for Linux, will be ignored at runtime.
     # Total number of downloaded snapshots for storing in the folder !tmpdir!\snapshots_archive.
     # Batch scenario will keep in this folder only newest snapshots and remove old ones.
@@ -609,12 +626,6 @@
 #::::::::::::::::::::::::::::::::::::::::::::
 #  EXOTIC SETTINGS (USAGE WAS NOT CHECKED)
 #::::::::::::::::::::::::::::::::::::::::::::
-
-    # Do we use mtee.exe utility to provide timestamps for error messages 
-    # before they are logged in .err files (1=yes, 0=no) ?
-    # Windows only. Not implemented for Linux, will be ignored at runtime.
-    #
-    use_mtee = 0
 
     # Does Firebird running in embedded mode ? (1=yes, 0=no)
     #
