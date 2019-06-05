@@ -468,7 +468,7 @@ if errorlevel 1 (
     if .%build_was_cancelled%.==.0. (
         for /f "usebackq tokens=*" %%a in ('%tmperr%') do set size=%%~za
         if .!size!.==.. set size=0
-        if !size!% gtr 0 (
+        if !size! gtr 0 (
             set db_build_finished_ok=0
         ) else (
             @rem Database DOES exist and ONLINE, no errors raised before, but we still have to ensure that ALL objects 
