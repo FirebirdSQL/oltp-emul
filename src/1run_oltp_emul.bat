@@ -216,7 +216,8 @@ set varlist=!varlist!^
 ,wait_for_copy^
 ,wait_if_not_exists^
 ,warm_time^
-,working_mode
+,working_mode^
+,actions_todo_before_reconnect
 
 for %%v in (%varlist%) do (
     if "!%%v!"=="" (
@@ -814,12 +815,13 @@ if .%skipGenSQL%.==.0. (
     @rem Generating script to be used by working isqls.
     @rem ##################################################
     if /i .!unit_selection_method!.==.random. (
-        set /a jobs_count=300
+        @rem recommended value for config parameter 'actions_todo_before_reconnect': 300.
+        set /a jobs_count=%actions_todo_before_reconnect%
     ) else (
         call :sho "Determine number of business calls for unit_selection_method=!unit_selection_method!" %log4tmp%
         (
             echo set list on; 
-            echo select cast( maxvalue( ceiling(1 + 300.00 / count(*^)^), 1 ^) * count(*^) as int ^) as jobs_count from business_ops;
+            echo select cast( maxvalue( ceiling(1 + %actions_todo_before_reconnect% / count(*^)^), 1 ^) * count(*^) as int ^) as jobs_count from business_ops;
         ) >%tmpsql%
 
         set isql_exe=%fbc%\isql
@@ -842,13 +844,10 @@ if .%skipGenSQL%.==.0. (
     @rem                      1               2              3                 4                 5           6                       7           8           9
     @rem ##########################################################################################################################################################
 
-    if !jobs_count! LEQ 3 (
-        echo DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG
-        echo restore normal value for jobs_count
-        exit
-    )
-
 )
+
+echo iiiiii
+exit
 
 if not exist %tmp_run_test_sql% goto no_script
 

@@ -2081,15 +2081,16 @@ launch_preparing() {
     # Generating script to be used by working isqls.
     # ##########################################################################
     if [ 1 -eq 1 ]; then
-        gen_working_sql run_test $tmpsql 300 $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
-        #                  1        2      3         4            5            6           7        8          9
+        # NB: recommended value for actions_todo_before_reconnect: 300
+        gen_working_sql run_test $tmpsql $actions_todo_before_reconnect $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
+        #                  1        2                 3                      4              5            6           7        8          9
     else
-        gen_working_sql run_test $tmpsql  19  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
-        #                  1        2      3         4            5            6           7        8          9
+        gen_working_sql run_test $tmpsql  1  $no_auto_undo $detailed_info $sleep_min $sleep_max $sleep_udf $sleep_mul
+        #                  1        2     3         4            5            6           7        8          9
         echo
         echo DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG
         echo Routine: $FUNCNAME
-        echo RETURN INITIAL NUMBER OF EXEC BLOCKS TO 300. IT WAS CHANGED FOR DEBUG PURPOSES. PRESS ANY KEY...
+        echo RETURN INITIAL NUMBER OF EXEC BLOCKS TO $actions_todo_before_reconnect. IT WAS CHANGED FOR DEBUG PURPOSES. PRESS ANY KEY...
         echo
         pause Press any key...
         exit
@@ -2328,12 +2329,14 @@ vars=(
     unit_selection_method
     update_conflict_percent
     used_in_replication
+    use_mtee
     usr
     wait_after_create
     wait_for_copy
     wait_if_not_exists
     warm_time
     working_mode
+    actions_todo_before_reconnect
 )
 
 for i in ${vars[@]}; do
@@ -2444,7 +2447,6 @@ if [ -s "$sleep_ddl" ]; then
         else
             echo
             echo Parsed UDF for pauses, its name: \'$sleep_udf\'
-            echo $sleep_udf.
         fi
 else
         echo
@@ -2530,7 +2532,8 @@ cat <<-EOF >>$tmpchk
     set heading off;
     set list on;
     set bail on;
-    -- This sequence serves as 'stop-flag' for every ISQL attachment:
+    -- This sequence serves as 'stop-flag' for every ISQL attachment.
+    -- Also here we check that database is not in read_only mode.
     alter sequence g_stop_test restart with 0;
     commit;
     -- Now we have to:
@@ -2545,44 +2548,6 @@ cat <<-EOF >>$tmpchk
 		        'some_dbo_absent'
 	    ) as "build_result="
     from rdb\$database;
-
-    -- Check that database is not in read_only mode.
-    -- Also we check here that Firebird account has enough rights to WRITE into GTT files.
-    -- These files are created in the folder that is defined by 1st existent variable:
-    -- 1) FIREBIRD_TMP;
-    -- 2.1) (Windows): TEMP, TMP, USERPROFILE, Windows directory - see Windows API function GetTempPath:
-    --      https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-gettemppatha
-    -- 2.2) (POSIX) /tmp
-    -- When Firebird process has no rights to that directory, test will fail with message:
-    -- #####################################################
-    -- Statement failed, SQLSTATE = 08001
-    -- I/O error during "open O_CREAT" operation for file ""
-    -- -Error while trying to create file
-    -- -No such file or directory
-    -- #####################################################
-    -- See also:
-    -- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1176238&msg=18172438
-    recreate GLOBAL TEMPORARY table tmp\$$rndname(id int, s varchar(36) unique using index tmp_s_unq_$rndname );
-    commit;
-    set count on;
-    insert into tmp\$$rndname(id, s) select rand()*1000, uuid_to_char(gen_uuid()) from rdb\$types;
-    set list on;
-    select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
-    commit;
-    drop table tmp\$$rndname;
-    -- At this point one may be sure that FB really has enough rights to create files for GTT data.
-    commit;
-    quit;
-
-    -- # 22.12.2018 removed from here, will be done in separate .sql after DB repbuild!
-    -- #set bail off;
-    -- #set heading off;
-    -- #set list off;
-    -- #select current_timestamp || ' - point before clear connections pool' as msg from rdb\$database;
-    -- #set echo on;
-    -- #ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-    -- #set echo off;
-    -- #select current_timestamp || ' - point after clear connections pool' as msg from rdb\$database;
 EOF
 
 run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
@@ -2591,11 +2556,11 @@ $run_isql 1>$tmpclg 2>$tmperr
 
 if grep -q -i "Permission denied" $tmperr; then
 	cat <<- EOF
-		#######################################################################
-		DBMS account ('firebird') does no have sufficient rights to open file that
+		#########################################################################
+		DBMS account ('firebird') has no sufficient rights to open file that
 		is specified by config parameter 'dbnm' (read/write access is required):
 		$dbnm
-		#######################################################################
+		#########################################################################
 		
 		Content of STDERR file '$tmperr':
 	EOF
@@ -2612,6 +2577,7 @@ fi
 rebuild_was_invoked=0
 
 #if  grep -q -i "SQLSTATE = 08001" $tmperr  grep -q -i "Error while trying to open" $tmperr; then
+
 
 if grep -q -i "Error while trying to open" $tmperr; then
  
@@ -2636,13 +2602,13 @@ else
 
     badmsg=$(grep -i "Is a directory\|unavailable database\|not a valid\|unsupported on-disk\|read-only\|shutdown" $tmperr | wc -l)
 
-    [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database exists and online"
+    [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database EXISTS and its state is ONLINE."
 
     # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
     ########################################################################################################
     db_build_finished_ok=0
     if [ -s $tmperr ];then
-        echo Script that verifies finish of DB building process is NOT EMPTY.
+        echo Script that checks whether DB building process was completed without errors is NOT EMPTY.
         echo Name of script: $tmpclg
         echo Name of errlog: $tmperr
         cat $tmperr
@@ -2650,9 +2616,81 @@ else
         # open log and parse it as config with 'param = value' string:
         echo No errors detected when run $tmpchk
         echo Obtain results from its log $tmpclg
-        if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then    
+        if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then
             db_build_finished_ok=1
         fi
+
+	cat <<-EOF >$tmpchk
+		-- We check here that Firebird account has enough rights to WRITE into GTT files.
+		-- These files are created in the folder that is defined by 1st existent variable:
+		-- 1) FIREBIRD_TMP;
+		-- 2.1) (Windows): TEMP, TMP, USERPROFILE, Windows directory - see Windows API function GetTempPath:
+		--      https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-gettemppatha
+		-- 2.2) (POSIX) /tmp
+		--    Place where GTT data must be stored can be explicitly specified in a Firebird daemon starter script
+		--    by assigning some existing folder to variable FIREBIRD_TMP.
+		--    When OS loader 'systemd' is used then form of such variable assignment is:
+		--    Environment="FIREBIRD_TMP=/var/my_folder_for_gtt"
+		--    Name of Firebird loader script depends on mode in which DBMS will work, namely: is it Classic or others.
+		--    It can be found in the folder '/usr/lib/systemd/system/' (RH/CentOS) or '/lib/systemd/system/' (Ubuntu/Debian)
+		--    and has following name:
+		--    * xinetd.service - if Firebird works in Classic mode or
+		--    * firebird-superserver.service - if Firebird works in Super or SuperClassic mode.
+		-- ------------------------------------------------------------------------------------
+		-- When Firebird process has no rights to that directory, test will fail with message:
+		-- #####################################################
+		-- Statement failed, SQLSTATE = 08001
+		-- I/O error during "open O_CREAT" operation for file ""
+		-- -Error while trying to create file
+		-- -No such file or directory
+		-- #####################################################
+		-- See also:
+		-- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1176238&msg=18172438
+		set echo on;
+		set bail on;
+		recreate GLOBAL TEMPORARY table tmp\$$rndname(id int, s varchar(36) unique using index tmp_s_unq_$rndname );
+		commit;
+		set count on;
+		insert into tmp\$$rndname(id, s) select rand()*1000, uuid_to_char(gen_uuid()) from rdb\$types;
+		set list on;
+		select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
+		commit;
+		drop table tmp\$$rndname;
+		set echo off;
+		-- At this point one may be sure that FB really has enough rights to create files for GTT data.
+		commit;
+		quit;
+	EOF
+	run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
+	display_intention "Check whether DBMS account has enough rights to folder where GTT data will be stored." "$run_isql" "$tmpclg" "$tmperr"
+	$run_isql 1>$tmpclg 2>$tmperr
+	if [ -s $tmperr ];then
+		cat <<- EOF
+		##########################################################################
+		DBMS account ('firebird') has no sufficient rights to read/write into GTT.
+		Check that folder defined by variable FIREBIRD_TMP actually exists and can
+		be accessed by 'firebird' account. If no such variable was defined then
+		check rights to the system folder /tmp.
+		##########################################################################
+		
+		EOF
+		echo Content of .SQL script '$tmpchk':
+		grep . $tmpchk
+		echo
+		echo Content of STDOUT file '$tmpclg':
+		grep . $tmpclg
+		echo
+		echo Content of STDERR file '$tmperr':
+		grep . $tmperr
+		echo
+		pause Press any key to FINISH this script. . .
+		exit 1
+	else
+		echo All fine: no errors. Check STDOUT:
+		echo ==================================
+		grep . $tmpclg
+		echo ==================================
+	fi
     fi
 
     echo db_build_finished_ok=\|$db_build_finished_ok\|

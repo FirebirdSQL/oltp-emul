@@ -141,6 +141,17 @@
     #
     working_mode = small_03
 
+    # This parameter defines volume of work that will be done by each ISQL before it will detach from database
+    # and create new attach again. Normally in a production system frequency of reconnections must be low.
+    # Rather, each connection must do as much work as possible. Unfortunately, when ISQL does its work by executing
+    # script, one can not to check log of errors which occured during this execution. Some errors can require test
+    # to be prematurely stopped (e.g. if FB process crashed and it was reflected in firebird.log). But each session
+    # can found this only when ISQL finished. This mean that value of following parameter must belong to reasonable scope.
+    # For some (exotic) purpoces when it is needed to increase frequency of reconnections one may to set it to 5...50.
+    # Recommended value: 300
+    #
+    actions_todo_before_reconnect = 300
+
 
     # Maximal number connections per second (max allowed rate of new attachments appearance for making workload grow smoothly).
     # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
