@@ -846,9 +846,6 @@ if .%skipGenSQL%.==.0. (
 
 )
 
-echo iiiiii
-exit
-
 if not exist %tmp_run_test_sql% goto no_script
 
 del %tmpdir%\%logbase%*.log 2>nul
