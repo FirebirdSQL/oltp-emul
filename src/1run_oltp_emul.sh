@@ -13,20 +13,26 @@ sho() {
 }
 
 display_intention() {
-  local msg=$1
-  local run_cmd=$2
-  local std_log=$3
-  local std_err=${4:-"UNDEFINED"}
+    local msg=$1
+    local run_cmd=$2
+    local std_log=$3
+    local std_err=${4:-"UNDEFINED"}
+    echo
+    sho "$msg" $log4all
 cat <<- EOF
-
-$msg
-RUNCMD: $run_cmd
-STDOUT: $std_log
-STDERR: $std_err
+	RUNCMD: $run_cmd
+	STDOUT: $std_log
+	STDERR: $std_err
+EOF
+cat <<- EOF ->>$log4all
+	RUNCMD: $run_cmd
+	STDOUT: $std_log
+	STDERR: $std_err
 EOF
 }
 
 log_elapsed_time() {
+  # 4 debug only
   local s1=$s1
   local plog=$2
   sleep 4
@@ -64,24 +70,25 @@ catch_err() {
   local quit_if_error=${3:-1}
   if [ -s $tmperr ];then
     echo
-    #echo -e "$(date +'%Y.%m.%d %H:%M:%S'). Routine '$FUNCNAME': start."
-    echo Error log $tmperr is NOT EMPTY!
+    sho "Error log $tmperr is NOT EMPTY." $log4all
     echo ...............................
     cat $tmperr | sed -e 's/^/    /'
+    cat $tmperr | sed -e 's/^/    /' >>$log4all
     echo ...............................
     if [ ! -z "$addnfo" ]; then
         echo
         echo Additional info / advice:
         echo $addnfo
+        echo $addnfo >>$log4all
         echo
     fi
-    #echo -e "$(date +'%Y.%m.%d %H:%M:%S'). Routine '$FUNCNAME': finish."
+
     if [ $quit_if_error -eq 1 ]; then
-        echo Script is terminated.
+        sho "Script is terminated." $log4all
         exit 1
     fi
   else
-	echo Result: SUCCESS.
+	sho "Result: SUCCESS." $log4all
   fi
 }
 
@@ -191,7 +198,8 @@ chk4crash() {
 
 db_create() {
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
+
   local tmperr=$tmpdir/tmp_create_dbnm.err
   local tmpsql=$tmpdir/tmp_create_dbnm.sql
   local tmplog=$tmpdir/tmp_create_dbnm.log
@@ -260,7 +268,7 @@ db_create() {
   echo ---------------------------
   cat $tmplog
   echo ---------------------------
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: finish." $log4all
   echo
 
   rm -f $tmperr $tmpsql $tmplog
@@ -271,13 +279,17 @@ db_create() {
 
 inject_actual_setting()
 {
-  # 14.09.2018
+  echo
+  sho "Routine $FUNCNAME: start." $log4all
 
-  local fb=$1
-  local a_working_mode=$2
-  local a_mcode=$3
-  local new_value=$4
-  local allow_insert_if_eof=${5:-0}
+  local tmpsql=$1
+  local fb=$2
+  local a_working_mode=$3
+  local a_mcode=$4
+  local new_value=$5
+  local allow_insert_if_eof=${6:-0}
+
+  sho "Generating code to update parameter $a_mcode with value $new_value, allow_insert_if_eof=$allow_insert_if_eof" $log4all
 
   # inject_actual_setting $fb common enable_mon_query '$mon_unit_perf'
   #                        1     2          3                4
@@ -294,13 +306,13 @@ inject_actual_setting()
   # CONSTRAINT SETTINGS_UNQ:
   #   Unique key (WORKING_MODE, MCODE) uses explicit ascending index SETTINGS_MODE_CODE
   
-	cat <<- EOF
+	cat <<- EOF >>$tmpsql
         -- Update table SETTINGS with actual value of config parameter '$a_mcode':
         -- ::: NB ::: When test is launched from several hosts this DML can fail
         -- with update conflict or "deadlock" exception, so we have to suppress it:
 	EOF
 	if [ $allow_insert_if_eof -eq 0 ]; then
-		cat <<- EOF
+		cat <<- EOF >>$tmpsql
 		        begin
 		            update settings set svalue = $new_value
 		            where working_mode = upper( '$a_working_mode' ) and mcode = upper( '$a_mcode' );
@@ -308,12 +320,12 @@ inject_actual_setting()
 		        	     exception ex_record_not_found
 		EOF
                 if [ $fb != 25 ]; then
-		    echo -e "            using ( 'settings', 'working_mode = upper( ''$a_working_mode'' ) and mcode = upper( ''$a_mcode'' )'  );"
+		    echo -e "            using ( 'settings', 'working_mode = upper( ''$a_working_mode'' ) and mcode = upper( ''$a_mcode'' )'  );" >>$tmpsql
                 else
-		    echo -e "            ;"
+		    echo -e "            ;" >>$tmpsql
 		fi
 	else
-		cat <<- EOF
+		cat <<- EOF >>$tmpsql
 		        begin
 		            update or insert into settings(working_mode, mcode, svalue)
 		            values( upper( '$a_working_mode' ), upper( '$a_mcode' ),  $new_value)
@@ -321,13 +333,15 @@ inject_actual_setting()
 		EOF
 	fi
 
-	cat <<- EOF
+	cat <<- EOF >>$tmpsql
         when any do
             begin
                if ( gdscode NOT in (335544345, 335544878, 335544336,335544451 ) ) then exception;
             end
         end
 	EOF
+
+  sho "Routine $FUNCNAME: finish." $log4all
 
 } 
 # end of inject_actual_setting
@@ -336,6 +350,9 @@ inject_actual_setting()
 
 sync_settings_with_conf()
 {
+  echo
+  sho "Routine $FUNCNAME: start." $log4all
+
   local fb=$1
   local tmpsql=$2
 cat <<-EOF >>$tmpsql
@@ -350,53 +367,53 @@ cat <<-EOF >>$tmpsql
 EOF
 
 
-inject_actual_setting $fb init working_mode upper\(\'$working_mode\'\)  >>$tmpsql
-inject_actual_setting $fb common enable_mon_query \'$mon_unit_perf\'  >>$tmpsql
-inject_actual_setting $fb common unit_selection_method \'$unit_selection_method\' >>$tmpsql
+inject_actual_setting $tmpsql $fb init working_mode upper\(\'$working_mode\'\)
+inject_actual_setting $tmpsql $fb common enable_mon_query \'$mon_unit_perf\'
+inject_actual_setting $tmpsql $fb common unit_selection_method \'$unit_selection_method\'
 if echo "$working_mode" | grep -q -i "debug_01\|debug_02"; then
     # 20.08.2018: move here from oltp_main_filling.sql.
     # For DEBUG modes we turn off complex logic related to adding invoices:
-    inject_actual_setting $fb common enable_reserves_when_add_invoice \'0\'  >>$tmpsql
-    inject_actual_setting $fb common order_for_our_firm_percent \'0\' >>$tmpsql
+    inject_actual_setting $tmpsql $fb common enable_reserves_when_add_invoice \'0\'
+    inject_actual_setting $tmpsql $fb common order_for_our_firm_percent \'0\'
 fi
 
-inject_actual_setting $fb common build_with_split_heavy_tabs \'$create_with_split_heavy_tabs\' >>$tmpsql
-inject_actual_setting $fb common build_with_qd_compound_ordr \'$create_with_compound_columns_order\' >>$tmpsql
-inject_actual_setting $fb common build_with_separ_qdistr_idx \'$create_with_separate_qdistr_idx\' >>$tmpsql
+inject_actual_setting $tmpsql $fb common build_with_split_heavy_tabs \'$create_with_split_heavy_tabs\'
+inject_actual_setting $tmpsql $fb common build_with_qd_compound_ordr \'$create_with_compound_columns_order\'
+inject_actual_setting $tmpsql $fb common build_with_separ_qdistr_idx \'$create_with_separate_qdistr_idx\'
 
-inject_actual_setting $fb common used_in_replication \'$used_in_replication\' >>$tmpsql
-inject_actual_setting $fb common separate_workers \'$separate_workers\' >>$tmpsql
-inject_actual_setting $fb common workers_count \'$winq\' >>$tmpsql
-inject_actual_setting $fb common update_conflict_percent \'$update_conflict_percent\' >>$tmpsql
+inject_actual_setting $tmpsql $fb common used_in_replication \'$used_in_replication\'
+inject_actual_setting $tmpsql $fb common separate_workers \'$separate_workers\'
+inject_actual_setting $tmpsql $fb common workers_count \'$winq\'
+inject_actual_setting $tmpsql $fb common update_conflict_percent \'$update_conflict_percent\'
 
 # We need ability to RECONNECT on build phase if this is FB 2.5 instance which does support CONNECTIONS POOL feature.
 # Otherwise EDS connection (that is created fin SP sys_get_fb_arch for definition whether FB is in Classic mode or no)
 # will remain alive infinitely and will keep DB file opened.
-# ::: NB ::: This setting will be INSERTED if record doesnot exist - see 5th argument = 1:
-#inject_actual_setting $fb common connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1 >>$tmpsql
+# ::: NB ::: This setting will be INSERTED if record doesnot exist - see 6th argument = 1:
+#inject_actual_setting $tmpsql $fb common connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1
 # 21.02.2019: changed common to init
-inject_actual_setting $fb init connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1 >>$tmpsql
+inject_actual_setting $tmpsql $fb init connect_str "'connect ''$host/$port:$dbnm'' user ''$usr'' password ''$pwd'';'" 1
 
 # Added 23.11.2018
 ##################
 # List of top-level units (see business_ops table) which performance statistics we want to be logged by querying  mon$ tables.
 # This setting is ignored if config parameter 'enable_mon_query' is zero.
 # old name: mon_traced_units
-inject_actual_setting $fb common mon_unit_list \'$mon_unit_list\' >>$tmpsql
-inject_actual_setting $fb common halt_test_on_errors \'$halt_test_on_errors\' >>$tmpsql
-inject_actual_setting $fb common qmism_verify_bitset \'$qmism_verify_bitset\' >>$tmpsql
+inject_actual_setting $tmpsql $fb common mon_unit_list \'$mon_unit_list\'
+inject_actual_setting $tmpsql $fb common halt_test_on_errors \'$halt_test_on_errors\'
+inject_actual_setting $tmpsql $fb common qmism_verify_bitset \'$qmism_verify_bitset\'
 
 if [ $recalc_idx_min_interval -eq 0 ]; then
     # added 14.04.2019
     recalc_idx_min_interval=99999999
 fi
-inject_actual_setting $fb common recalc_idx_min_interval \'$recalc_idx_min_interval\' >>$tmpsql
+inject_actual_setting $tmpsql $fb common recalc_idx_min_interval \'$recalc_idx_min_interval\'
 ##################
 #  Added 21.02.2019:
-inject_actual_setting $fb common warm_time \'$warm_time\' 1 >>$tmpsql
+inject_actual_setting $tmpsql $fb common warm_time \'$warm_time\' 1
 
 # Added 21.03.2019
-inject_actual_setting $fb common test_intervals  \'$test_intervals\' 1 >>$tmpsql
+inject_actual_setting $tmpsql $fb common test_intervals  \'$test_intervals\' 1
 
 cat <<- EOF >>$tmpsql
     end
@@ -405,6 +422,8 @@ cat <<- EOF >>$tmpsql
     commit;
     select 'Adjust settings: finish at ' || cast('now' as timestamp) as msg from rdb\$database;
 EOF
+  echo
+  sho "Routine $FUNCNAME: finish." $log4all
 
 } 
 # end of sync_settings_with_conf()
@@ -414,7 +433,7 @@ EOF
 
 db_build() {
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
   
   local prf=tmp_build_$fb
   local bld=$tmpdir/$prf.sql
@@ -472,7 +491,7 @@ EOF
     #:::   S y n c h r o n i z e    t a b l e    'S E T T I N G S'    w i t h    c o n f i g    :::
     #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     echo
-    echo "Adjusting SETTINGS table with config, step-1: generate temporary SQL script."
+    sho "Adjusting SETTINGS table with config, step-1: generate temporary SQL script." $log4all
     sync_settings_with_conf $fb $bld
 
     # result: file $bld now contains SQL script with 'UPDATE SESSTINGS' statements. We have to apply it.
@@ -488,7 +507,7 @@ EOF
     # /var/tmp/oltp-emul/oltp_split_heavy_tabs_1_30.tmp
     rm -f $post_handling_out
     echo
-    echo "Generate SQL script for change DDL according to current value of 'create_with_split_heavy_tabs' parameter."
+    sho "Generate SQL script for change DDL according to current value of 'create_with_split_heavy_tabs' parameter." $log4all
     cat <<- EOF >>$bld
 		set echo off;
 		-- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
@@ -543,7 +562,7 @@ EOF
 
     # -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-    echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+    sho "Routine $FUNCNAME: finish." $log4all
     echo
     # 02.11.18: moved pause code when wait_after_create=1 to common block in main part, see below
 
@@ -555,7 +574,7 @@ EOF
 
 show_db_and_test_params() {
 
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
 
   conn_pool_support=$1
   log4all=$2
@@ -736,7 +755,7 @@ EOF
   rm -f $tmp_show_log $tmp_show_cfg
   echo
 
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: finish." $log4all
 
 }
 # end of show_db_and_test_params
@@ -745,7 +764,8 @@ EOF
 
 check_stoptest() {
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
+
   # check that file 'stoptest.txt' is EMPTY
   local pfx=tmp_check_stoptest
   local tmpchk=$tmpdir/$pfx.sql
@@ -814,7 +834,7 @@ check_stoptest() {
 
   rm -f $tmp_show_sql $tmp_show_log $tmp_show_cfg $tmp_show_err
 
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: finish." $log4all
   echo
 }
 # end of check_stoptest
@@ -823,7 +843,8 @@ check_stoptest() {
 
 upd_init_docs() {
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
+  echo
   echo Check is the database needs to be filled up with necessary number of documents
 
   local pfx=tmp_get_init_docs
@@ -888,7 +909,8 @@ upd_init_docs() {
       init_docs=0
     fi
   fi
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+
+  sho "Routine $FUNCNAME: finish." $log4all
   rm -f $tmpchk $tmpclg $tmperr
   echo
 }
@@ -897,7 +919,7 @@ upd_init_docs() {
 # --------------------------  p r e p a r e:   set linger, change FW to OFF ------------------
 prepare_before_adding_init_data() {
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
 
   local pfx=tmp_before_adding_init_data
   local tmpsql=$tmpdir/$pfx.sql
@@ -967,7 +989,7 @@ prepare_before_adding_init_data() {
   echo Result:
   grep -v "^$" $tmplog
   
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: finish." $log4all
   echo
   rm -f $tmpsql $tmplog $tmperr
 
@@ -978,7 +1000,8 @@ prepare_before_adding_init_data() {
 
 gen_working_sql() {
  echo
- echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+ sho "Routine $FUNCNAME: start." $log4all
+
  local mode=$1 # 'init_pop' xor 'run_test'
  local sql=$2
  local lim=$3 
@@ -1902,8 +1925,8 @@ EOF
 
 
  # i=1..$lim
- echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
- echo
+  sho "Routine $FUNCNAME: finish." $log4all
+  echo
 
 } # end of gen_working_sql()
 
@@ -1913,7 +1936,7 @@ EOF
 add_init_docs() {
   # $tmpsql $tmplog $srv_frq
   echo
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
   local tmpsql=$1
   local tmplog=$2
   local srv_frq=$3
@@ -2029,7 +2052,7 @@ add_init_docs() {
   done
   rm -f $tmpsql $tmplog $tmpchk $tmpclg $tmperr
 
-  echo $(date +'%Y.%m.%d %H:%M:%S'). Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: start." $log4all
   echo
 } # end of add_init_docs()
 
@@ -2037,7 +2060,7 @@ add_init_docs() {
 
 launch_preparing() {
   echo
-  echo Routine $FUNCNAME: start.
+  sho "Routine $FUNCNAME: start." $log4all
 
   local tmpsql=$1
   local sleep_min=${2:-0}
@@ -2182,7 +2205,7 @@ launch_preparing() {
   $run_isql 1>$tmpclg 2>$tmperr
 
   if [ -s $tmperr ];then
-    echo Attempt to add singnal row for auto stop test finished with ERROR.
+    echo Attempt to add signal row for auto stop test finished with ERROR.
     echo SQL  file: $tmpchk
     echo Error log: $tmperr
     echo Script is now terminated.
@@ -2194,14 +2217,16 @@ launch_preparing() {
   cat $tmpclg >> $log4all
   rm -f $tmpchk $tmpclg $tmperr
 
-  echo Routine $FUNCNAME: finish.
+  sho "Routine $FUNCNAME: finish." $log4all
   echo
 
 } # end of launch_preparing()
 
 gen_temp_sh_for_stop()
 {
-  #echo Routine $FUNCNAME: start.
+  echo
+  sho "Routine $FUNCNAME: start." $log4all
+
   local tmpsh4stop
   if [ -z "$use_external_to_stop" ]; then
 	tmpsh4stop=$tmpdir/1stoptest.tmp.sh
@@ -2225,8 +2250,10 @@ gen_temp_sh_for_stop()
 		in editor and type there any single ascii character plus LF. Then save this file.
 	EOF
   fi
-  #echo Routine $FUNCNAME: finish.
-} # create_temp_sh_for_stop(
+  echo
+  sho "Routine $FUNCNAME: finish." $log4all
+
+} # create_temp_sh_for_stop
 
 
 #######################################################################
@@ -2283,6 +2310,10 @@ tmpdir=${tmpdir%/}
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 log4all=$tmpdir/oltp$1.report.txt
 rm -f $log4all
+
+this_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+sho "Starting script $this_sh at host $file_name_this_host_info with logging in $log4all" $log4all
+
 ##########################################
 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
@@ -2608,13 +2639,15 @@ else
     ########################################################################################################
     db_build_finished_ok=0
     if [ -s $tmperr ];then
-        echo Script that checks whether DB building process was completed without errors is NOT EMPTY.
-        echo Name of script: $tmpclg
-        echo Name of errlog: $tmperr
+        #echo Script that checks whether DB building process was completed without errors is NOT EMPTY.
+	sho "At leat one ERROR found while checking result of previous DB building process." $log4all
+        sho "Name of script: $tmpclg" $log4all
+        sho "Name of errlog: $tmperr" $log4all
         cat $tmperr
+        cat $tmperr >>$log4all
     else
         # open log and parse it as config with 'param = value' string:
-        echo No errors detected when run $tmpchk
+        sho "Script for checking DB objects $tmpchk completed SUCCESSFULLY." $log4all
         echo Obtain results from its log $tmpclg
         if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then
             db_build_finished_ok=1
@@ -2752,13 +2785,13 @@ $run_isql 1>$tmpclg 2>$tmperr
 
 conn_pool_support=0
 if grep -q -i "SQLSTATE = 42000" $tmperr && grep -q -i "Token unknown" $tmperr ; then
-    echo This build does not support CONNECTIONS POOL.
+    sho "This build does not support CONNECTIONS POOL." $log4all
     tail -15 $tmperr
 else
     conn_pool_support=1
     catch_err $tmperr "At least one error occured when querying connections pool data at '$host/$port:$dbnm'" 0
     tail -15 $tmpclg | grep -i "connections pool"
-    echo This build DOES support connections pool.
+    sho "This build DOES support connections pool." $log4all
 fi
 # //////////////////////////////////////////////////////////////////////////////////////////
 
@@ -2768,7 +2801,7 @@ fi
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 rm -f $tmpchk
-echo Synchronize SETTINGS table with current values from config
+sho "Synchronize SETTINGS table with current config: generate temporary SQL script." $log4all
 sync_settings_with_conf $fb $tmpchk
 
 cat <<-"EOF" >>$tmpchk
@@ -2787,7 +2820,7 @@ cat <<-"EOF" >>$tmpchk
 EOF
 
 run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
-
+display_intention "Apply generated SQL for synchronize settings with current config." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Table SETTINGS was not synchronized with current config values."
 grep -i "msg " $tmpclg
@@ -2800,13 +2833,22 @@ grep -i "msg " $tmpclg
 # Use file: $shdir/oltp_adjust_DDL.sql
 # 1. GENERATE temporary script "$tmpadj" which will contain dynamically generated DDL statements
 #    for PERF_SPLIT_nn tables
+
 run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
+display_intention "Update DDL to current value of 'separate_workers', step-1: generate SQL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpadj 2>$tmperr
-catch_err $tmperr "Could not generate SQL script for change DDL of some DB objects."
+# ::: NB ::: 30.09.2019
+# Script $shdir/oltp_adjust_DDL.sql temporarily changes DDL of view v_perf_estimated making it READ-ONLY (select ... from rdb$database).
+# This, in turn, forces stored procedure SP_ADD_PERF_LOG to have invalid BLR if this script will be interrupted here.
+# Metadata b/r will raise in that case:
+#   gbak: ERROR:Error while parsing procedure SP_ADD_PERF_LOG's BLR
+#   gbak: ERROR:    attempted update of read-only column
+#   gbak:Exiting before completion due to errors
+catch_err $tmperr "Could not generate SQL script for adjust DDL to current value of 'separate_workers' parameter."
 
 # 2. APPLY temporary script "$tmpadj" which contains dynamic DDL.
 run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpadj"
-display_intention "Update DDL to current value of 'separate_workers' config parameter." "$run_isql" "$tmpclg" "$tmperr"
+display_intention "Update DDL to current value of 'separate_workers', step-2: apply generated SQL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects remains unchanged. Check script $tmpadj"
 
@@ -2893,8 +2935,7 @@ fi
 if [ $rebuild_was_invoked -eq 1 ]; then
     # 02.11.18: moved here from db_build
     if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
-      echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
-      echo -e "######################################"
+      sho "Database has been created SUCCESSFULLY and is ready for initial documents filling." $log4all
       echo
       echo Change config setting \'wait_after_create\' to 0 in order to remove this pause.
       echo
@@ -2903,11 +2944,6 @@ if [ $rebuild_was_invoked -eq 1 ]; then
     fi
 fi
 
-
-this_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-cat <<- EOF > $log4all
-	$(date +'%Y.%m.%d %H:%M:%S'). Created by: $this_sh, at host: $file_name_this_host_info
-EOF
 
 
 # get number of currently existed documents and update value of $init_docs if need:
