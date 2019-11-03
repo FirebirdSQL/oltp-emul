@@ -590,7 +590,12 @@ show_db_and_test_params() {
   # NB: use quoted "EOF" in heredoc clause in order to avoid specifying backslash leftside of any special characters, like $:
   cat <<- EOF >$tmp_show_sql
 
+         set heading off;
+         select 'Intro script at ' || current_timestamp from rdb\$database;
+         set heading on;
+
          set list on;
+         -- set stat on;
          set term ^;
          execute block as
             declare c varchar(255);
@@ -619,7 +624,6 @@ show_db_and_test_params() {
             ,m.mon\$creation_date as creation_timestamp
             ,current_timestamp
          from mon\$database m;
-         set list off;
 
          set list off;
          set width working_mode 12;
@@ -627,26 +631,33 @@ show_db_and_test_params() {
          set width setting_value 20;
 
          set heading off;
+         set stat off;
          select 'Workload level settings (see definitions in oltp_main_filling.sql):' as " " from rdb\$database;
+         -- set stat on;
          set heading on;
          select * from z_settings_pivot;
 
          set heading off;
+         set stat off;
          select 'Main test settings:' as " " from rdb\$database;
+         -- set stat on;
          set heading on;
          select z.setting_name, z.setting_value from z_current_test_settings z;
 
          set width tab_name 13;
          set width idx_name 31;
          set width idx_key 65;
-         -- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES.
+         -- normally query to view Z_QD_INDICES_DDL must be disabled.
+         -- enable it for debug or benchmark purposes.
          -- set heading off;
          -- select 'Index(es) for heavy-loaded table(s):' as " " from rdb\$database;
          -- set heading on;
          -- select * from z_qd_indices_ddl;
-         
+
          set heading off;
+         set stat off;
          select 'Table(s) WITHOUT primary and unique constrains:' as " " from rdb\$database;
+         set stat off;
          set heading on;
          set count on;
          set width tab_name 32;
@@ -658,11 +669,12 @@ show_db_and_test_params() {
              and c.rdb\$constraint_type in( 'PRIMARY KEY', 'UNIQUE' )
          where 
              r.rdb\$system_flag is distinct from 1 
-             and r.rdb\$relation_type = 0  
+             and r.rdb\$relation_type = 0
              and c.rdb\$relation_name is null
          ;
          set count off;
          set heading off;
+         set stat off;
          select lpad('',32,'=') as " " from rdb\$database;
          set heading on;
 
@@ -673,39 +685,55 @@ show_db_and_test_params() {
     # PSQL function sys_get_fb_arch uses ES/EDS which keeps infinitely connection in implementation for FB 2.5
     # If current implementation actually supports connection pool then we have to clear it, otherwise idle
     # connection will use metadata and we will not be able to drop existing PK from some tables.
-    cat <<- "EOF" >>$tmp_show_sql
-    set bail on;
-    set count on;
-    set echo on;
-    create or alter view v_pool_info as
-    select 
-       cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as int) as pool_size,
-       cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT') as int) as pool_idle,
-       cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT') as int) as pool_active,
-       cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as int) as pool_lifetime
-    from rdb$database;
-    commit;
-    select 'Before clear connections pool' as msg, v.* from v_pool_info v;
-    ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-    select 'After clear connections pool' as msg, v.* from v_pool_info v;
-    set echo off;
-    set count off;
-    set bail off;
-EOF
+	cat <<- "EOF" >>$tmp_show_sql
+	set bail on;
+	set count on;
+	set echo on;
+	-- set stat on;
+	create or alter view v_pool_info as
+	select 
+	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as int) as pool_size,
+	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT') as int) as pool_idle,
+	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT') as int) as pool_active,
+	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as int) as pool_lifetime
+	from rdb$database;
+	commit;
+	select 'Before clear connections pool' as msg, v.* from v_pool_info v;
+	ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
+        select 'After clear connections pool' as msg, v.* from v_pool_info v;
+	set echo off;
+	set stat off;
+	set count off;
+	set bail off;
+	EOF
   fi
+
+	 cat <<- EOF >>$tmp_show_sql
+	set heading off;
+	select 'Leaving script at ' || current_timestamp from rdb\$database;
+	set heading on;
+	EOF
 
   run_isql="$isql_name $dbconn $dbauth -i $tmp_show_sql -pag 99999999"
   display_intention "Check DB parameters, workload map and current test settings." "$run_isql" "$tmp_show_log" "$tmp_show_err"
+  # cat $tmp_show_sql >>$log4all
+  # NB: this can take up to 30-40 seconds if DB is huge and not in OS cache.
+  # Most of time is spent for CONNECT ESTABLISHING rather than executing SQL, example:
+  #     03.11.19 08:23:48. Check DB parameters, workload map and current test settings.
+  #     Intro script at 2019-11-03 08:24:17.6430
+
   $run_isql 1>$tmp_show_log 2>$tmp_show_err
+  sho "Return from ISQL to OS." $tmp_show_log
 
   cat $tmp_show_err>>$log4all
-  catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
+  # catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
 
   # Display database and main test parameters + add them to main log:
   echo ...............................
   cat $tmp_show_log | sed -e 's/^/    /'
   echo ...............................
   cat $tmp_show_log | sed -e 's/^/    /'>>$log4all
+  catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
 
   rm -f $tmp_show_sql $tmp_show_err $tmp_show_log
 
