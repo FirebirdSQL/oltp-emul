@@ -583,6 +583,16 @@ call :adjust_sep_wrk_count %log4tmp%
 
 call :adjust_replication %log4tmp%
 
+@rem 16.11.2019
+echo !dbconn! | findstr /r /i /c:"localhost[/:]" /c:"127.0.0.1[/:]" >nul
+if NOT errorlevel 1 (
+    @rem :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    @rem :::    A d j u s t i n g     F W   a n d   S W E E P  i n t.   t o     c o n f i g    s e t t i n g   :::
+    @rem :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+    call :change_db_attr !tmpdir! !fbc! !dbconn! "!dbauth!" !create_with_fw! !create_with_sweep!
+)
+@rem !fbc!\gstat -h !dbnm! | findstr /i /c:"sweep" /c:"attrib"
 
 set sleep_mul=1
 

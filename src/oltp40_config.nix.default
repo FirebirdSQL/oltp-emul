@@ -423,18 +423,23 @@
 #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
     # *** NOTE *** 
-    # These settings are ignored when DB already exist and has required number of documents.
+    # Following settings except 'create_with_fw' and 'create_with'sweep'
+    # will be IGNORED if database exists and has required number of documents.
+    # If parameter 'host' is one of: {'localhost', '127.0.0.1'} then current
+    # values of 'create_with_fw' and 'create_with'sweep' will be applied to DB
+    # every time before launching ISQL sessions.
 
-    # Following two settings actual only when database does not exist 
-    # and should be created by test script itself.
     # Valid options for create_with_fw are sync | async
-    # Value of create_with_sweep should be not less than zero.
+    #
+    create_with_fw = sync
+  
+    # Value of create_with_sweep should be not less than -1.
+    # Value -1 means that default value (20000) will be written into DB header.
+    # Sweep starts when OST-OIT more than this threshold. Value 0 disables sweep.
     #
     # RECOMMENDED value for create_with_sweep is 0 (zero).
     # Remember that sweep interval greater than 0 can lead to unpredictable affect on performance, especially for short test duration.
     #
-    create_with_fw = sync
-  
     create_with_sweep = 0
 
 

@@ -592,6 +592,9 @@ do
     # ~~~~~~~------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
         sho "SID=$sid. Leave from loop because SID greater than 1." $sts
+        if [ "$remove_isql_logs" == "always" ]; then
+            rm -f $log $err $sts
+        fi
         break
     fi
 
@@ -1258,7 +1261,12 @@ do
   packet=$((packet+1))
 done
 
-sho "SID=$sid. Bye-by from $shname" $sts
+if [ "$remove_isql_logs" == "always" ]; then
+    echo $(date +'%d.%m.%y %H:%M:%S') SID=$sid. Bye-bye from $shname
+else
+    sho "SID=$sid. Bye-bye from $shname" $sts
+fi
+
 rm -f $sid_starter_sql
 if [ $sid -eq 1 ]; then
     if [ -s $plog ]; then

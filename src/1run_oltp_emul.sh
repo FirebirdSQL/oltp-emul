@@ -194,6 +194,74 @@ chk4crash() {
     #sho "Routine $FUNCNAME: finish." $log4all
 }
 
+#----------------------------------------------------------
+
+adjust_sweep_attrib()
+{
+    local tmpclg=$tmpdir/tmp_adjust_sweep.log
+    local tmperr=$tmpdir/tmp_adjust_sweep.err
+    local msg
+    local actual_sweep_value
+
+    if [[ $is_embed == 0 ]]; then
+        fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+    else
+        fbspref="$fbc/fbsvcmgr service_mgr "
+    fi
+    if [ $create_with_sweep != -1 ]; then
+        actual_sweep_value=$create_with_sweep
+        msg="Adjusting SWEEP interval to config parameter 'create_with_sweep': $create_with_sweep"
+    else
+        actual_sweep_value=20000
+        msg="Adjusting SWEEP interval to default value: $actual_sweep_value"
+    fi
+    run_fbs="$fbspref action_properties dbname $dbnm prp_sweep_interval $actual_sweep_value"
+
+    display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
+    $run_fbs 1>$tmpclg 2>$tmperr
+    catch_err $tmperr "Check whether database exists, is online and has read_write access."
+
+    sho "Check attributes line from DB header info:" $log4all
+    run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
+    $run_fbs | grep -i sweep 1>>$tmpclg 2>&1
+    cat $tmpclg
+    cat $tmpclg>>$log4all
+    rm -f $tmpclg
+
+
+}  # end of adjust_sweep_attrib
+
+
+#----------------------------------------------------------
+
+adjust_fw_attrib()
+{
+    local tmpclg=$tmpdir/tmp_adjust_fw.log
+    local tmperr=$tmpdir/tmp_adjust_fw.err
+    local msg
+
+    if [[ $is_embed == 0 ]]; then
+        fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+    else
+        fbspref="$fbc/fbsvcmgr service_mgr "
+    fi
+    run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
+    msg="Adjusting FORCED WRITES attribute to config parameter 'create_with_fw': $create_with_fw"
+    #sho "$msg" $log4all
+    display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
+    $run_fbs 1>$tmpclg 2>$tmperr
+    catch_err $tmperr "Check whether database exists, is online and has read_write access."
+
+    sho "Check attributes line from DB header info:" $log4all
+    run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
+    $run_fbs | grep -i attributes 1>>$tmpclg 2>&1
+    cat $tmpclg
+    cat $tmpclg>>$log4all
+    rm -f $tmpclg
+
+}  # end of adjust_fw_attrib
+
+
 # -------------------------------  d b _ c r e a t e -----------------------------------
 
 db_create() {
@@ -243,22 +311,26 @@ db_create() {
      fbspref="$fbc/fbsvcmgr service_mgr "
   fi
 
-  if [ $create_with_fw == async ]; then
-     echo Changing attribute FW to OFF.
-     run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_async"
-     echo Command:
-     echo $run_fbs
-     $run_fbs 1>>$tmplog 2>>$tmperr
-     catch_err $tmperr "Can not change DB forced writes attribute."
-  fi
-  if [ $create_with_sweep != -1 ]; then
-     echo Changing attribute sweep interval to $create_with_sweep.
-     run_fbs="$fbspref action_properties dbname $dbnm prp_sweep_interval $create_with_sweep"
-     echo Command:
-     echo $run_fbs
-     $run_fbs 1>>$tmplog 2>>$tmperr
-     catch_err $tmperr "Can not change DB sweep interval attribute."
-  fi
+  adjust_sweep_attrib
+  adjust_fw_attrib
+  
+#  if [ $create_with_fw == async ]; then
+#     echo Changing attribute FW to OFF.
+#     run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_async"
+#     echo Command:
+#     echo $run_fbs
+#     $run_fbs 1>>$tmplog 2>>$tmperr
+#     catch_err $tmperr "Can not change DB forced writes attribute."
+#  fi
+#  if [ $create_with_sweep != -1 ]; then
+#     echo Changing attribute sweep interval to $create_with_sweep.
+#     run_fbs="$fbspref action_properties dbname $dbnm prp_sweep_interval $create_with_sweep"
+#     echo Command:
+#     echo $run_fbs
+#     $run_fbs 1>>$tmplog 2>>$tmperr
+#     catch_err $tmperr "Can not change DB sweep interval attribute."
+#  fi
+
   run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
   $run_fbs | grep -i "$dbnm\|creation date\|attributes\|forced\|sweep" 1>>$tmplog 2>>$tmperr
 
@@ -3021,17 +3093,20 @@ if [ $init_docs -gt 0 ]; then
     add_init_docs $tmpsql $tmplog $srv_frq $log4all
     ###############################################
 
-    if [[ $is_embed == 0 ]]; then
-        fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
-    else
-        fbspref="$fbc/fbsvcmgr service_mgr "
-    fi
-    run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
-    msg="Adjusting FW to config parameter 'create_with_fw' value: $create_with_fw"
-    sho "$msg" $log4all
-    display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
-    $run_fbs 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Check whether database exists, is online and has read_write access."
+    # Adjusting FW to config parameter 'create_with_fw'
+    adjust_fw_attrib
+
+    #if [[ $is_embed == 0 ]]; then
+    #    fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
+    #else
+    #    fbspref="$fbc/fbsvcmgr service_mgr "
+    #fi
+    #run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
+    #msg="Adjusting FW to config parameter 'create_with_fw' value: $create_with_fw"
+    #sho "$msg" $log4all
+    #display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
+    #$run_fbs 1>$tmpclg 2>$tmperr
+    #catch_err $tmperr "Check whether database exists, is online and has read_write access."
 
     sho "Check attributes line from DB header info:" $log4all
     run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
@@ -3053,6 +3128,10 @@ if [ $init_docs -gt 0 ]; then
 
 fi # $init_docs -gt 0
 
+if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+    adjust_sweep_attrib
+    adjust_fw_attrib
+fi
 
 # ...................... s h o w    D B   a n d    t e s t    p a r a m s  ............
 
