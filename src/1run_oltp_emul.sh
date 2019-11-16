@@ -226,7 +226,7 @@ adjust_sweep_attrib()
     $run_fbs | grep -i sweep 1>>$tmpclg 2>&1
     cat $tmpclg
     cat $tmpclg>>$log4all
-    rm -f $tmpclg
+    rm -f $tmpclg $tmperr
 
 
 }  # end of adjust_sweep_attrib
@@ -257,7 +257,7 @@ adjust_fw_attrib()
     $run_fbs | grep -i attributes 1>>$tmpclg 2>&1
     cat $tmpclg
     cat $tmpclg>>$log4all
-    rm -f $tmpclg
+    rm -f $tmpclg $tmperr
 
 }  # end of adjust_fw_attrib
 
