@@ -35,26 +35,44 @@ apply_cmd() {
   local run_cmd=$1
   local line_prefix=$2
   local log_file=$3
-  echo
+  local zap_log=${4:-0}
+  if [ $zap_log -eq 1 ]; then
+      rm -f $log_file
+  fi
   sho "Command: '$run_cmd'." $log_file
+  # NB: output of some commands (e.g. 'fdisk -l') may contain asterisk:
+  # Disk /dev/sda: 599.9 GB, 599932581888 bytes, 1171743324 sectors
+  # Units = sectors of 1 * 512 = 512 bytes
+  # Sector size (logical/physical): 512 bytes / 512 bytes
+  # If line with '*' will be echoed then all files from current folder will be substituted instead of this '*'.
+  # In order to avoid this one need to enclose into double quotes name of such variable, i.e.: "$line" but not $line 
+  # See: https://stackoverflow.com/questions/102049/how-do-i-escape-the-wildcard-asterisk-character-in-bash
   while read line; do
-    #echo ${line_prefix}: $line
-    #echo ${line_prefix}: $line >> $log_file
-    echo ${line_prefix}: $line | sed -e 's/^/    /'
-    echo ${line_prefix}: $line | sed -e 's/^/    /' >> $log_file
+    #echo ${line_prefix}: "$line" | sed -e 's/^/    /'
+    echo ${line_prefix}: "$line" | sed -e 's/^/    /' >> $log_file
   done < <( eval $run_cmd )
-  echo
   echo >> $log_file
 }
 
 log_elapsed_time() {
     local s1=$1
-    local plog=$2
+
+    # name of either "main" (text) LOG or HTML report:
+    local report_file=$2
+    local what_was_done=${3:-""}
     local s2=$(date +%s)
     local sd=$(date -u -d "0 $s2 sec - $s1 sec" +"%H:%M:%S")
-    local msg="Done for $sd, from $(date -d @$s1 +'%d-%m-%Y %H:%M:%S') to $(date -d @$s2 +'%d-%m-%Y %H:%M:%S')."
-    sho "$msg" $plog
+    local elapsed_time_msg="Done for $sd, from $(date -d @$s1 +'%d-%m-%Y %H:%M:%S') to $(date -d @$s2 +'%d-%m-%Y %H:%M:%S')."
+    if [[ ! -z "${what_was_done}" ]]; then
+        elapsed_time_msg="Completed \"$what_was_done\". $elapsed_time_msg"
+    fi
+    if [[ "${report_file##*.}" == *"htm"* ]]; then
+        echo "<br>$elapsed_time_msg" >>$report_file
+    else
+        sho "$elapsed_time_msg" $report_file
+    fi
 }
+
 
 get_diff_fblog() {
     local mode=$1
@@ -159,6 +177,300 @@ get_diff_fblog() {
     fi
 }
 # get_diff_fblog
+
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+get_sqlda_fld_name() {
+    local fb=$1
+    local sqlda_name=$2
+    local fld_name=UNKNOWN
+
+    # Extract LAST word from SQLDA field alias. Has sense only in FB 2.5 because of parenthesis. Example:
+    # select rdb$description as rdb_desc, rdb$relation_id rel_id, rdb$security_class sec_class, rdb$character_set_name cset_name from rdb$database;
+    # Firebird 2.5:
+    #  :  name: (15)RDB$DESCRIPTION  alias: (8)RDB_DESC
+    #  :  name: (15)RDB$RELATION_ID  alias: (6)REL_ID
+    #  :  name: (18)RDB$SECURITY_CLASS  alias: (9)SEC_CLASS
+    #  :  name: (22)RDB$CHARACTER_SET_NAME  alias: (9)CSET_NAME
+    # Firebird 3.0:
+    #  :  name: RDB$DESCRIPTION  alias: RDB_DESC
+    #  :  name: RDB$RELATION_ID  alias: REL_ID
+    #  :  name: RDB$SECURITY_CLASS  alias: SEC_CLASS
+    #  :  name: RDB$CHARACTER_SET_NAME  alias: CSET_NAME
+
+    if [ "$fb"=="25" ]; then
+       # Example: $(echo "(8)   CATEGORY" | awk -F[" ()"] '{print $NF}') --> 'CATEGORY' (get last token)
+       eval $fld_name="$(echo $sqlda_name  | awk -F[' ()'] '{print $NF}')"
+    else
+       eval $result=$fldname
+    fi
+}
+
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+add_html_text() {
+    local src_file=$1
+    local htm_file=$2
+    local add_br=${3:-1}
+    local line_prefix=$4
+    local use_style=$5
+    if [[ "$line_prefix" == "null" ]]; then
+        unset line_prefix
+    fi
+
+    if [[  ! -z "$use_style" ]]; then
+        if [[ "$use_style" == "pre" ]]; then
+            # This is used when data of 'gstat -r' are written to html:
+            echo "<pre>" >>$htm_file
+        else
+            echo "<div class=\"$use_style\">" >>$htm_file
+        fi
+    fi
+
+    #grep . ./foo.txt |\
+    #while read data; do
+    #    echo "$data"
+    #done
+
+    # ::: NOTE :::
+    # We have to read text file and bring its line to html WITHOUT any distortion.
+    # This:
+    #    while read row_x; do
+    #        . . .
+    #    done < <( grep . $src_file )
+    # -- removes leading spaces in input lines, not good for e.g. gstat output.
+    # Following will read every line and replace TAB with four spaces.
+    # No other changes will be made in the source line:
+    #
+    local IFS=''
+    cat $src_file | sed 's/\t/    /g' | \
+    while read row_x; do
+        line=${line_prefix}"${row_x}"
+        #echo QQQlineQQQ "$line"
+        if [[ "$line" == *"\$css\$error\$"* ]]; then
+            ccss="${line/\$css\$error\$/}"
+            line="<span class=\"error\">$ccss</span>"
+        elif [[ "$line" == *"\$css\$fault\$"* ]]; then
+            ccss="${line/\$css\$fault\$/}"
+            line="<span class=\"fault\">$ccss</span>"
+        elif [[ "$line" == *"\$css\$warning\$"* ]]; then
+            ccss="${line/\$css\$warning\$/}"
+            line="<span class=\"warning\">$ccss</span>"
+        elif [[ "$line" == *"\$css\$success\$"* ]]; then
+            ccss="${line/\$css\$success\$/}"
+            line="<span class=\"success\">$ccss</span>"
+        fi
+        if [[ $add_br -eq 1 ]]; then
+            echo "${line}<br>" >>$htm_file
+        else
+            echo "${line}" >>$htm_file
+        fi
+    done
+
+    if [[  ! -z "$use_style" ]]; then
+        if [[ "$use_style" == "pre" ]]; then
+            echo "</pre>" >>$htm_file
+        else
+            echo "</div>" >>$htm_file
+        fi
+    fi
+
+}
+# end of: add_html_text()
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+add_html_table() {
+    local sql_in=$1
+    local htm_file=$2
+    local sql_temp=$tmpdir/make_html_table.tmp.sql
+    local sql_log=$tmpdir/make_html_table.tmp.log
+    local sql_err=$tmpdir/make_html_table.tmp.err
+    local tmp_sqlda=$tmpdir/make_html_table.tmp.sqd
+    local tmp_nums=$tmpdir/make_html_table.tmp.num
+    local tmp_html=$tmpdir/make_html_table.tmp.html
+    local tho thc tro trc tdo tdc tdno tdnc
+
+	cat <<-EOF >$sql_temp
+		set sqlda_display on;
+		set planonly;
+	EOF
+    cat $sql_in >> $sql_temp
+
+    rm -f $tmp_html
+
+    ################################################################
+    ### call isql for get SQLDA and parse column names and types ###
+    ################################################################
+    #set -x
+    $fbc/isql $dbconn $dbauth -i $sql_temp 1>$tmp_sqlda 2>$sql_err
+    #set +x
+
+    if [[ -s "$sql_err" ]]; then
+        echo $htm_repn PREPARING QUERY FAULT: $htm_repc >>$tmp_html
+        echo "<pre>" >>$tmp_html
+        add_html_text $sql_temp $tmp_html 0
+        add_html_text $sql_err $tmp_html 0 "\$css\$fault\$"
+        echo "</pre>" >>$tmp_html
+        cat $tmp_html >> $htm_file
+
+        exit 1
+
+    fi
+
+
+    # Construct list of columns where data should be right-aligned because of their NUMERIC types:
+    pass_1st_sqltype=0
+    num_types=" SHORT LONG INT64 DOUBLE LONG FLOAT DECFLOAT INT128"
+    num_list=,
+    while read line; do
+        if [[ "$line" == *" sqltype: "* ]]; then
+            pass_1st_sqltype=1
+
+            # "01: sqltype: 448 VARYING Nullable --> 01, etc
+            col_indx=$(echo "$line" | cut -d ':' -f1)
+
+            # "01: sqltype: 448 VARYING Nullable --> VARYING
+            # "01: sqltype: 580 INT64 scale: -2 subtype: 1 len: 8" --> INT64
+            col_type=$(echo "$line" | cut -d ' ' -f4)
+            if [[ "$num_types" == *" $col_type"* ]]; then
+                num_list=${num_list}${col_indx},
+            fi
+        fi
+    done < <( cat $tmp_sqlda )
+    # result: num_list=,03,07,08, - with leading zeroes.
+    # Remove all leading zeroes from each numeric index:
+    # https://stackoverflow.com/questions/13210880/replace-one-substring-for-another-string-in-shell-script/13210909
+    # https://www.gnu.org/software/bash/manual/bash.html#Shell-Parameter-Expansion
+    num_list="${num_list//,0/,}"
+    # result: num_list=,3,7,8, etc -- list of positions where columns have any type of NUMERIC family.
+
+#cat $tmp_sqlda
+#echo num_list=$num_list
+#echo +++++++++++++++++++++++++
+
+    tho="<th>"
+    thc="</th>"
+    tro="<tr>"
+    trc="</tr>"
+    tdo="<td>"
+    tdc="</td>"
+    tdno="<td align=right>"
+    tdnc="</td>"
+
+    echo "<table border="1" cellpadding="3">" >>$tmp_html
+    echo $tro>>$tmp_html
+
+    # Extract column aliases for printing TABLE header
+    # FB 2.5:
+    # :  name: (12)WORKING_MODE  alias: (8)CATEGORY
+    # :  name: (5)MCODE  alias: (7)SETTING
+    # :  name: (6)SVALUE  alias: (3)VAL
+    #^    ^            ^---^        ^
+    #a    b              c          d
+    #
+    # FB 3.0:
+    # :  name: WORKING_MODE  alias: CATEGORY
+    # :  name: MCODE  alias: SETTING
+    # :  name: SVALUE  alias: VAL
+    #^    ^       ^---^        ^
+    #a    b         c          d
+    grep -i "alias: " $tmp_sqlda > $sql_log
+    col_indx=1
+    while read line; do
+        if [[ "$line" == *"  alias: "* ]]; then
+            fld_name="$(echo $line | awk -F[' ()'] '{print $NF}')"
+
+            if [[ "$fld_name" == "alias:" ]]; then
+                echo $tho$ " " $thc >> $tmp_html
+                # select 1 as " " from rdb$database ==> 
+                #   :  name: CAST  alias:
+                # (i.e. without field name! string finishes with word 'alias:')
+                fld_name=NO_NAMED_COLUMN
+            else
+                echo ${tho}${fld_name}${thc} >> $tmp_html
+            fi
+            if [[ $col_indx -eq 1 ]]; then
+                fld_first=$fld_name
+            fi
+            fld_last=$fld_name
+            col_indx=$((col_indx+1))
+        fi
+    done < <( cat $tmp_sqlda )
+    echo $trc>>$tmp_html
+
+    # Inject SET LIST ON in the SQL that will be executes, disable all "SET LIST OFF":
+    rm -f $sql_temp
+    echo "set list on; -- injected by  ${BASH_SOURCE[0]}" >>$sql_temp
+    while read line; do
+        if echo $line | grep -q -E -i "set[[:space:]]+list[[:space:]]+off"; then
+            echo "-- disabled by ${BASH_SOURCE[0]} -- $line" >> $sql_temp
+        else
+            echo "$line" >> $sql_temp
+        fi
+    done < <( cat $sql_in )
+    # result: SQL is prepared for execution in mode SET LIST ON.
+
+    ######################################
+    ### call isql for show report data ###
+    ######################################
+    $fbc/isql $dbconn $dbauth -i $sql_temp 1>$sql_log 2>$sql_err
+
+    while read line; do
+        # this leaves one trailing space, do NOT: fld_name=${line:0:31}
+        fld_name=$(echo ${line:0:31} | sed 's/ *$//g')
+
+        # with preserving trailing spaces: "${line:0:31}"
+        if [[ "$fld_name" == "$fld_first" ]]; then
+            # We about to start print 1st column of row. Put <TR> tag:
+            echo $tro >> $tmp_html
+            fld_num=1
+        fi
+        # do NOT - already was done, see above -- echo -n ${tdo}${fld_name}${tdc} >> $tmp_html
+
+        cell=${line:32}
+        if [[ "$cell" == *"\$css\$error\$"* ]]; then
+            ccss="${cell/\$css\$error\$/}"
+            cell="<span class=\"error\">$ccss</span>"
+        elif [[ "$cell" == *"\$css\$warning\$"* ]]; then
+            ccss="${cell/\$css\$warning\$/}"
+            cell="<span class=\"warning\">$ccss</span>"
+        elif [[ "$cell" == *"\$css\$success\$"* ]]; then
+            ccss="${cell/\$css\$success\$/}"
+            cell="<span class=\"success\">$ccss</span>"
+        fi
+
+        if [[ "$num_list" == *",$fld_num,"* ]]; then
+            # this is column which belongs to NUMERIC DATATYPE family.
+            # We have to adjust field content to right border of the cell.
+            echo ${tdno}"${cell}"${tdnc} >> $tmp_html
+        else
+            echo ${tdo}"${cell}"${tdc} >> $tmp_html
+        fi
+
+        if [[ "$fld_name" == "$fld_last" ]]; then
+            # Completed output for all columns of row: put </TR> tag
+            echo $trc >> $tmp_html
+        fi
+
+        fld_num=$((fld_num+1))
+    done < <( grep . $sql_log )
+    echo "</table>" >>$tmp_html
+
+    if [[ -s "$sql_err" ]]; then
+        echo $htm_repn DATA PROCESSING FAULT: $htm_repc >>$tmp_html
+        echo "<pre>" >>$tmp_html
+        add_html_text $sql_temp $tmp_html 0
+        add_html_text $sql_err $tmp_html 0 "\$css\$fault\$"
+        echo "</pre>" >>$tmp_html
+    fi
+    cat $tmp_html >> $htm_file
+
+    rm -f $sql_temp $sql_log $sql_err $tmp_sqlda $tmp_nums $tmp_html
+
+}
+# end of: add_html_table()
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 
 #.......................................... m a i n     p a r t ................................
 
@@ -285,12 +597,13 @@ else
   dbconn=$host/$port:$dbnm
 fi
 
-
-s1=$(date +%s)
-#run_isql="$isql_name $dbconn -now -q -n -pag 9999 -i $sql $dbauth"
-# since 12.08.2018
+# since 12.08.2018: make each SID run its own 'starter SQL' script which assigns
+# session-level context variable 'WORKER_SEQUENTIAL_NUMBER' for this SID and
+# only after this launches 'main' SQL: $tmpdir/sql/tmp_random_run.sql
+# This allows this SID be known in procedural code and, in turn, take for processing
+# documents with ID that can be taken only by this SID. Actual only when config
+# parameter 'separate_workers' equals to 1.
 run_isql="$isql_name $dbconn -now -q -n -pag 9999 -i $sid_starter_sql $dbauth"
-log_elapsed_time $s1 $log
 
 cat << EOF >>$sts
 $(date +'%Y.%m.%d %H:%M:%S'). Batch running now: $0 - check start command:
@@ -467,7 +780,7 @@ do
       get_diff_fblog check_for_crash $fb $sid $fblog_beg $sts
       #                    1          2    3      4        5
   else
-      sho "SID=$sid. No FB craches detected during last package was run." $sts
+      sho "SID=$sid. No FB craches detected in $err." $sts
   fi
 
   # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
@@ -483,11 +796,13 @@ do
   
   syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
   if [ $syntax_err_cnt -gt 0 ] ; then
-      sho "SID=$sid. Syntax / copliler errors found occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
+      sho "SID=$sid. DSQL errors occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
       ###################################################
       # ....................  e x i t ...................
       ###################################################
       break
+  else
+      sho "SID=$sid. No DSQL errors detected in $err." $sts
   fi
   
   run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
@@ -516,6 +831,10 @@ do
       #echo     Command: $run_fbs >>$sts
       #echo      STDLOG: $tmpsidlog >>$sts
       #echo      STDERR: $tmpsiderr >>$sts
+
+      #######################################################################
+      ###     f b s v c m g r   i n f o _ s e r v e r _ v e r s i o n     ###
+      #######################################################################
       $run_fbs 1>$tmpsidlog 2>$tmpsiderr
       if [[ $k -gt 1 && $(stat -c%s $tmpsiderr) -eq 0 ]]; then
           sho "SID=$sid. Return to script. Problem RESOLVED after $k iterations." $sts
@@ -592,26 +911,38 @@ do
     # ~~~~~~~------------------------------------------------------------------
     if [ $sid -gt 1 ]; then
         sho "SID=$sid. Leave from loop because SID greater than 1." $sts
-        if [ "$remove_isql_logs" == "always" ]; then
+        if [[ "$remove_isql_logs" == "always" ]]; then
             rm -f $log $err $sts
         fi
         break
     fi
+
+    psql=$prf.performance_report.tmp
+    rm -f $psql
 
     sho "SID=$sid. Forcedly drop all other attachments: change DB state to full shutdown." $rpt
     # rpt =$5 -- final report where sid N1 has to ADD info about performanc, its name: $tmpdir/oltpNN.report.txt
 
     run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
 
-    sho "Command: $run_fbs_dbshut" $rpt 1
+    sho "SID=$sid. Command: $run_fbs_dbshut" $rpt 1
     # ---------------------------------------------------
     # t e m p - l y    s h u t d o w n    d a t a b a s e
     # ---------------------------------------------------
-    $run_fbs_dbshut 2>>$rpt
-    sho "Return to shell. Database now must be in full shutdown state." $rpt 1
-
+    # ::: NB :::
+    # This can fail if database in backup-lock state
+    # ::::::::::::::::::::::::::::::::::::::::::::::
+    $run_fbs_dbshut 2>$tmpauxerr
+    cat $tmpauxerr
+    cat $tmpauxerr >>$rpt
+    sho "SID=$sid. Done. Check DB header attributes:" $rpt 1
     run_fbs_dbattr="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_hdr_pages -dbname $dbnm"
-    $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
+    $run_fbs_dbattr 1>$tmpauxlog 2>$tmpauxerr
+    cat $tmpauxerr
+    cat $tmpauxerr >>$rpt
+    grep -i attributes $tmpauxlog
+    grep -i attributes $tmpauxlog 1>>$rpt
+    rm -f $tmpauxlog $tmpauxerr
 
     # If we are here then one may sure that ALL attachments now are dropped and there is NO any activity of internal FB processes against DB.
     # Now we can turn DB online and continue work with it using only SINGLE attachment which SID=1
@@ -639,84 +970,21 @@ do
 
     run_fbs_online="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_db_online dbname $dbnm"
     sho "SID=$sid. Return DB to online state." $rpt 1
-    sho "Command: $run_fbs_online" $rpt 1
+    sho "SID=$sid. Command: $run_fbs_online" $rpt 1
     # -----------------------------------
-    # r e t u r n     D B     o n l i n e 
+    # r e t u r n     D B     o n l i n e
     # -----------------------------------
-    $run_fbs_online 2>>$rpt
-    sho "Return to shell. Database now must be online." $rpt 1
-    $run_fbs_dbattr | grep -i attributes 1>>$rpt 2>&1
+    $run_fbs_online 1>$tmpauxlog 2>$tmpauxerr
+    cat $tmpauxerr
+    cat $tmpauxerr >>$rpt
 
+    sho "SID=$sid. Done. Check DB header attributes:" $rpt 1
+    $run_fbs_dbattr 1>$tmpauxlog 2>$tmpauxerr
+    grep -i attributes $tmpauxlog
+    grep -i attributes $tmpauxlog 1>>$rpt
+    rm -f $tmpauxlog $tmpauxerr
 
-    #sho "SID=$sid. Start final performance analisys." $sts
-
-    psql=$prf.performance_report.tmp
-
-    # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
-    plog=$rpt
-
-    rm -f $psql
-    # ---- do NOT ---- rm $plog
-
-    if [ $gather_hardware_info -eq 1 ]; then
-	cat <<- EOF >>$plog
-	
-	######################################################################
-	###  g a t h e r     h a r d w a r e    a n d     O S    i n f o   ###
-	######################################################################
-	
-	EOF
-
-        run_cmd="hostnamectl"
-        apply_cmd "$run_cmd" "host_info" $plog
-
-        run_cmd="who -b"
-        apply_cmd "$run_cmd" "bootup_info" $plog
-
-        run_cmd="dmidecode -t system|grep -i -e 'manufacturer\|product\|hypervisor'"
-        apply_cmd "$run_cmd" "mboard_info" $plog
-
-
-        run_cmd="dmesg | grep DMI"
-        apply_cmd "$run_cmd" "DMI_info" $plog
-
-        run_cmd="lscpu | grep -i -v flags"
-        apply_cmd "$run_cmd" "CPU_info" $plog
-
-        run_cmd="cat /proc/meminfo | grep -i -e 'memtotal\|memfree\|memavail\|buffers\|cached\|swapcached'"
-        apply_cmd "$run_cmd" "mem_info" $plog
-
-        run_cmd="fdisk -l"
-        apply_cmd "$run_cmd" "fdisk_info" $plog
-    else
-	cat <<- EOF >>$plog
-	
-		Config parameter gather_hardware_info=0, hardware and OS info were NOT gathered.
-		================================================================================
-		
-	EOF
-    fi
-    # end of $gather_hardware_info = 1 | 0
-
-
-	cat <<- EOF >>$plog
-	################################################################################################
-	###  h o w     t e s t    w a s      f i n i s h e d ?   (normally / premature termination)  ###
-	################################################################################################
-	EOF
 	cat <<- "EOF" >>$psql
-		set list on;
-		select
-		   p.exc_info, p.dts_end, p.fb_gdscode, e.fb_mnemona,
-		      coalesce(p.stack,'') as stack,
-		         p.ip,p.trn_id, p.att_id,p.exc_unit
-		from rdb$database r
-		left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
-		left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-		order by p.dts_beg desc
-		rows 1;
-		set list off;
-
 		set heading off;
 		select 'Attachments that still alive:' as " " from rdb$database;
 		set heading on;
@@ -740,6 +1008,495 @@ do
 		;
 		set count off;
 		set list off;
+	EOF
+    # /var/tmp/logs-oltp30/oltp30.report.txt
+    $isql_name $dbconn -nod -n -q -pag 9999 -i $psql $dbauth 1>>$rpt 2>&1
+
+    #sho "SID=$sid. Start final performance analisys." $sts
+
+    # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
+    plog=$rpt
+    # ---- do NOT ---- rm $plog
+
+    # 22.03.2020: implemeting HTML report generation
+    ################################################
+    phtm=$tmpdir/oltp$fb.report.htm
+    rm -f $phtm
+
+    htm_sect="<h3>"
+    htm_secc="</h3>"
+    htm_repn="<h4>"
+    htm_repc="</h4>"
+    if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	<html>
+	<head>
+	<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+	<meta http-equiv="cache-control" content="no-cache">
+	<meta http-equiv="pragma" content="no-cache">
+	<style type="text/css">
+	    table {
+	        border-collapse: collapse;
+	        background: #99CCFF;
+	        border: 2px solid black;
+	    }
+	    th {
+	        padding: 5px;
+	        background: #E6E6FA;
+	        border: 1px solid black;
+	    }
+	    td {
+	        padding: 4px;
+	        background: #FDF5E6;
+	        border: 1px solid black;
+	        white-space:nowrap;
+	    }
+	   .success {
+	      color: black;
+	      background-color: #00FF00;
+	   }
+	   .warning {
+	      color: black;
+	      background-color: #FFFF00;
+	   }
+	   .error {
+	      color: black;
+	      background-color: #FF0000;
+	   }
+	   .fault {
+	      color: #990000;
+	      background-color: #FFFFCC;
+	      font-weight: bold;
+	   }
+	   .monosp {
+	      font-family: monospace;
+	   }
+	</style>
+	</head>
+	<body>
+	Generated by $shname, ISQL session No. 1 of total launched $winq. $(date +'%d.%m.%Y %H:%M')
+
+	<table>
+	    <th>Common</th>
+	    <th>Performance</th>
+	    <th>Final Results</th>
+	    <tr>
+	        <td>
+	        <ol>
+	            $( [[ $gather_hardware_info -eq 1 ]] && echo "<li><a href="#hardwareinfo">Hardware and OS info</a> </li>"  )
+	            <li><a href="#testsettings">DB and test configuration</a> </li>
+	            <li><a href="#testfinishinfo">Test Finish details</a> </li>
+	            <li><a href="#testworkload">Test workload details</a> </li>
+	            <li><a href="#qdindexesddl">Indices DDL for heavy-loaded table(s)</a> </li>
+	        </ol>
+	        </td>
+	        <td>
+	        <ol>
+	            <li><a href="#perftotal">Performance, TOTAL score</a> </li>
+	            <li><a href="#perfdynam">Performance in DYNAMIC, $test_intervals intervals</a> </li>
+	            <li><a href="#perfminute">Performance per MINUTE, since launch</a> </li>
+	            <!-- NOT YET IMPLEMENTED <li><a href="#perftrace">Performance, TRACE data for ISQL #1</a> </li> -->
+	            <li><a href="#perfdetail">Performance, DETAILS per units</a> </li>
+
+	            <!-- Link either to report data OR to comment about need to set mon_unit_perf = 1 -->
+	            <li><a href="#perfmon4unit">MON\$-analysis, per UNITS</a> </li>
+
+	            $( [[ $mon_unit_perf -eq 1 && $fb -ne 25 ]] && echo "<li><a href="#perfmon4tabs">MON\$-analysis, per units and TABLES</a> </li>" )
+
+	            <!-- Link either to report data OR to comment about need to set mon_unit_perf = 2 -->
+	            <!-- <li><a href="#perfmon4meta">MON\$-analysis: METADATA cache</a> </li> -->
+	            <li><a href=$( [[ $mon_unit_perf -eq 2 ]] && echo "#perfmon4meta" || echo "#perfmetadisabled" )>MON\$-analysis: METADATA cache</a> </li>
+
+	            <li><a href="#exceptions">Exceptions during test run</a> </li>
+	        </ol>
+	        </td>
+	        <td>
+	        <ol>
+	            <li><a href="#fbdbinfo">mon\$database and 'show version' results</a> </li>
+	            <li><a href="#dbstatistics">Database Statistics, full</a> </li>
+	            <li><a href="#dbverstotal">Ratio "Versions / Records" for tables</a> </li>
+	            <li><a href="#dbvalidation">Database Validation Results</a> </li>
+	            <li><a href="#fblogcompare">New in firebird.log while test was run</a> </li>
+	            <li><a href="#finalpart">Final processing of ISQL logs</a> </li>
+	        </ol>
+	        </td>
+	    </tr>
+	</table>
+
+
+	EOF
+    fi
+    # make_html=1
+
+
+    if [ $gather_hardware_info -eq 1 ]; then
+	cat <<- EOF >>$plog
+	
+	######################################################################
+	###  g a t h e r     h a r d w a r e    a n d     O S    i n f o   ###
+	######################################################################
+	
+	EOF
+
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+            $htm_sect <a name="hardwareinfo"> Hardware and OS info </a> $htm_secc
+            <table>
+	EOF
+        fi
+
+        run_cmd="hostnamectl"
+        apply_cmd "$run_cmd" "host_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+
+        # 23.03.20 00:15:15. Command: 'hostnamectl'
+        # Static hostname: foo.company.com
+        #       Icon name: computer-server
+        #         Chassis: server
+        #      Machine ID: aee...e77
+        #         Boot ID: 36f...58d
+        #Operating System: CentOS Linux 7 (Core)
+        #     CPE OS Name: cpe:/o:centos:centos:7
+        #          Kernel: Linux 3.10.0-957.5.1.el7.x86_64
+        #    Architecture: x86-64
+
+        if [ $make_html -eq 1 ]; then
+            echo "<tr><th colspan=2>Command: $run_cmd</th></tr>" >> $phtm
+            while read line; do
+                echo "<tr><td>$(echo "$line" | cut -d : -f2)</td><td>$(echo "$line" | cut -d : -f3-)</td></tr>" >>$phtm
+            done < <( grep . $tmpauxlog | tail --lines=+2 )
+        fi
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="who -b"
+        apply_cmd "$run_cmd" "bootup_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+        # bootup_info: system boot 2019-11-01 09:39
+
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+
+          while read line; do
+            echo "<tr><td>$(echo "$line" | cut -d : -f1)</td><td>$(echo "$line" | cut -d : -f2-)</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2  )
+        fi
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="dmidecode -t system|grep -i -e 'manufacturer\|product\|hypervisor'"
+        apply_cmd "$run_cmd" "mboard_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+
+        # mboard_info: Manufacturer: HP
+        # mboard_info: Product Name: ProLiant DL380 Gen9
+
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+          while read line; do
+            echo "<tr><td>$(echo "$line" | cut -d : -f2)</td><td>$(echo "$line" | cut -d : -f3-)</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2 )
+        fi
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="dmesg | grep DMI"
+        apply_cmd "$run_cmd" "DMI_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+          while read line; do
+            echo "<tr><td>$(echo "$line" | cut -d : -f2)</td><td>$(echo "$line" | cut -d : -f3-)</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2 )
+        fi
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="lscpu | grep -i -v flags"
+        apply_cmd "$run_cmd" "CPU_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+          while read line; do
+            echo "<tr><td>$(echo "$line" | cut -d : -f2)</td><td>$(echo "$line" | cut -d : -f3-)</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2 )
+	fi
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="cat /proc/meminfo | grep -i -e 'memtotal\|memfree\|memavail\|buffers\|cached\|swapcached'"
+        apply_cmd "$run_cmd" "mem_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+          while read line; do
+            echo "<tr><td>$(echo "$line" | cut -d : -f2)</td><td>$(echo "$line" | cut -d : -f3-)</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2 )
+	fi
+
+
+        # --++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--++--+
+
+        run_cmd="fdisk -l"
+        apply_cmd "$run_cmd" "fdisk_info" $tmpauxlog 1
+        cat $tmpauxlog >>$plog
+
+        # NB: output of fdisk command  contain asterisk. If line with '*' will be echoed then all files from
+        # current folder will be substituted instead of this '*'. In order to avoid this one need to enclose
+        # into double quotes name of such variable, i.e.: "$line" but not $line 
+        # See: https://stackoverflow.com/questions/102049/how-do-i-escape-the-wildcard-asterisk-character-in-bash
+        # Example:
+        # Disk /dev/sda: 599.9 GB, 599932581888 bytes, 1171743324 sectors
+        # Units = sectors of 1 * 512 = 512 bytes
+        # Sector size (logical/physical): 512 bytes / 512 bytes
+        # I/O size (minimum/optimal): 262144 bytes / 524288 bytes
+        if [ $make_html -eq 1 ]; then
+	cat <<- EOF >>$phtm
+	    <tr><th colspan=2>Command: $run_cmd</th></tr>
+	EOF
+          while read line; do
+            #echo "<tr><td>$(echo "$line" | cut -d : -f2-)</td></tr>" >>$phtm
+            echo "<tr><td colspan=2>$(echo "$line")</td></tr>" >>$phtm
+          done < <( grep . $tmpauxlog | tail --lines=+2 | cut -d : -f2- | sed '/^ $/d' )
+          echo "</table>" >> $phtm
+	fi
+
+
+    else
+	rm -f $tmpauxlog
+	cat <<- EOF >>$tmpauxlog
+		
+		Config parameter gather_hardware_info=0, hardware and OS info were NOT gathered.
+		===============================================================================
+	EOF
+	cat $tmpauxlog>>$plog
+	if [[ $make_html -eq 1 ]]; then
+		echo "$htm_sect <a name="hardwareinfo"> Hardware and OS info </a> $htm_secc" >>$phtm
+		add_html_text $tmpauxlog $phtm 0 "null" "pre"
+	fi
+
+    fi
+    # end of $gather_hardware_info = 1 | 0
+
+#\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+    rpt_name="Server and database settinfs"
+    rm -f $tmpauxlog
+	cat <<- EOF >>$plog
+		
+		$rpt_name
+		=======================
+	EOF
+    #run_get_fb_ver% 1>%tmp_file% 2>&1
+    #call :add_html_text tmp_file htm_file
+    #del %tmp_file% 2>nul
+	cat <<- EOF >$psql
+            set list on;
+            select
+                 p.fb_arch as server_mode
+                 ,mon\$database_name as db_name
+                 ,iif(mon\$forced_writes=0, '$css' || '$warning$OFF', 'ON') as forced_writes
+                 ,mon\$sweep_interval as sweep_int
+                 ,mon\$page_buffers as page_buffers
+                 ,mon\$page_size as page_size
+            from mon\$database
+            left join sys_get_fb_arch('$usr', '$pwd') p on 1=1;
+	EOF
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>$tmpauxlog 2>&1
+    cat $tmpauxlog >>$plog
+    if [[ $make_html -eq 1 ]]; then
+	cat <<- EOF >>$phtm
+	    $htm_sect <a name="testsettings">$rpt_name</a> $htm_secc
+	EOF
+	add_html_text $tmpauxlog $phtm 0 "null" "pre"
+    fi
+
+    rpt_name="Test configuration settings"
+	cat <<- EOF >>$plog
+		
+		$rpt_name
+		=======================
+	EOF
+
+    rm -f $tmpauxlog
+    while IFS='=' read lhs rhs
+    do
+        if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
+	  lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
+          rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
+	  echo "param=$lhs, val=$rhs" >> $tmpauxlog
+        fi
+    done < <( sed -e 's/^[ \t]*//' $cfg | grep "^[^#;]" )
+
+    if [[ -z "$clu" ]]; then
+	echo Name of of interactive SQL utility: 'isql' >>$tmpauxlog
+    else
+	# Name of ISQL on Ubuntu/Debian when FB is installed from OS repository
+	# 'isql-fb' etc:
+	echo Custom name of interactive SQL utility: parameter: \'clu\', value: \|$clu\| >>$tmpauxlog
+    fi
+    cat $tmpauxlog>>$plog
+
+    if [[ $make_html -eq 1 ]]; then
+	cat <<- EOF >>$phtm
+	    $htm_sect Test configuration settings $htm_secc
+	EOF
+	add_html_text $tmpauxlog $phtm 0 "null" "pre"
+    fi
+
+    #/////////////////////////////////////////////////////////////////////////
+
+	cat <<- EOF >>$plog
+	
+	################################################################################################
+	###  h o w     t e s t    w a s      f i n i s h e d ?   (normally / premature termination)  ###
+	################################################################################################
+	EOF
+
+	cat <<- "EOF" >$psql
+		commit;
+		create or alter view tmp4report_only as
+		select
+		   p.exc_info as finish_state, p.dts_end, p.fb_gdscode, e.fb_mnemona,
+		      coalesce(p.stack,'') as stack,
+		         p.ip,p.trn_id, p.att_id,p.exc_unit
+		from rdb$database r
+		left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
+		left join fb_errors e on p.fb_gdscode = e.fb_gdscode
+		order by p.dts_beg desc
+		rows 1;
+		commit;
+		-----------------------------------------------------
+		set list on;
+		select
+		    x.finish_state
+		   ,x.dts_end
+		   ,x.fb_gdscode
+		   ,x.fb_mnemona
+		   ,x.stack
+		   ,x.ip
+		   ,x.trn_id
+		   ,x.att_id
+		   ,x.exc_unit
+		from tmp4report_only x
+		;
+		set list off;
+	EOF
+
+    $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>$tmpauxlog 2>&1
+    cat $tmpauxlog>>$plog
+
+    # psql = /var/tmp/logs.oltp30/oltp30_localhost.localdomain-001.performance_report.tmp
+
+    if [[ $make_html -eq 1 ]]; then
+	cat <<- EOF >>$phtm
+            $htm_sect <a name="testfinishinfo"> Test finish info </a> $htm_secc
+	EOF
+	cat <<- "EOF" >$psql
+	    set list on;
+            select
+               iif( x.finish_state containing 'abnormal'
+                    ,'$css' || '$error$' -- split style because its nameis searched in html parsing routines and will be cuted off otherwise
+                    ,iif( x.finish_state containing 'premature'
+                         ,'$css' || '$warning$' -- split style because its nameis searched in html parsing routines and will be cuted off otherwise
+                         ,'$css' || '$success$' -- split style because its nameis searched in html parsing routines and will be cuted off otherwise
+                       )
+                   ) || x.finish_state as finish_state
+              ,x.dts_end
+              ,x.fb_gdscode
+              ,x.fb_mnemona
+              ,x.stack
+              ,x.ip 
+              ,x.trn_id 
+              ,x.att_id 
+              ,x.exc_unit
+           from tmp4report_only x
+           ;
+	EOF
+        $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>$tmpauxlog 2>&1
+
+        #add_html_table $psql $phtm
+        add_html_text $tmpauxlog $phtm 0 "null" "pre"
+    fi
+
+    #------------------------------------------------------------------------
+
+	cat <<- EOF >>$plog
+
+	#####################################################
+	###  c u r r e n t    t e s t    s e t t i n g s  ###
+	#####################################################
+	EOF
+	
+	rpt_name="Test workload details"
+	cat <<- "EOF" >$psql
+	    set width working_mode 12;
+	    set width setting 32;
+	    set width val 30;
+	    --set list on;
+	    select 'WORKING_MODE' as setting_name, s.svalue as setting_value
+	    from settings s
+	    where s.working_mode = 'INIT' and s.mcode='WORKING_MODE'
+	    UNION ALL
+	    select s.mcode as setting, s.svalue as val
+	    from settings s
+	    join (
+	        select s.svalue as working_mode
+	        from settings s
+	        where s.working_mode = 'INIT' and s.mcode='WORKING_MODE'
+	         ) w on s.working_mode = w.working_mode;
+	EOF
+        $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+
+	if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >>$phtm
+		    $htm_sect <a name="testworkload"> $rpt_name </a> $htm_secc
+		EOF
+		add_html_table $psql $phtm
+		#add_html_text $tmpauxlog $phtm 0 "null" "pre"
+	fi
+	rm -f $psql
+
+	#-----------------------------------------------------------------------
+
+	rpt_name="Indexes for heavy-loaded tables"
+	cat <<- "EOF" >$psql
+	    set width tab_name 13;
+	    set width idx_name 31;
+	    set width idx_key 45;
+	    select * from z_qd_indices_ddl;
+	EOF
+	
+	cat <<- EOF >>$plog
+		
+		$rpt_name
+		===============================
+	EOF
+        $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+
+	if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >>$phtm
+		    $htm_sect <a name="qdindexesddl"> $rpt_name </a> $htm_secc
+		EOF
+		add_html_table $psql $phtm
+	fi
+	rm -f $psql
+
+	#-----------------------------------------------------------------------
+
+    sho "SID=$sid. Start script aggregation performance data." $plog
+	cat <<- "EOF" >$psql
 		commit;
 		set transaction no wait;
 		set list on;
@@ -750,17 +1507,11 @@ do
 		commit;
 		set list off;
 	EOF
-
-    # psql = /var/tmp/logs.oltp30/oltp30_localhost.localdomain-001.performance_report.tmp
-
-    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. START additional script after all sessions completed.
-
     $isql_name $dbconn -now -q -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    # MSG                             Final data aggregation from PERF_FPLIT_nn tables to PERF_AGG
+    # RESULT                          i=123451, u=32154, ms=12387
 
-    echo>>$plog
-    echo $(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. FINISH additional script.
-
-
+    sho "SID=$sid. Finish script aggregation performance data." $plog
 
     rm -f $psql $tmpauxtmp $tmpauxsql $tmpauxerr
 
@@ -769,10 +1520,13 @@ do
 	###   p e r f o r m a n c e     r e p o r t s   ###
 	###################################################
 	EOF
+
+	#--------------------------------------------------------------------
 	
+	rpt_name="Performance in TOTAL"
 	cat <<- EOF >>$plog
 		
-		Performance in TOTAL:
+		$rpt_name
 		=====================
 		Get overall performance report for last test_time=$test_time minutes of activity.
 		Value in column "avg_times_per_minute" in 1st row is OVERALL PERFORMANCE INDEX.
@@ -792,18 +1546,25 @@ do
 	
 	cat $psql >> $plog
 
-	s1=$(date +%s)
-	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog
-	rm -f $psql
+    s1=$(date +%s)
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    # Add timestamps of start and finish and how long last ISQL was:
+    log_elapsed_time $s1 $plog "$rpt_name"
 
+
+    if [ $make_html -eq 1 ]; then
+        echo "$htm_sect <a name="perftotal"> $rpt_name </a> $htm_secc" >> $phtm
+	s1=$(date +%s)
+	add_html_table $psql $phtm
+	log_elapsed_time $s1 $phtm "$rpt_name"
+    fi
+    rm -f $psql
 
     #------------------------------------------------------------------------------------
-
+    rpt_name="Performance in DYNAMIC"
 	cat <<- EOF >>$plog
 		
-		Performance in DYNAMIC:
+		$rpt_name
 		=======================
 	EOF
 	
@@ -827,18 +1588,25 @@ do
 	EOF
 	cat $psql >> $plog
 
+    s1=$(date +%s)
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    # Add timestamps of start and finish and how long last ISQL was:
+    log_elapsed_time $s1 $plog "$rpt_name"
+
+    if [ $make_html -eq 1 ]; then
+        echo "$htm_sect <a name="perfdynam">$rpt_name</a> $htm_secc" >> $phtm
 	s1=$(date +%s)
-	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog
-	rm -f $psql
+	add_html_table $psql $phtm
+	log_elapsed_time $s1 $phtm "$rpt_name"
+    fi
+    rm -f $psql
 
 
     #------------------------------------------------------------------------------------
-
+    rpt_name="Performance for every MINUTE"
 	cat <<- EOF >>$plog
 		
-		Performance for every MINUTE:
+		$rpt_name
 		=============================
 		Extract values of ESTIMATED performance that was evaluated after EACH business
 		operation finished.
@@ -857,19 +1625,25 @@ do
         commit;
 	EOF
 
-	cat $psql >> $plog
-
+    cat $psql >> $plog
+    s1=$(date +%s)
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    # Add timestamps of start and finish and how long last ISQL was:
+    log_elapsed_time $s1 $plog "$rpt_name"
+    if [ $make_html -eq 1 ]; then
+        echo "$htm_sect <a name="perfminute">$rpt_name</a> $htm_secc" >> $phtm
 	s1=$(date +%s)
-	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog
-	rm -f $psql
+	add_html_table $psql $phtm
+	log_elapsed_time $s1 $phtm "$rpt_name"
+    fi
+    rm -f $psql
+
 
     #------------------------------------------------------------------------------------
-
+    rpt_name="Performance in DETAILS"
 	cat <<- EOF >>$plog
 
-		Preformance in DETAILS:
+		$rpt_name
 		=======================
 		Get performance report with detaliation per units, for last test_time=$test_time minutes of workload.
 		Fields:
@@ -897,17 +1671,25 @@ do
 	EOF
 	cat $psql >> $plog
 
+    s1=$(date +%s)
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    # Add timestamps of start and finish and how long last ISQL was:
+    log_elapsed_time $s1 $plog "$rpt_name"
+    if [ $make_html -eq 1 ]; then
+        echo "$htm_sect <a name="perfdetail">$rpt_name</a> $htm_secc" >> $phtm
 	s1=$(date +%s)
-	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog
-	rm -f $psql
+	add_html_table $psql $phtm
+	log_elapsed_time $s1 $phtm "$rpt_name"
+    fi
+    rm -f $psql
+
     #------------------------------------------------------------------------------------
 
+    rpt_name="Monitoring data, per application UNITS"
     if [ $mon_unit_perf -eq 1 ]; then
 		cat <<- EOF >>$plog
 			
-			Monitoring data, per application UNITS:
+			$rpt_name
 			=======================================
 			Get report about gathered MONITOR tables data, detalization per UNITS.
 			NOTE: source view for this report will be created only when config
@@ -925,14 +1707,20 @@ do
 		s1=$(date +%s)
 		$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
-		log_elapsed_time $s1 $plog
+		log_elapsed_time $s1 $plog "$rpt_name"
+		if [ $make_html -eq 1 ]; then
+		    echo "$htm_sect <a name="perfmon4unit">$rpt_name</a> $htm_secc" >> $phtm
+		    s1=$(date +%s)
+		    add_html_table $psql $phtm
+		    log_elapsed_time $s1 $phtm "$rpt_name"
+		fi
 		rm -f $psql
 
 		if [ $fb -gt 25 ]; then
-
+			rpt_name="Monitoring data, per TABLES and UNITS (avail. only in FB 3.0)"
 			cat <<- EOF >>$plog
 				
-				Monitoring data, per TABLES and UNITS (avail. only in FB 3.0):
+				$rpt_name
 				==============================================================
 				Get report about gathered MONITOR tables data, detalization  per TABLES and UNITS.
 				NOTE: source view for this report will be created only when config
@@ -952,18 +1740,45 @@ do
 			s1=$(date +%s)
 			$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 			# Add timestamps of start and finish and how long last ISQL was:
-			log_elapsed_time $s1 $plog
+			log_elapsed_time $s1 $plog "$rpt_name"
+			if [ $make_html -eq 1 ]; then
+			    echo "$htm_sect <a name="perfmon4tabs">$rpt_name</a> $htm_secc" >> $phtm
+			    s1=$(date +%s)
+			    add_html_table $psql $phtm
+			    log_elapsed_time $s1 $phtm "$rpt_name"
+			fi
 			rm -f $psql
 
 		fi # fb is 30 or higher 
+
     elif [ $mon_unit_perf -eq 2 ]; then
 
-		cat <<- "EOF" >>$plog
+		rpt_name="Monitoring data: metadata cache size"
+		cat <<- EOF >>$plog
 			
-			Monitoring data: metadata cache size
+			$rpt_name
 			====================================
 			Get report about metadata cache, attachments and statements memory usage.
 			NOTE. Config parameter 'mon_unit_perf' must have value 2 for this report.
+		EOF
+		#if [ $make_html -eq 1 ]; then
+		#    echo "$htm_sect <a name="perfmon4meta">$rpt_name</a> $htm_secc" >> $phtm
+		#fi
+		
+		cat <<- "EOF" >$psql
+			set heading off;
+			set term ^;
+			execute block returns(" " dm_info) as
+			begin
+			    " " = ascii_char(10) || ( select p.page_cache_info from srv_get_page_cache_info p ) ;
+			    suspend;
+			end
+			^
+			set term ;^
+		EOF
+
+		rm -f $tmpauxlog
+		cat <<- "EOF" >>$tmpauxlog
 			Fields:
 			  page cache memo used            = page cache total size, bytes:
 			  metadata cache memo used        = metadata cache, bytes;
@@ -977,16 +1792,14 @@ do
 			  memo used by statements         = total of mon$memory_usage.mon$memory_used for statement level, i.e. mon$stat_group = 3;
 		EOF
 
+		$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$tmpauxlog 2>&1
+		cat $tmpauxlog >> $plog
+		if [[ $make_html -eq 1 ]]; then
+			echo "$htm_sect <a name="perfmon4meta">$rpt_name</a> $htm_secc" >> $phtm
+			add_html_text $tmpauxlog $phtm 0 "null" "pre"
+		fi
+
 		cat <<- "EOF" >$psql
-			set heading off;
-			set term ^;
-			execute block returns(" " dm_info) as
-			begin
-			    " " = ascii_char(10) || ( select p.page_cache_info from srv_get_page_cache_info p ) ;
-			    suspend;
-			end
-			^
-			set term ;^
 			set heading on;
 			select
 			    measurement_timestamp as "measurement_dts" -- 21.04.2019 do NOT use alias with SPACES for the 1st field of resultset!
@@ -1010,20 +1823,49 @@ do
 		s1=$(date +%s)
 		$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 		# Add timestamps of start and finish and how long last ISQL was:
-		log_elapsed_time $s1 $plog
+		log_elapsed_time $s1 $plog "$rpt_name"
+		if [ $make_html -eq 1 ]; then
+		    # do NOT - already performed, see above -- echo "$htm_sect <a name="perfmon4meta">$rpt_name</a> $htm_secc" >> $phtm
+		    s1=$(date +%s)
+		    add_html_table $psql $phtm
+		    log_elapsed_time $s1 $phtm "$rpt_name"
+		fi
 		rm -f $psql
     else
-		cat <<- EOF >>$plog
+		cat <<- EOF >$tmpauxlog
 		
 			Config parameter mon_unit_perf=0, data from MON$ tables were NOT gathered.
 			==========================================================================
 		EOF
+		cat $tmpauxlog >>$plog
+		if [[ $make_html -eq 1 ]]; then
+			echo "$htm_sect <a name="perfmon4unit">Monitoring data</a> $htm_secc" >> $phtm
+			add_html_text $tmpauxlog $phtm 0 "null" "pre"
+		fi
+		
     fi # mon_unit_perf = 1 | 0
-	rm -f $psql
+    
+    if [[ $mon_unit_perf -eq 1 ]]; then
 
+		cat <<- EOF >$tmpauxlog
+		
+			Current value of config parameter mon_unit_perf is $mon_unit_perf
+			Metadata cache size can be monitored only when mon_unit_perf=2
+			==============================================================
+		EOF
+		cat $tmpauxlog >>$plog
+		if [[ $make_html -eq 1 ]]; then
+			echo "$htm_sect <a name="perfmetadisabled">Metadata cache size</a> $htm_secc" >> $phtm
+			add_html_text $tmpauxlog $phtm 0 "null" "pre"
+		fi
+
+    fi
+
+	rpt_name="Exceptions occured during test was in run"
+	rm -f $psql
 	cat <<- EOF >>$plog
 		
-		Exceptions occured during test was in run:
+		$rpt_name
 		==========================================
 	EOF
 
@@ -1039,112 +1881,256 @@ do
 	s1=$(date +%s)
 	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
 	# Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog
+	log_elapsed_time $s1 $plog "$rpt_name"
+	if [ $make_html -eq 1 ]; then
+	    echo "$htm_sect <a name="exceptions">$rpt_name</a> $htm_secc" >> $phtm
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+	fi
 	rm -f $psql
 
-
-
+    #------------------------------------------------------------------------------------
+    rpt_name="Content of mon\$database and FB version"
 	cat <<- EOF >>$plog
-		
-		Database and FB version info:
-		=============================
+
+		$rpt_name
+		======================================
 	EOF
-	cat <<- "EOF" >>$psql
+	cat <<- "EOF" >$psql
 		set list on;
 		select * from mon$database;
 		set list off;
 		show version;
 	EOF
-    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>$tmpauxlog 2>&1
+    cat $tmpauxlog >>$plog
+    if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >>$phtm
+		$htm_sect <a name="fbdbinfo">$rpt_name </a> $htm_secc
+		EOF
+                add_html_text $tmpauxlog $phtm 0 "null" "pre"
+    fi
     rm -f $psql
 
+    #------------------------------------------------------------------------------------
 
     if [ $run_db_statistics -eq 1 ]; then
-		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
-		cat <<- EOF >>$plog
-			
-			Obtain database statistics after test.
-			======================================
-			Command: $run_fbs
-		EOF
-		msg="SID=$sid. Gather database statistics"
-		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - START.
-
-		s1=$(date +%s)
-		$run_fbs 1>>$plog 2>&1
-		# Add timestamps of start and finish and how long last action was:
-		log_elapsed_time $s1 $plog
+	run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_db_stats -sts_data_pages -sts_idx_pages -sts_record_versions -dbname $dbnm"
+	cat <<- EOF >>$plog
 		
-		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
-    else
-		cat <<- EOF >>$plog
-			
-			Database statistics was not gathered, see config parameter 'run_db_statistics'.
-			===============================================================================
+		Obtain database statistics after test.
+		======================================
+		Command: $run_fbs
+	EOF
+
+	rpt_name="Database statistics"
+	msg="SID=$sid. $rpt_name"
+	sho "$msg - START." $plog
+	s1=$(date +%s)
+	$run_fbs 1>$tmpauxlog 2>&1
+	cat $tmpauxlog >>$plog
+	
+	# Add timestamps of start and finish and how long last action was:
+	log_elapsed_time $s1 $plog "$rpt_name"
+	sho "$msg - FINISH." $plog
+
+        if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >>$phtm
+		$htm_sect <a name="dbstatistics">$rpt_name </a> $htm_secc
 		EOF
+                add_html_text $tmpauxlog $phtm 0 "null" "pre"
+        fi
+
+	rm -f $psql
+	grep -i " (\|total records:\|total versions:" $tmpauxlog | grep -v "Index " > $tmpauxtmp
+	# Get relation names: grep -E " \([0-9]{3,}\)" tmp_1.aux.log
+	while read line; do
+	    vers=0
+	    if echo $line | grep -q -E " \([0-9]{3,}\)" ; then
+	        # INVNT_TURNOVER_LOG (155)
+	        tabn=$(echo "$line" | cut -d ' ' -f1)
+	        #echo tabn=$tabn
+	    elif [[ "$line" == *" total records: "* ]]; then
+	        # Average record length: 33.52, total records: 50
+	        #    1      2        3     4      5      6      7
+	        recs=$(echo "$line" | cut -d ' ' -f7)
+	        #echo recs=$recs
+	    elif [[ "$line" == *" total versions: "* ]]; then
+	        # Average version length: 2.00, total versions: 123, max versions: 456
+	        #    1       2       3      4     5      6       7    7      9      10
+	        vers=$(echo "$line" | cut -d ' ' -f7 | cut -d ',' -f1)
+	        vmax=$(echo "$line" | cut -d ' ' -f10)
+		#echo line=$line
+	        #echo vers=$vers
+	    fi
+	    if [[ $vers -gt 0 ]]; then
+	        # NB: 'rowset' is INDEXED field.
+	        echo "insert into mon_log_table_stats(id, rowset, table_name, rec_inserts, rec_updates)" >>$psql
+	        echo "values( -gen_id(g_common,1), -current_connection, '$tabn', $recs, $vers );" >>$psql
+	    fi
+	done < <( grep . $tmpauxtmp | sed -e 's/^[ \t]*//' )
+
+	cat <<- "EOF" >> $psql
+	    commit;
+	    set heading off;
+	    select -current_connection from rdb$database; -- this will be saved into script env. variable 'xrowset', see below
+	    set heading on;
+	    commit;
+	EOF
+
+	$isql_name $dbconn -q -pag 9999 -i $psql $dbauth 1>$tmpauxtmp 2>&1
+
+	# Get only non-empty row and remove trailing spaces from it:
+	xrowset=$(grep . $tmpauxtmp | sed 's/[[:blank:]]*$//')
+
+	cat <<- EOF >$psql
+	    commit;
+	    create or alter view tmp4report_only as
+	    select
+	        t.table_name
+	        ,t.rec_inserts as total_recs
+	        ,t.rec_updates as total_vers
+	        ,cast( 100.0000 * t.rec_updates / nullif(t.rec_inserts,0)  as numeric(14,4)) as vers_percent
+	    from mon_log_table_stats t
+	    where
+	       t.rowset=$xrowset
+	       and t.rec_inserts > 0
+	    order by t.table_name;
+	    commit;
+	    set width table_name 31;
+	    select * from tmp4report_only;
+	EOF
+
+	#set -x
+	$isql_name $dbconn -q -pag 9999 -i $psql ${dbauth} 1>$tmpauxtmp 2>&1
+	#set +x
+	rpt_name="DB statistics: get values of total records and versions"
+
+	# Result:
+	#TABLE_NAME                                 TOTAL_RECS            TOTAL_VERS          VERS_PERCENT
+	#=============================== ===================== ===================== =====================
+	#XQD_1000_3300                                   14259                   333                2.3353
+	#XQD_2000_3300                                    2104                  1136               53.9923
+	# . . .
+
+	sho "SID=$sid. $rpt_name" $plog
+	cat $tmpauxtmp >>$plog
+
+	if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >>$phtm
+		$htm_sect <a name="dbverstotal">$rpt_name </a> $htm_secc
+		EOF
+		cat <<- "EOF" >$psql
+		select
+		    x.table_name
+		   ,x.total_recs
+		   ,x.total_vers
+		   ,iif( x.vers_percent > 500
+		         ,'$css' || '$error$' || 'danger>>'
+		         ,iif(x.vers_percent > 50, '$css' || '$warning$' || 'too high', 'normal')
+		       ) as vers_ratio
+		    -- we must use numeric field 'vers_percent' WITHOUT any concatenation with it.
+		    -- Otherwise its content will no be right adjusted in the table cell:
+		    ,x.vers_percent as vers_percent
+		from tmp4report_only x
+		;
+		commit;
+		EOF
+		# call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+		add_html_table $psql $phtm
+		rm -f $psql
+	fi
+	rm -f $tmpauxtmp
+
+    else
+
+	rm -f $tmpauxlog
+	cat <<- EOF >>$tmpauxlog
+		
+		Database statistics was not gathered, see config parameter 'run_db_statistics'.
+		===============================================================================
+	EOF
+	cat $tmpauxlog>>$plog
+	if [[ $make_html -eq 1 ]]; then
+		echo "$htm_sect <a name="dbstatistics">Database statistics </a> $htm_secc" >>$phtm
+		add_html_text $tmpauxlog $phtm 0 "null" "pre"
+	fi
     fi
 
+    #------------------------------------------------------------------------------------
+
     if [ $run_db_validation -eq 1 ]; then
+		rpt_name="Online validation of database"
 		skip_val_list="(AGENTS|BUSINESS_OPS|DOC_STATES|FB_ERRORS|EXT_STOPTEST|SETTINGS|OPTYPES|RULES_FOR_%|PHRASES|TMP\$%|MON%|WARE%|Z_%)"
 		run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth -action_validate -dbname $dbnm -val_lock_timeout 1 -val_tab_excl $skip_val_list"
 		cat <<- EOF >>$plog
 			
-			Online validation of database.
+			$rpt_name
 			==============================
 			Command: $run_fbs
 		EOF
-		msg="SID=$sid. Database online validation"
-		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - START.
-
+		sho "SID=$sid. $rpt_name - START" $plog
 		s1=$(date +%s)
-		$run_fbs 1>>$plog 2>&1
+		$run_fbs 1>$tmpauxlog 2>&1
+		cat $tmpauxlog >>$plog
 		# Add timestamps of start and finish and how long last action was:
-		log_elapsed_time $s1 $plog
-
-		echo $(date +'%Y.%m.%d %H:%M:%S'). $msg - FINISH.
+		log_elapsed_time $s1 $plog "$rpt_name"
+		sho "SID=$sid. $rpt_name - FINISH" $plog
+		if [[ $make_html -eq 1 ]]; then
+			cat <<- EOF >>$phtm
+				$htm_sect <a name="dbvalidation">$rpt_name </a> $htm_secc
+			EOF
+			add_html_text $tmpauxlog $phtm 0 "null" "pre"
+		fi
     else
-		cat <<- EOF >>$plog
-			
-			Database validation was not performed, see config parameter 'run_db_validation'.
-			================================================================================
-		EOF
+	rm -f $tmpauxlog
+	cat <<- EOF >>$tmpauxlog
+		
+		Database validation was not performed, see config parameter 'run_db_validation'
+		===============================================================================
+	EOF
+	cat $tmpauxlog>>$plog
+	if [[ $make_html -eq 1 ]]; then
+		echo "$htm_sect <a name="dbvalidation">Database validation </a> $htm_secc" >>$phtm
+		add_html_text $tmpauxlog $phtm 0 "null" "pre"
+	fi
     fi
 
-    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Gathering firebird.log after test finished."
-    echo $msg
+    #------------------------------------------------------------------------------------
 
-	cat <<- EOF >>$plog
-		
-		$msg
-		Command: $run_fbs
-	EOF
+    run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth $get_log_switch"
+    sho "SID=$sid. Gathering firebird.log after test finished." $plog
 
     $run_fbs 1>$fblog_end 2>>$plog
 
 	cat <<- EOF >>$plog
+		Command: $run_fbs
 		Check new firebird.log:
 	EOF
 	
     ls -l $fblog_end 1>>$plog 2>&1
 
-    msg="$(date +'%Y.%m.%d %H:%M:%S'). SID=$sid. Comparison of old and new firebird.log (get messages that appeared during test)."
-    echo $msg
+    rpt_name="Comparison of old and new firebird.log: get messages that appeared during test"
+    sho "SID=$sid. $rpt_name" $plog
 
-	cat <<- EOF >>$plog
-		
-		$msg
-	EOF
 
-    echo --- start of diff output --- >> $plog
-    diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$plog 2>&1
-    echo --- end of diff output --- >> $plog
+    rm -f $tmpauxlog
+    echo --- start of diff output --- >> $tmpauxlog
+    diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end 1>>$tmpauxlog 2>&1
+    echo --- end of diff output --- >> $tmpauxlog
     rm -f $fblog_beg $fblog_end
-  
-    #msg="$(date +'%Y.%m.%d %H:%M:%S'). Done."
-    #echo $msg>>$sts
+    cat $tmpauxlog >>$plog
+    if [[ $make_html -eq 1 ]]; then
+	cat <<- EOF >>$phtm
+		$htm_sect <a name="fblogcompare">$rpt_name </a> $htm_secc
+	EOF
+	add_html_text $tmpauxlog $phtm 0 "null" "pre"
+    fi
 
-    sho "SID=$sid. Removing all ISQL logs according to value of config 'remove_isql_logs' setting" $plog
+    # ---------------------------------------------------------------------------------
+    rpt_name="Final processing ISQL logs in $tmpdir according to config parameter 'remove_isql_logs'"
+    sho "SID=$sid. $rpt_name" $plog
 
     # 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
     # 335544347    not_valid    Validation error for column @1, value "@2".
@@ -1167,39 +2153,98 @@ do
         ;;
     esac
 
-    echo $msg
-    echo $msg >> $plog
+    sho "SID=$sid. $msg" $plog
 
     rm -f $psql
 	cat <<- "EOF" >>$psql
+          create or alter view tmp4report_only as
+          select
+              x.severe_errors_occured
+             ,iif( x.severe_errors_occured = 1, 'SEVERE_ERRORS_EXIST!', 'NO_SEVERE_ERRORS_FOUND' ) as errors_checking_result
+          from (
+              select
+                  iif(
+                    exists( 
+                            select *
+                            from perf_log p
+                            -- NOTES.
+                            -- 1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
+                            -- 2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
+                            --    Auto removing of .err files which did contain "string truncation" error was the main reason
+                            --    why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
+                            where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
+                                p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349, 335544321 )
+                                and p.dts_beg > (
+                                    select x.dts_beg
+                                    from perf_log x -- 12.10.2018: do NOT replace here "perf_log" with "v_perf_log"
+                                    where x.unit='perf_watch_interval'
+                                    order by x.dts_beg desc
+                                    rows 1
+                                )
+                       )
+                      ,1 -- 'SEVERE_ERRORS_EXIST!'
+                      ,0 -- 'NO_SEVERE_ERRORS_FOUND'
+                  ) as severe_errors_occured
+              from rdb$database
+          ) x;
+          commit;
           -- Checking query:
           set list on;
-          select iif( exists( select *
-                    from v_perf_log p -- 13.10.2018: replaced "perf_log" (table) with "v_perf_log" (view)
-                    where -- ::: NB ::: added "0" to the list of severe gdscodes! SuperClassic 3.0 trouble.
-                        p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349 )
-                        and p.dts_beg > (
-                            select x.dts_beg
-                            from perf_log x -- 12.10.2018: do NOT replace here "perf_log" with "v_perf_log"
-                            where x.unit='perf_watch_interval'
-                            order by x.dts_beg desc
-                            rows 1
-                        )
-                 ),
-            'SEVERE_ERRORS_EXIST!',
-            'NO_SEVERE_ERRORS_FOUND' ) as errors_checking_result
-          from rdb$database;
+          select x.errors_checking_result from tmp4report_only x;
+          commit;
 	EOF
 
     if [ "$remove_isql_logs" == "if_no_severe_errors" ]; then
+        if [[ $make_html -eq 1 ]]; then
+		cat <<- EOF >$tmpauxlog
+		$htm_sect <a name="finalpart">$rpt_name </a> $htm_secc
+		$msg
+		Following values of gdscode are considered as SEVERE:
+		    335544558 'check_constraint'. Operation violates CHECK constraint on view or table.
+		    335544347 'not_valid'. Validation error for column.
+		    335544665 'unique_key_violation'. Violation of PRIMARY or UNIQUE KEY constraint.
+		    335544349 'no_dup'. Attempt to store duplicate value visible to active transactions.
+		    335544321 'string truncation'. Attempt to assign too long text into string variable.
+		EOF
+		add_html_text $tmpauxlog $phtm 0 "null" "pre"
+        fi
+
         $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+        # ERRORS_CHECKING_RESULT          NO_SEVERE_ERRORS_FOUND ==> we can DELETE temp logs.
+        if [[ $make_html -eq 1 ]]; then
+	cat <<- "EOF" >$psql
+              select
+                  current_timestamp as finished_at,
+                  iif(x.severe_errors_occured = 1, '$css' || '$error$', '$css' || '$success$') || x.errors_checking_result as errors_result
+              from tmp4report_only x;
+              commit;
+              drop view tmp4report_only;
+              commit;
+	EOF
+             add_html_table $psql $phtm
+        fi
         if grep -i "NO_SEVERE_ERRORS_FOUND" $plog > /dev/null ; then
+            # rm -f /var/tmp/logs-oltp30/oltp30_**.**
             rm -f $log_ptn
         fi
     fi
 
     rm -f $psql
 
+    msg="End of report."
+    sho "$msg" $plog
+    if [[ $make_html -eq 1 ]]; then
+        echo $msg>$tmpauxlog
+	add_html_text $tmpauxlog $phtm
+	cat <<- EOF >>$phtm
+		</body>
+		</html>
+
+	EOF
+    fi
+    rm -f $tmpauxlog
+
+    #-------------------------------------------------------------------------------
 
 	if [ -n "$fname" ] ; then
 		cat <<- EOF > $psql
@@ -1240,6 +2285,18 @@ do
 			rm -f $log_with_params_in_name $psql $tmpsidlog $tmpsiderr
 			mv $plog $log_with_params_in_name
 			plog=$log_with_params_in_name
+
+			if [[ $make_html -eq 1 ]]; then
+			    set -x
+			    htm_with_params_in_name=${log_with_params_in_name%.*}.htm
+			    rm -f $htm_with_params_in_name
+			    mv $phtm $htm_with_params_in_name
+			    # temply, while debug in process:
+			    #cp $phtm $htm_with_params_in_name
+			    pthm=$htm_with_params_in_name
+			    set +x
+			fi
+
 		fi
 	else
 		cat <<- EOF > $tmpauxtmp
@@ -1261,10 +2318,11 @@ do
   packet=$((packet+1))
 done
 
-if [ "$remove_isql_logs" == "always" ]; then
-    echo $(date +'%d.%m.%y %H:%M:%S') SID=$sid. Bye-bye from $shname
-else
+if [[ "$remove_isql_logs" == "never" ]]; then
     sho "SID=$sid. Bye-bye from $shname" $sts
+else
+    echo $(date +'%d.%m.%y %H:%M:%S') SID=$sid. Bye-bye from $shname
+    rm -f $log $err $sts
 fi
 
 rm -f $sid_starter_sql

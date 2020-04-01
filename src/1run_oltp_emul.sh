@@ -2527,7 +2527,7 @@ if [ $mon_unit_perf -eq 2 ]; then
 
    if [ -z "$mon_query_interval" ]; then
          echo -e "CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'mon_query_interval' must be UNCOMMENTED."
-         echo -e "Its value must be greater than zero and means duration of delay between receiving monitoring snapshots, in seconds."
+         echo -e "Its value must be greater than zero. It means delay between subsequent monitoring snapshots, in seconds."
          pause Press any key to FINISH this script. . .
          exit 1
    fi
@@ -3007,6 +3007,13 @@ if [ -s "$sleep_ddl" ]; then
         run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $sleep_ddl"
         display_intention "Attempt to apply SQL script '$sleep_ddl' that defines UDF for pauses in execution." "$run_isql" "$tmpclg" "$tmperr"
         $run_isql 1>$tmpclg 2>$tmperr
+	if [ -s "$tmperr" ]; then
+		cat <<- EOF >>$tmperr
+		
+		Ensure that firebird.conf contains parameter UDFAccess which points to
+		the folder where UDF binary exists, e.g.:  UDFAccess =  Restrict UDF
+		EOF
+	fi
         catch_err $tmperr "Could not create/update UDF for sleep. Check file $sleep_ddl"
         if grep -q "multiplier_for_sleep_arg" $tmpclg; then
             #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::

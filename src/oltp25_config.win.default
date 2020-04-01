@@ -568,9 +568,8 @@
 
 
     # Create report in HTML format (beside plain text one; 1=yes, 0=no) ?
-    # Windows only. Not implemented for Linux, will be ignored at runtime.
     #
-    make_html=0
+    make_html=1
 
     # Do we want to include into final report result of gathering database statistics (1=yes; 0=no) ?
     # WARNING! This operation can take lot of time on big databases. Replace this setting with 0 for skip this action.
