@@ -302,7 +302,7 @@ add_html_table() {
     ### call isql for get SQLDA and parse column names and types ###
     ################################################################
     #set -x
-    $fbc/isql $dbconn $dbauth -i $sql_temp 1>$tmp_sqlda 2>$sql_err
+    $isql_name $dbconn $dbauth -i $sql_temp 1>$tmp_sqlda 2>$sql_err
     #set +x
 
     if [[ -s "$sql_err" ]]; then
@@ -413,7 +413,7 @@ add_html_table() {
     ######################################
     ### call isql for show report data ###
     ######################################
-    $fbc/isql $dbconn $dbauth -i $sql_temp 1>$sql_log 2>$sql_err
+    $isql_name $dbconn $dbauth -i $sql_temp 1>$sql_log 2>$sql_err
 
     while read line; do
         # this leaves one trailing space, do NOT: fld_name=${line:0:31}

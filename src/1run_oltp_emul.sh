@@ -2460,7 +2460,6 @@ vars=(
     unit_selection_method
     update_conflict_percent
     used_in_replication
-    use_mtee
     usr
     wait_after_create
     wait_for_copy
