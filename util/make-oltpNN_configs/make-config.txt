@@ -1,0 +1,838 @@
+params_order:intro00;intro01;fbc;clu;dbnm;results_storage_fbk;report_compress_cmd;host;port;usr;pwd;tmpdir;remove_isql_logs;intro02;used_in_replication;working_mode;actions_todo_before_reconnect;max_cps;sleep_min;sleep_max;sleep_ddl;no_auto_undo;recalc_idx_min_interval;intro03;separate_workers;update_conflict_percent;unit_selection_method;intro04;detailed_info;mon_unit_perf;mon_query_role;mon_usr_prefix;mon_unit_list;mon_query_interval;trc_unit_perf;intro05;halt_test_on_errors;qmism_verify_bitset;use_external_to_stop;intro06;create_with_fw;create_with_sweep;wait_if_not_exists;wait_after_create;init_docs;expected_workers;init_buff;wait_for_copy;create_with_debug_objects;create_with_split_heavy_tabs;create_with_separate_qdistr_idx;create_with_compound_columns_order;intro07;warm_time;test_time;test_intervals;etalon_dbnm;make_htm;run_db_statistics;run_db_validation;file_name_with_test_params;file_name_this_host_info;gather_hardware_info;intro08;use_mtee;is_embed
+
+
+intro00_all: ####################################################################
+intro00_all: # OLTP-EMUL test for Firebird database - configuration parameters.
+intro00_all: # To get last version type following command:
+intro00_all: # git clone https://github.com/FirebirdSQL/oltp-emul .
+intro00_all: # This file is used for launching test and ISQL sessions on WINDOWS host
+intro00_25x_all: # with running Firebird 2.5.x
+intro00_30x_all: # with running Firebird 3.x
+intro00_40x_all: # with running Firebird 4.x 
+intro00_win: # Parameters are extracted by '1run_oltp_emul.bat' command scenario.
+intro00_nix: # Parameters are extracted by '1run_oltp_emul.sh' command scenario.
+intro00_all: ####################################################################
+
+intro01_all: #::::::::::::::::::::::::::::::::::::::::::::::::
+intro01_all: #  SETTINGS FOR START AND FINISH ISQL SESSIONS
+intro01_all: #::::::::::::::::::::::::::::::::::::::::::::::::
+
+fbc_all:    # Folder with Firebird console utilities (isql, fbsvcmgr, gbak, gstat).
+fbc_all_nix:    # For builds that are published on official Firebird site such folder is /opt/firebird/bin
+fbc_all_nix:    # For builds that are created in Ubuntu/Debian repos this folder usually is /usr/bin/
+fbc_all:    # Trailing backslash is optional.
+fbc_all:    # Allows referencing to existing OS environment variable by using exclamation sign.
+fbc_all:    # Example:
+fbc_25x_win:    # fbc = C:\Firebird25\bin
+fbc_30x_win:    # fbc = C:\Firebird30
+fbc_40x_win:    # fbc = C:\Firebird40
+fbc_all_nix:    # fbc = /opt/fb%(fb)s/bin
+fbc_all:    #
+fbc_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+fbc_all_win:    # If FB binaries are in directory like "C:\Program files (x86)\Firebird Database Server" 
+fbc_all_win:    # then make copy of this folder to something like C:\firebird.
+fbc_all:    #
+fbc_def_25x_win:    fbc = C:\Firebird25\bin
+fbc_def_30x_win:    fbc = C:\Firebird30
+fbc_def_40x_win:    fbc = C:\Firebird40
+fbc_def_nix:    fbc = /opt/firebird/bin
+
+clu_all_nix:    # Optional. LINUX only: command-line utility for operate as ISQL.
+clu_all_nix:    # Actual for builds from Ubuntu/Debian repository rather than published on official FB site.
+clu_all_nix:    # These builds have ISQL utility with different name: 'isql-fb' instead of usual 'isql'.
+clu_all_nix:    # Full name of this utility will be evaluated by test as concatenation of <fbc> and <clu> values.
+clu_all_nix:    # Value <fbc>/isql will be used if you leave this parameter commented.
+clu_all_nix:    # More details about directories where FB utilities live:
+clu_all_nix:    #     https://firebirdsql.org/manual/ubusetup.html
+clu_all_nix:    #     https://www.firebirdsql.org/file/documentation/reference_manuals/user_manuals/html/ubusetup.html 
+clu_all_nix:    #
+clu_all_nix:    # NOTE: you may have to create symlinks in <fbc> folder for following utilities
+clu_all_nix:    # if they are missed in <fbc>:
+clu_all_nix:    # gbak; fbsvcmgr; gfix; gstat
+clu_all_nix:    #
+clu_all_nix:    # Most probably all of them must point to apropriate utilities in /usr/bin,
+clu_all_nix:    # i.e. you can set: clu = /usr/bin/isql-fb
+clu_all_nix:    #
+
+dbnm_all:    # Alias or full path and file name of database.
+dbnm_all:    # If you want this database be created by test itself, specify it as
+dbnm_all:    # FULL PATH and file name. Use only ASCII characters in its name.
+dbnm_all_win:    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
+dbnm_all_nix:    # Allows referencing to existing OS environment variable by using dollar sign.
+dbnm_all:    # Examples:
+dbnm_win:    # dbnm = c:\temp\oltp_%(fb)s.fdb
+dbnm_win:    # dbnm = !TEMP!\oltp_%(fb)s.fdb
+dbnm_nix:    # dbnm = /var/db/oltp_%(fb)s.fdb
+dbnm_nix:    # dbnm = $TMP/data/oltp_%(fb)s.fdb
+dbnm_all:    #
+dbnm_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+dbnm_all:    #
+dbnm_def_win:    dbnm = c:\temp\oltp_%(fb)s.fdb
+dbnm_def_nix:    dbnm = /var/tmp/oltp_%(fb)s.fdb
+
+results_storage_fbk_all:    # Backup of DB for storing settings and results of every completed test.
+results_storage_fbk_all:    # When test completes, this .fbk is restored to some temporary .fdb,
+results_storage_fbk_all:    # new data are written there and finally database is backed up again.
+results_storage_fbk_all:    # If absent, then apropriate database will be created on every test launch
+results_storage_fbk_all:    # (see calls of script 'oltp_results_storage_DDL.sql')
+results_storage_fbk_all:    # Scenario 'oltp_overall_report' uses this DB when makes overall report.
+results_storage_fbk_all:    #
+results_storage_fbk_all:    # Must be stored on the same host as <dbnm>.
+results_storage_fbk_30x:    # Must have default security.db
+results_storage_fbk_40x:    # Must have default security.db
+results_storage_fbk_all:    # It is recommended to store this DB in the same directory where <dbnm>.
+results_storage_fbk_all:    #
+results_storage_fbk_all:    # NOTE: *BACKUP* must be speficied here rather then .fdb file!
+results_storage_fbk_all:    #
+results_storage_fbk_all:    # Examples:
+results_storage_fbk_win:    # results_storage_fbk = C:\data\oltp_%(fb)s-results-storage.fbk
+results_storage_fbk_nix:    # results_storage_fbk = /var/db/oltp_%(fb)s-results-storage.fbk
+results_storage_fbk_all:    #
+results_storage_fbk_def_win:    results_storage_fbk = c:\temp\oltp_%(fb)s_results.fbk
+results_storage_fbk_def_nix:    results_storage_fbk = /var/tmp/oltp_%(fb)s_results.fbk
+
+
+report_compress_cmd_all:    # External utility to compress HTML report before storing it in the database
+report_compress_cmd_all:    # defined by <results_storage_fbk> parameter.
+report_compress_cmd_all_win:    # Supported compressors: 7z and zstd.
+report_compress_cmd_all_nix:    # Supported compressors: 7za, zstd and zip
+report_compress_cmd_all_win:    # When commented then report will be compressed using standard ZIP format by applying
+report_compress_cmd_all_win:    # temporary created .vbs scenario using %systemroot%\system32\cscript.exe
+report_compress_cmd_all:    # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
+report_compress_cmd_all:    # Examples:
+report_compress_cmd_all_win:    # report_compress_cmd=C:\soft\7zip\7za.exe
+report_compress_cmd_all_win:    # report_compress_cmd=C:\soft\zstd\zstd.exe
+report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/7za
+report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/zstd
+report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/zip
+report_compress_cmd_all:    #
+report_compress_cmd_def_nix:    report_compress_cmd = /usr/bin/zip
+
+
+host_all:    # Parameters for remote connection and authentication.
+host_all:    # Will be ignored by command scenario if FB runs in embedded mode.
+host_all:    #
+host_all:    # Host name or IP address of computer with running Firebird.
+host_all:    #
+host_def_all:    host = localhost
+
+port_all:    # Port that is listening by Firebird instance on <host>.
+port_all:    # In order to check which process is listening now selected port, type (locally on server):
+port_win:    #     netstat -a -n -o -b -p TCP -p TCPv6 | findstr /i /c:"LISTENING" | findstr /i /c:<port>
+port_win:    # Output will contain PID of process at last token. Put this value in the command:
+port_win:    #     wmic process where "ProcessID=<PID>" get ExecutablePath /format:list
+port_nix:    #     netstat --tcp --listening --program --numeric | grep <port>
+port_nix:    # Output will contain PID of process at last token (delimited by '/'). Put this value in the command:
+port_nix:    #     ps ax | grep " <PID>" | grep -v grep
+port_all:    #
+port_def_all:    port = 3050
+
+usr_all:    # Login for connect to FB services and database. Account must have the same rights as SYSDBA.
+usr_def_all:    usr = SYSDBA
+
+pwd_all:    # Password for <usr>
+pwd_def_all:    pwd = masterkey
+
+tmpdir_all:    # Folder for storing .sql scenarios, STDOUT and STDERR logs of every working isql session.
+tmpdir_all:    # Trailing backslash is optional.
+tmpdir_all_win:    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
+tmpdir_all_nix:    # Allows referencing to existing OS environment variable by using dollar sign.
+tmpdir_all:    # Examples:
+tmpdir_all_win:    # tmpdir = c:\temp\logs.oltp%(fb)s
+tmpdir_all_win:    # tmpdir = !temp!\logs.oltp%(fb)s
+tmpdir_all_nix:    # tmpdir = /var/tmp/logs.oltp%(fb)s
+tmpdir_all_nix:    # tmpdir = $TMP/logs.oltp%(fb)s
+tmpdir_all:    #
+tmpdir_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+tmpdir_all_win:    # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
+tmpdir_all_win:    # then do NOT use here reference to it (!temp!) and specify something like C:\TEMP instead.
+tmpdir_all:    #
+tmpdir_def_win:    tmpdir = c:\temp\logs.oltp%(fb)s
+tmpdir_def_nix:    tmpdir = /var/tmp/logs.oltp%(fb)s
+
+
+remove_isql_logs_all:    # Condition for removing or preserving ISQL logs in <tmpdir> after test finish.
+remove_isql_logs_all:    # Possible values: always | never | if_no_severe_errors
+remove_isql_logs_all:    # * 'always' means that logs will be removed after test finish regardless any result.
+remove_isql_logs_all:    # * 'never' means that logs will be always preserved.
+remove_isql_logs_all:    # * 'if_no_severe_errors' means that logs will be removed only if no severe exceptions occured during test.
+remove_isql_logs_all:    # Test considers following exceptions as 'severe':
+remove_isql_logs_all:    #    gdscode   description
+remove_isql_logs_all:    #  ---------   ------------
+remove_isql_logs_all:    #  335544321   string truncation: attempt to assign too long text into string variable.
+remove_isql_logs_all:    #  335544347   not_valid: validation error for column.
+remove_isql_logs_all:    #  335544558   check_constraint: operation violates CHECK constraint on view or table.
+remove_isql_logs_all:    #  335544665   unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint
+remove_isql_logs_all:    #  335544349   no_dup: operation violates unique index
+remove_isql_logs_all:    #  335544466   foreign_key: violation of FOREIGN KEY constraint.
+remove_isql_logs_all:    #  335544838   foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table
+remove_isql_logs_all:    #  335544839   foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause
+remove_isql_logs_all:    #
+remove_isql_logs_all:    # NOTE: if FB crash occures during test run then value of this parameter will be ignored and all logs will be preserved.
+remove_isql_logs_all:    # Recommended value: if_no_severe_errors
+remove_isql_logs_all:    #
+remove_isql_logs_def_all:    remove_isql_logs = if_no_severe_errors
+
+
+intro02_all: #:::::::::::::::::::::::::::::::::::::::::::
+intro02_all: #  SETTINGS FOR REPLICATION, WORKLOAD LEVEL AND PAUSES
+intro02_all: #:::::::::::::::::::::::::::::::::::::::::::
+
+
+used_in_replication_all:    # If you plan this database be involved in replication, then one need to add primary keys
+used_in_replication_all:    # to all persistent tables that can be changed during test work.
+used_in_replication_all:    # Assign value of following parameter to 1 in order all necessary changes be added to tables DDL
+used_in_replication_all:    # (primary keys and triggers for some of tables).
+used_in_replication_all:    # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
+used_in_replication_all:    # This parameter can be changed 'on the fly': database recreation is NOT required, but in case
+used_in_replication_all:    # when database has valuable size, changes will be applied not instantly.
+used_in_replication_all:    #
+used_in_replication_def_all:    used_in_replication = 0
+
+
+working_mode_all:    # Test has several settings that define how much work should be done by each business action in average.
+working_mode_all:    # All of them are considered as separate enumerations: when new ISQL session creates connection, it reads
+working_mode_all:    # "entry" setting about selected workload level and then read all other settings for THIS workload level.
+working_mode_all:    # Parameter 'working_mode' is mnemonic for these enumerations. Possible values for this parameter are:
+working_mode_all:    # SMALL_01, SMALL_02, SMALL_03, MEDIUM_01, MEDIUM_02, MEDIUM_03, LARGE_01, LARGE_02, LARGE_03 and HEAVY_01
+working_mode_all:    # In case of launching test from several machines ensure that all of them have the same value for this parameter.
+working_mode_all:    # Completely new workload mode can be added to the test by editing file 'oltp_main_filling.sql', see there
+working_mode_all:    # sub-section "Definitions for workload modes".
+working_mode_all:    # WARNING: exception will raise on test startup if this value was mistyped and has no corresponding data in DB.
+working_mode_all:    # CAUTION: assigning LARGE* or HEAVY* modes leads to extremely high workload! Do this only when you have really
+working_mode_all:    # powerful server with lot of CPUs, huge RAM and very fast I/O system.
+working_mode_all:    #
+working_mode_all:    # Mnemonic name of workload mode (must be specified without quotes, case-insensitive):
+working_mode_all:    #
+working_mode_def_all:    working_mode = small_03
+
+
+actions_todo_before_reconnect_all:    # This parameter defines volume of work that will be done by each ISQL before it will detach from DB and reconnect.
+actions_todo_before_reconnect_all:    # Normally in a production system frequency of reconnections must be low.
+actions_todo_before_reconnect_all:    # Rather, each connection must do as much work as possible. Unfortunately, when ISQL does its work by executing
+actions_todo_before_reconnect_all:    # script, one can not to check log of errors which occured during this execution. Some errors can require test
+actions_todo_before_reconnect_all:    # to be prematurely stopped (e.g. if FB process crashed and it was reflected in firebird.log). But each session
+actions_todo_before_reconnect_all:    # can found this only when ISQL finished. This mean that value of following parameter must belong to reasonable scope.
+actions_todo_before_reconnect_all:    # For some (exotic) purpoces when it is needed to increase frequency of reconnections one may to set it to 5...50.
+actions_todo_before_reconnect_all:    # Recommended value: 300
+actions_todo_before_reconnect_all:    #
+actions_todo_before_reconnect_def_all:    actions_todo_before_reconnect = 300
+
+max_cps_all:    # Maximal number connections per second at the test startup phase.
+max_cps_all:    # Defines allowed rate of new attachments appearance for making workload grow smoothly.
+max_cps_all:    #
+max_cps_all:    # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
+max_cps_all:    # is 1000 or more. Otherwise some of sessions will get failure on attempt to establish connection with text:
+max_cps_all:    #     Statement failed, SQLSTATE = 08004
+max_cps_all:    #     connection rejected by remote interface
+max_cps_all:    # If value of this parameter less than 10 or greater than 100 then delays will not occur and all sessions will try to establish
+max_cps_all:    # their attachments at the same time. This can be reason of "connection rejected" error.
+max_cps_all:    # Otherwise:
+max_cps_all:    # * if number of sessions not exceeds [max_cps] then delay will be evaluated as random value between 1 and 4 seconds.
+max_cps_all:    # * if number of sessions greater that this parameter then delay will be evaluated as: 1 + session_id / <max_cps>
+max_cps_all:    #
+max_cps_win:    # NOTE. If you intend to launch more than 1000 sessions then consider to adjust Windows registry settings:
+max_cps_win:    # * goto HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\TCPIP\Parameter
+max_cps_win:    # * create a new REG_DWORD value with name: TcpTimedWaitDelay. Set it to 60.
+max_cps_win:    # * create a new REG_DWORD value with name: MaxUserPort. Set it to 32768 (this defines ephemeral port range).
+max_cps_nix:    # NOTE. If you intend to launch more than 1000 sessions then consider to adjust following settings in /etc/sysctl.conf:
+max_cps_nix:    # net.core.somaxconn = 2000
+max_cps_nix:    # net.core.netdev_max_backlog = 2000
+max_cps_nix:    # net.core.tcp_max_syn_backlog = 2000
+max_cps_nix:    # net.ipv4.ip_local_port_range = 15000 61000
+max_cps_nix:    # net.ipv4.tcp_tw_reuse = 1
+max_cps_nix:    # net.ipv4.tcp_max_tw_buckets = 1440000
+max_cps_nix:    # See also:
+max_cps_nix:    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L111
+max_cps_nix:    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L284
+max_cps_nix:    # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L464
+max_cps_nix:    # https://www.centos.org/docs/5/html/5.1/Deployment_Guide/s3-proc-sys-net.html
+max_cps_nix:    # http://docs.continuent.com/tungsten-clustering-6.0/performance-networking.html
+max_cps_nix:    # https://access.redhat.com/solutions/41776
+max_cps_all:    #
+max_cps_all:    # Recommended value: 20...30
+max_cps_all:    #
+max_cps_def_all:    max_cps = 25
+
+
+sleep_min_all:    # MINIMAL pause duration between each business operations, in seconds.
+sleep_min_all:    # This parameter has default value 0 and can be commented.
+sleep_min_all:    # Duration of pause will be evaluated at runtime as random value 
+sleep_min_all:    # between %sleep_min% and %sleep_max% values.
+sleep_min_all:    #
+sleep_min_def_all:    sleep_min = 0
+
+
+sleep_max_all:    # MAXIMAL pause duration between each business operations, in seconds.
+sleep_max_all:    # Default: 0 - no pauses, next transaction will start immediatelly after previous commit.
+sleep_max_all:    # This leads to maximal (non-realistic) level of workload.
+sleep_max_all:    # Delay statement will be inserted in .sql script by '1run_oltp_emul'; the form of this statement depends on value of
+sleep_max_all:    # parameter 'sleep_ddl':
+sleep_max_win:    # 1) If parameter 'sleep_ddl' is commented (undefined) then temporary .vbs script will be created in the <tmpdir> folder
+sleep_max_win:    #    and Windows built-in utility 'cscript.exe' will be invoked with passing required delay to this .vbs:
+sleep_max_win:    #    %systemroot%\system32\cscript.exe //nologo //e:vbscript //t:NNN <tmpdir>\<tmp_vbs> <sleep_max>
+sleep_max_win:    #    This leads to excessive OS workload when number of sessions is more than ~300.
+sleep_max_nix:    # 1) If parameter 'sleep_ddl' is commented (undefined) then OS call ("shell sleep <sleep_max>;") will be added after each
+sleep_max_nix:    #    transaction commit in order to pause SQL execution.
+sleep_max_nix:    #    This leads to excessive OS workload when number of sessions is more than ~300.
+sleep_max_all:    # 2) Otherwise special UDF for delay will be invoked from separate execute block after each transaction commit.
+sleep_max_all:    #    This UDF must be declared in SQL-script which name is defined by <sleep_ddl> parameter (see this config).
+sleep_max_all:    #
+sleep_max_all:    # NOTE. THIS PARAMETER IS MANDATORY AND CAN NOT BE COMMENTED.  SPECIFY 0 IF NO PAUSES REQUIRED.
+sleep_max_all:    #
+sleep_max_def_all:    sleep_max = 0
+
+
+sleep_ddl_all:    # When we want to insert delays between subsequent business actions then parameter sleep_max > 0 must be specified.
+sleep_ddl_all:    # Delays can be done either by using calls of external OS command (i.e. "shell ... ;") or by UDF invocation.
+sleep_ddl_all:    # Calls to external OS command from dozen of sessions leads to valuable load, especially when number of sessions more than 300.
+sleep_ddl_all:    # This can be avoided if delays are done via UDF calls.
+sleep_ddl_all:    #
+sleep_ddl_all:    # Parameter 'sleep_ddl' specifies mame of .sql script with declaration of UDF for DELAYS between subsequent business actions.
+sleep_ddl_all:    # Script must correctly drop old UDFs with any name that contains phrases: DELAY, SLEEP or PAUSE.
+sleep_ddl_all:    # After dropping, script must create new UDF and test it (for checking results in log).
+sleep_ddl_all:    # This script will be applied only when parameter 'sleep_max' greater than 0.
+sleep_ddl_all:    # Note. The whole following phrase:
+sleep_ddl_all:    #
+sleep_ddl_all:    #     declare external function <UDF_name>
+sleep_ddl_all:    #
+sleep_ddl_all:    # -- must be written on the SINGLE LINE in this script ( <UDF_name> will be searched in this line as its 4th word).
+sleep_ddl_all:    #
+sleep_ddl_win:    # This UDF implementation (.dll file) must be stored in the server-side folder, usually in %FIREBIRD_HOME%\UDF.
+sleep_ddl_nix:    # This UDF implementation (.so file) must be stored in the server-side folder, usually in $FIREBIRD_HOME$/UDF.
+sleep_ddl_all:    # Also, UDF calls must be enabled in firebird.conf (e.g.: UDFaccess = restrict UDF)
+sleep_ddl_all:    # See description for parameter 'UDFaccess' in standard firebird.conf for details.
+sleep_ddl_nix:    #
+sleep_ddl_win:    # Test provides its own UDF and appropriate declaration script named: 'oltp_sleepUDF_win.sql'.
+sleep_ddl_win:    # Unpack file .\util\udf64\SleepUDF.dll.zip and put file SleepUDF.dll in any folder that is allowed by
+sleep_ddl_win:    # 'UDFaccess' parameter from firebird.conf.
+sleep_ddl_nix:    # Test provides its own UDF and appropriate declaration script named 'oltp_sleepUDF_nix.sql'.
+sleep_ddl_nix:    # Unpack file ./util/udf64/SleepUDF.so.tar.gz  and put file SleepUDF.so in any folder that is allowed by 'UDFaccess' parameter.
+sleep_ddl_nix:    # from firebird.conf.
+sleep_ddl_nix:    #
+sleep_ddl_all:    # NOTES.
+sleep_ddl_all:    # You can leave parameter 'sleep_ddl' commented if 'mon_unit_perf' is not 2.
+sleep_ddl_all:    # UDF usage is mandatory when config parameter 'mon_unit_perf' has value 2.
+sleep_ddl_40x_all:    #
+sleep_ddl_40x_all:    # By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
+sleep_ddl_40x_all:    # You have to add it or uncomment manually.
+sleep_ddl_all:    #
+sleep_ddl_def_win:    sleep_ddl = .\oltp_sleepUDF_win.sql
+sleep_ddl_def_nix:    sleep_ddl = ./oltp_sleepUDF_nix.sql
+
+
+no_auto_undo_all:    # Should SET TRANSACTION statement include NO AUTO UNDO clause. Avaliable values: 1=yes, 0=no
+no_auto_undo_all:    # Performance can be increased if this option is set to 1:
+no_auto_undo_all:    # SuperServer:   5 -  6 %%
+no_auto_undo_all:    # SuperClassic: 10 - 11 %%
+no_auto_undo_all:    # Recommended value: 1
+no_auto_undo_all:    #
+no_auto_undo_def_all:    no_auto_undo = 1
+
+
+recalc_idx_min_interval_all:    # Minimal interval, in minutes, between two subsequent calls of service procedure 'srv_recalc_idx_stat' which updates index statistics.
+recalc_idx_min_interval_all:    # Only indexes for tables that are participated in most often performing queries are affected. 
+recalc_idx_min_interval_all:    # Note that frequent update of index statistics has sense only for small databases which have quickly changed data distribution.
+recalc_idx_min_interval_all:    # There is no sense to update index statistics if test will runs for 1-2 hours and database has size more than 100 Gb: most probably
+recalc_idx_min_interval_all:    # it will finish at the moment when test itself will also be close to expiration. 
+recalc_idx_min_interval_all:    # In that case set value of this parameter to zero to prevent selection of procedure that does this updating.
+recalc_idx_min_interval_all:    #
+recalc_idx_min_interval_all:    # Recommended value of this parameter depends on size of database:
+recalc_idx_min_interval_all:    # within scope 30...60 minutes for databases with size up to 20 Gb;
+recalc_idx_min_interval_all:    # within scope 60...90 minutes for databases with size 20...40 Gb;
+recalc_idx_min_interval_all:    # within scope 90...120 minutes for databases with size 40...60 Gb;
+recalc_idx_min_interval_all:    # within scope 120...240 minutes for databases with size 60...80 Gb;
+recalc_idx_min_interval_all:    # 0 (zero) for databases with size more than 80...100 Gb (this means that statistics will not be updated at all).
+recalc_idx_min_interval_all:    # NOTE. For big databases (with size more than 100 Gb) updating of index statistics has sense only for big [test_time] values.
+recalc_idx_min_interval_all:    #
+recalc_idx_min_interval_def_all:    recalc_idx_min_interval = 30
+
+
+intro03_all: #:::::::::::::::::::::::::::::::::::
+intro03_all: # SETTINGS RELATED TO LOCK CONFLICTS
+intro03_all: #:::::::::::::::::::::::::::::::::::
+
+
+separate_workers_all:    # When some session must change exicting document (rather than to create new), it chooses it using random selection.
+separate_workers_all:    # This can lead to lot of UPDATE CONFLICTS between concurrent sessions, especially when number of documents is small.
+separate_workers_all:    # Also, even when two sessions choose different documents but at least one of wares is the same, business actions can 
+separate_workers_all:    # lead stock remainder for such ware become zero.
+separate_workers_all:    # Further attempts to withdraw this ware lead to exception referring to inadmissible negative remainder.
+separate_workers_all:    # This means that all previous work of this transaction was in vain and it has to rollback changes.
+separate_workers_all:    #
+separate_workers_all:    # We can separate sessions in such way that each of them will work within "sandbox" and never fall in conflict with
+separate_workers_all:    # concurrent sessions for documents or stock remainders.
+separate_workers_all:    #
+separate_workers_all:    # Assign 1 to this parameter if you want to separate work of sessions and thus totally exclude exceptions related to
+separate_workers_all:    # update conflicts and violation or check constraint defined for aggregated remainders value.
+separate_workers_all:    # Otherwise set it to 0.
+separate_workers_all:    # Recommended value: 1
+separate_workers_all:    #
+separate_workers_def_all:    separate_workers = 1
+
+
+update_conflict_percent_all:    # How many documents from other's "sandboxes" can be taken in processing by 'this' ISQL session, percent.
+update_conflict_percent_all:    # Value 0 means that we do not allow ISQL session to take any documents except those which was created by itself.
+update_conflict_percent_all:    # Value 100 means that we require for each ISQL session take for processing only OTHER's documents. 
+update_conflict_percent_all:    # Moreover, this also mean that we want ISQL session 'forget' about documents which were created by itself.
+update_conflict_percent_all:    # This will lead to extremely high number of lock-conflicts and very poor performance.
+update_conflict_percent_all:    # Recommened value: 0 - for benchmark purposes; 30...50 - for investigations.
+update_conflict_percent_all:    #
+update_conflict_percent_def_all:    update_conflict_percent = 0
+
+
+unit_selection_method_all:    # How business operations should be selected: randomly or in predictable manner.
+unit_selection_method_all:    # Allowed values:
+unit_selection_method_all:    # random - on occasional basis, but with respect to priority/probability of business operatrions nature;
+unit_selection_method_all:    # predictable - forcedly make every ISQL session to work using given sequence of business operations, i.e.
+unit_selection_method_all:    #     create client order -> create order to supplier -> get invoice from supplier -> ...
+unit_selection_method_all:    # Value 'predictable' was not deeply tested and currently can lead to poor performance.
+unit_selection_method_all:    # See SP 'srv_random_unit_choice' for choising algorithm.
+unit_selection_method_all:    # Recommened value: random
+unit_selection_method_all:    #
+unit_selection_method_def_all:    unit_selection_method = random
+
+
+intro04_all: #::::::::::::::::::::::::::::::::::::
+intro04_all: #  SETTINGS FOR ADDITIONAL LOGGING 
+intro04_all: #::::::::::::::::::::::::::::::::::::
+
+detailed_info_all:    # Do we add in ISQL logs detailed info for each actions that was registered while current transaction was performed ?
+detailed_info_all:    # Note: value = 1 significantly increases disk I/O on client machine.
+detailed_info_all:    # Do not use it if you are not interested on these data.
+detailed_info_all:    # Recommended value: 0
+detailed_info_all:    #
+detailed_info_def_all:    detailed_info = 0
+
+
+mon_unit_perf_all:    # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
+mon_unit_perf_all:    # When 0 then monitor tables are not queried.
+mon_unit_perf_all:    # When 1 then EVERY session will take two snapshots before and after execution of selected unit.
+mon_unit_perf_all:    # More detailed analysis with detalization down to separate stored procedures can be achieved
+mon_unit_perf_all:    # by updating setting 'mon_unit_list'.
+mon_unit_perf_all:    # When 2 then only ONE session is dedicated to gather monitoring data with obtaining data
+mon_unit_perf_all:    # that relates to ALL other working sessions.
+mon_unit_perf_all:    # It will call special SP 'srv_fill_mon_memo_consumption' every <mon_query_interval>-th second.
+mon_unit_perf_all:    # NOTE: delays for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined,
+mon_unit_perf_all:    # e.g. when we make delays via UDF, without calls to external OS commands.
+mon_unit_perf_40x_all:    # By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
+mon_unit_perf_40x_all:    # You have to add it or uncomment manually.
+mon_unit_perf_all:    #
+mon_unit_perf_def_all:    mon_unit_perf = 0
+
+mon_query_role_all:    # Gathering of monitoring data leads to significant performance penalty if session works as SYSDBA: 
+mon_query_role_all:    # all other attachments have to put information about their state into special pool.
+mon_query_role_all:    # Benchmarks show that performance can fall for ~10x when all attachments work as SYSDBA and value of
+mon_query_role_all:    # parameter <mon_unit_perf> is 1.
+mon_query_role_all:    # But actually each worker is interested only about its own data from monitoring rather than others.
+mon_query_role_all:    # Behaviour was improved in Firebird 3.x+ for such case: if session works as NON-privileged used then
+mon_query_role_all:    # its query to monitoring tables will not affect on other attachments which work under different logins.
+mon_query_role_all:    # One can use this improvement and require that test will launch every ISQL session so that it will work
+mon_query_role_all:    # with database as non-privileger user, with accessing to DB objects via special role with all needed grants.
+mon_query_role_all:    #
+mon_query_role_all:    # Parameter 'mon_query_role' specifies name of this role. If it is specified then test will create such role
+mon_query_role_all:    # and give it all grants that are needed for normal work. This role will be further granted to all non-privileged
+mon_query_role_all:    # users which are also created by test. Parameter 'mon_usr_prefix' must also be specified in this case.
+mon_query_role_all:    # If 'mon_query_role' is commented then all sessions will work as SYSDBA.
+mon_query_role_all:    # NOTE: actual only for Firebird 3.0 and above. Has no effect on Firebird 2.5.
+mon_query_role_all:    # Recommended value: any string that meets FB requirement to the name of ROLE, e.g.: tmp$oemul$worker
+mon_query_role_all:    #
+mon_query_role_def_all:    mon_query_role = tmp$oemul$worker
+
+mon_usr_prefix_all:    # Prefix for each name of temporarily created users for work with database.
+mon_usr_prefix_all:    # Each user name will be further provided with suffix like '0001', '0002' etc, up to the total number of sessions.
+mon_usr_prefix_all:    # These users will be granted to use ROLE which name is defined by <mon_query_role> parameter (see above).
+mon_usr_prefix_all:    # After test finish all of them will be dropped.
+mon_usr_prefix_all:    # NOTE: actual only for Firebird 3.0 and above. Has no effect on Firebird 2.5.
+mon_usr_prefix_all:    # Recommended value: any string that meets FB requirement to the name of USER, e.g.: tmp$oemul$user_
+mon_usr_prefix_all:    #
+mon_usr_prefix_def_all:    mon_usr_prefix = tmp$oemul$user_
+
+mon_unit_list_all:    # This setting can be used only when config parameter 'enable_mon_query' is 1.
+mon_unit_list_all:    # List of top-level units (see 'business_ops' table) which performance statistics we want 
+mon_unit_list_all:    # to be logged by querying  monitoring tables. Logging is done by SP srv_log_mon_for_traced_units.
+mon_unit_list_all:    # Value can be single unit name or LIST of unit names delimited by forward slash.
+mon_unit_list_all:    # Example:
+mon_unit_list_all:    #     sp_make_qty_storno/sp_kill_qty_storno/sp_multiply_rows_for_qdistr/sp_multiply_rows_for_pdistr
+mon_unit_list_all:    # Default value: // (two slashes) without any characters between them, i.e. no interested units for logging.
+mon_unit_list_all:    #
+mon_unit_list_def_all:    mon_unit_list = //
+
+
+mon_query_interval_all:    # This setting can be used only when config parameter 'enable_mon_query' is 2.
+mon_query_interval_all:    # Number of seconds between calls to SP that gathers monitoring data for all working attachments.
+mon_query_interval_all:    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
+mon_query_interval_all:    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script
+mon_query_interval_all:    # with UDF declaration that implements delay.
+mon_query_interval_all:    # Actual duration of delay, in seconds, will be evaluated as minimal of <mon_query_interval>
+mon_query_interval_all:    # and <test_time> * 60 divided by 20.
+mon_query_interval_all:    #
+mon_query_interval_def_all:    mon_query_interval = 60
+
+
+qmism_verify_bitset_all:    # How stock remainders should be verified BEFORE totalling turnovers (see procedure 'sp_make_invnt_saldo').
+qmism_verify_bitset_all:    #
+qmism_verify_bitset_all:    # Declarative CHECK constraint for non-negative QTY_* columns should NOT ever be fired in this test.
+qmism_verify_bitset_all:    # This parameter defined numeric value which bits must be interpreted as:
+qmism_verify_bitset_all:    # bit#0 := 1 -- perform calls of procedure SRV_FIND_QD_QS_MISM in order to register mismatches between
+qmism_verify_bitset_all:    #               doc_data.qty and total number of rows in QDISTR and QSTORNED tables for doc_data.id;
+qmism_verify_bitset_all:    # bit#1 := 1 -- perform calls of procedure SRV_CHECK_NEG_REMAINDERS instead of actual totalling turnovers
+qmism_verify_bitset_all:    #               to the table INVNT_SALDO. This value must be used only for debug purposes.
+qmism_verify_bitset_all:    # bit#2 := 1 -- allow dump dirty data into debug tables for analysis, see sp ZDUMP4DBG, in case
+qmism_verify_bitset_all:    #               when PK/FK or check constraint is violated (see also parameter 'halt_test_on_errors')
+qmism_verify_bitset_all:    #               NOTE: when bit#2 has value 1 then parameter 'create_with_debug_objects' must be 1
+qmism_verify_bitset_all:    #               to force build scenario create auxiliary Z-tables.
+qmism_verify_bitset_all:    #
+qmism_verify_bitset_all:    # This parameter was used during test development and can be useful in case of some changes/refactoring
+qmism_verify_bitset_all:    # in test logic. Normally its value must be 1.
+qmism_verify_bitset_all:    #
+qmism_verify_bitset_def_all:    qmism_verify_bitset = 1
+
+
+trc_unit_perf_win:    # Should 1st of launching ISQL instances also start asynchronously FBSVCMGR with opening TRACE session ?
+trc_unit_perf_win:    # If yes then final report will have result of parsing trace log for that ISQL session activity with
+trc_unit_perf_win:    # aggregate data about each business action. Also, average values will be calculated for:
+trc_unit_perf_win:    # 1) speed of fetches and marks per second;
+trc_unit_perf_win:    # 2) ratios reads / fetches and writes / marks.
+trc_unit_perf_win:    # These values will be divided for 10 equal time intervals in order to see changes 
+trc_unit_perf_win:    # in performance that could occur during <test_time> phase of test.
+trc_unit_perf_win:    # There is no performance penalty when single trace session is active so one may safely
+trc_unit_perf_win:    # to set this value to 1. Note though that if you will interrupt test by brute kill all
+trc_unit_perf_win:    # ISQL sessions than you have also to kill process of FBSVCMGR which can remain active.
+trc_unit_perf_win:    # Currently implemented only for Windows.
+trc_unit_perf_win:    #
+trc_unit_perf_def_win:    trc_unit_perf = 0
+
+
+intro05_all: #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+intro05_all: #  SETTINGS TO FORCEDLY TERMINATE OF WORK BEFORE THE DUE TIME
+intro05_all: #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+
+halt_test_on_errors_all:    # Mnemonics of exceptions which must force test to be stopped (see calls of fn_halt_sign(gdscode)):
+halt_test_on_errors_all:    # 'CK' -- halt if CHECK violation or 'not_valid' occurs (mostly this can be due to negative stock remainders)
+halt_test_on_errors_all:    # 'PK' -- halt if PK or UK violation occurs
+halt_test_on_errors_all:    # 'FK' -- halt if FK violation occurs // now n/a because test does not use foreign keys.
+halt_test_on_errors_all:    # 'ST' -- halt if gdscode 335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
+halt_test_on_errors_all:    # These mnemonics can be combined in list, i.e.: 'CK/PK/FK' - halt if CHECK or PK or FK violation occurs
+halt_test_on_errors_all:    # Default: '/CK/' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
+halt_test_on_errors_all:    # 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
+halt_test_on_errors_all:    # but it is due to undefined order of UNDO actions inside the engine when some action must be cancelled.
+halt_test_on_errors_all:    # Detailed investigation:
+halt_test_on_errors_all:    # sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
+halt_test_on_errors_all:    # Explanation by dimitr was sent privately to e-mail, letters date = 12.02.2015.
+halt_test_on_errors_all:    #
+halt_test_on_errors_def_all:    halt_test_on_errors = /CK/
+
+
+use_external_to_stop_all:    # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
+use_external_to_stop_all:    # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
+use_external_to_stop_all:    # '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
+use_external_to_stop_all:    # Usage of this script is OK for most cases except extremely high workload when establishing of new connect will be unavaliable.
+use_external_to_stop_all:    #
+use_external_to_stop_all:    # When extremely high workload is used then following message can appear on every attempt to establish new attachment:
+use_external_to_stop_all:    #     Statement failed, SQLSTATE = 08004
+use_external_to_stop_all:    #     connection rejected by remote interface
+use_external_to_stop_all:    #
+use_external_to_stop_all:    # In such case it can be more reliable to use EXTERNAL TABLE (i.e. TEXT FILE) to make all attachments to stop their work. 
+use_external_to_stop_all:    # This is so because every running session 'looks' from time to time into this external table and checks existense of at 
+use_external_to_stop_all:    # least one record in it. So, test will be quickly self-stopped when at least one non-empty line exists there. 
+use_external_to_stop_all:    # Please note that you have to make this file EMPTY before every new test run. Test can not do that when server is remote.
+use_external_to_stop_all:    #
+use_external_to_stop_all:    # If you have decided to use EXTERNAL FILE then following steps must be done for premature terminate all test activity:
+use_external_to_stop_all:    #   1. Open that file in text editor and type one ascii-character there;
+use_external_to_stop_all:    #   2. Press ENTER and save this file.
+use_external_to_stop_all:    #   3. Make this file empty again when all isql sessions terminated their work.
+use_external_to_stop_all:    # Also, please note on value of parameter "ExternalFileAccess" in firebird.conf:
+use_external_to_stop_all:    #   1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
+use_external_to_stop_all:    #      queried by every attachment as 'stop flag'.
+use_external_to_stop_all:    #   2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
+use_external_to_stop_all:    #
+use_external_to_stop_win:    # By default this parameter is UNDEFINED, i.e. only temporary batch can be used for stop test prematurely:
+use_external_to_stop_all:    #
+use_external_to_stop_win:    #     <tmpdir>\1stoptest.tmp.bat 
+use_external_to_stop_nix:    #     <tmpdir>/1stoptest.tmp.sh
+use_external_to_stop_all:    #
+
+
+intro06_all: #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+intro06_all: #  SETTINGS FOR DATABASE CREATION PROCESS AND INITIAL DATA FILLING 
+intro06_all: #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+intro06_all:     #
+intro06_all:     # *** NOTE *** 
+intro06_all:     # Following settings except 'create_with_fw' and 'create_with'sweep'
+intro06_all:     # will be IGNORED if database exists and has required number of documents.
+intro06_all:     # If parameter 'host' is one of: {'localhost', '127.0.0.1'} then current
+intro06_all:     # values of 'create_with_fw' and 'create_with'sweep' will be applied to DB
+intro06_all:     # every time before launching ISQL sessions.
+
+
+create_with_fw_all:    # Setting for FORCED WRITES attribute which must be written in the DB header before all sessions launch.
+create_with_fw_all:    # Value can be one of: sync | async
+create_with_fw_all:    # RECOMMENDED value:
+create_with_fw_all:    #     sync - if you want to test performance for database that is not involved in replication;
+create_with_fw_all:    #     async - if you plan to use DB which will be replicated to other host.
+create_with_fw_all:    #             (note that in such case you must set parameter 'used_in_replication' to 1).
+create_with_fw_win:    # When value is 'async', ensure that firebird.conf contains following uncommented parameters:
+create_with_fw_win:    #     MaxUnflushedWrites = -1
+create_with_fw_win:    #     MaxUnflushedWriteTime = -1
+create_with_fw_all:    #
+create_with_fw_def_all:    create_with_fw = sync
+
+
+create_with_sweep_all:    # Setting for SWEEP INTERVAL which causes auto sweep start.
+create_with_sweep_all:    # Value must be not less than -1.
+create_with_sweep_all:    # Value -1 means that default value (20000) will be written into DB header.
+create_with_sweep_all:    # Sweep starts when OST-OIT more than this threshold. Value 0 disables sweep.
+create_with_sweep_all:    #
+create_with_sweep_all:    # RECOMMENDED value for create_with_sweep is 0 (zero).
+create_with_sweep_all:    # Sweep start can lead to unpredictable affect on performance, especially for short test duration.
+create_with_sweep_all:    #
+create_with_sweep_def_all:    create_with_sweep = 0
+
+
+wait_if_not_exists_all:    # Should script be paused if database does not exist or its creation
+wait_if_not_exists_all:    # did not finished properly (e.g. was interrupted; 1=yes; 0=no) ?
+wait_if_not_exists_all:    # You have to set this parameter to 0 if this batch is launched by 
+wait_if_not_exists_all:    # scheduler on regular basis. Otherwise it is recommended to set 1.
+wait_if_not_exists_all:    #
+wait_if_not_exists_def_all:    wait_if_not_exists = 0
+
+
+wait_after_create_all:    # Should script be paused after creation database objects before starting
+wait_after_create_all:    # initial filling with <init_docs> documents (mostly need only for debug; 1=yes, 0=no) ?
+wait_after_create_all:    #
+wait_after_create_def_all:    wait_after_create = 0
+
+
+init_docs_all:    # Number of documents, total for all their types, needed for initial data population.
+init_docs_all:    # Command scenario will compare number of existing document with this
+init_docs_all:    # and create new ones only if {init_docs] still greater than obtained.
+init_docs_all:    #
+init_docs_all:    # *** NOTE *** THIS VALUE IS OBSOLETE, LEAVE IT EQUAL TO 0 (ZERO) ***
+init_docs_all:    #
+init_docs_all:    # Instead of generating dosuments by single attachment it is much more properly (and faster) to assign some big value 
+init_docs_all:    # to 'warm_time' parameter (say, 1440 which means to run for 1 day) and also set 'test_time' to 0 (zero). 
+init_docs_all:    # When size of database will reach value that you consider as enough then just stop the test by running batch 
+init_docs_win:    # '!tmpdir!\1stoptest.tmp.bat' which always is created when test starts.
+init_docs_nix:    # '$tmpdir/1stoptest.tmp.sh' which always is created when test starts.
+init_docs_all:    #
+init_docs_def_all:    init_docs = 0
+
+
+expected_workers_all:    # This parameter actual only when 'init_docs' greater than 0 and 'separate_workers' is 1, i.e. when you want to separate 
+expected_workers_all:    # each ISQL session in such way that they will not ever meet update conflicts during work. In other cases value if this
+expected_workers_all:    # parameter is ignored.
+expected_workers_all:    # If you decide to generate initial quantity of documents by using old 'init_docs' value then assign to 'expected_workers' 
+expected_workers_all:    # value that is equal to the  number of ISQL sessions that is expected to run.
+expected_workers_all:    #
+expected_workers_def_all:    expected_workers = 100
+
+
+init_buff_all:    # Actual only when 'init_docs' greater than 0 and FB mode is Classic Server or SuperClassic. Will be ignoired in SuperServer.
+init_buff_all:    # Number of pages for usage during init data population ("-c" switch for ISQL). Used ONLY during phase of initial data population.
+init_buff_all:    # Make sure that it is LESS than FileSystemCacheThreshold, which default is 65536.
+init_buff_all:    #
+init_buff_all:    # *** NOTE *** THIS VALUE IS OBSOLETE, LEAVE IT EQUAL TO 10000 ***
+init_buff_all:    #
+init_buff_def_all:    init_buff = 4096
+
+
+wait_for_copy_all:    # Actual only when 'init_docs' greater than 0
+wait_for_copy_all:    # Should command scenario (1run_oltp_emul) be PAUSED after finish creating
+wait_for_copy_all:    # required initial number of documents (see parameter 'init_docs'; 1=yes, 0=no) ?
+wait_for_copy_all:    # Value = 1 can be set if you want to make copy of .fdb and restore later
+wait_for_copy_all:    # this database to 'origin' state. This can save time because of avoiding need
+wait_for_copy_all:    # to create [init_docs] again:
+wait_for_copy_all:    #
+wait_for_copy_def_all:    wait_for_copy = 0
+
+
+create_with_debug_objects_all:    # Do we want to create some DEBUG objects (tables, views and procedures)
+create_with_debug_objects_all:    # in order to:
+create_with_debug_objects_all:    # 1) make dumps of all data from tables when critical error occurs;
+create_with_debug_objects_all:    # 2) make miscelaneous diagnostic queries via "Z_" views.
+create_with_debug_objects_all:    # Value=1 will cause "oltp_misc_debug.sql" be called when build database.
+create_with_debug_objects_all:    # NB: setting 'QMISM_VERIFY_BITSET' must have bit #2 = 1 when this value = 1.
+create_with_debug_objects_all:    # (see oltp_main_filling.sql)
+create_with_debug_objects_all:    # Recommended value: 1
+create_with_debug_objects_all:    #
+create_with_debug_objects_def_all:    create_with_debug_objects = 1
+
+
+create_with_split_heavy_tabs_all:    # Test has two tables which are subject of very intensive modifications: QDistr and QStorned.
+create_with_split_heavy_tabs_all:    # Performance highly depends on time which engine spends on handling DP, PP and index pages
+create_with_split_heavy_tabs_all:    # of this tables - they are "bottlenecks" of schema. Database can be created either with two
+create_with_split_heavy_tabs_all:    # these tables or with several "clones" of them (with the same stucture). The latter allows
+create_with_split_heavy_tabs_all:    # to "split" workload on different areas and reduce low-level lock contention.
+create_with_split_heavy_tabs_all:    # Should heavy-loaded tables (QDistr and QStorned) be splitted on several different tables,
+create_with_split_heavy_tabs_all:    # each one for separate pair of operations that are 'source' and 'target' of storning ?
+create_with_split_heavy_tabs_all:    # Avaliable values: 
+create_with_split_heavy_tabs_all:    # 0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
+create_with_split_heavy_tabs_all:    # 1 = USE several tables with the same structure in order to split heavy workload on them.
+create_with_split_heavy_tabs_all:    #     NOTE (2019). Not only Qdistr and QStorned but also PERF_LOG table will be 'splitted' onto
+create_with_split_heavy_tabs_all:    #     several tables (with names PERF_SPLIT_01...PERF_SPLIT_09) when this parameter is set to 1. 
+create_with_split_heavy_tabs_all:    # Recommended value: 1.
+create_with_split_heavy_tabs_all:    #
+create_with_split_heavy_tabs_def_all:    create_with_split_heavy_tabs = 1
+
+
+create_with_separate_qdistr_idx_all:    # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
+create_with_separate_qdistr_idx_all:    # compound index or two separate indices (1=yes, 0=no).
+create_with_separate_qdistr_idx_all:    # Number of columns in compound index depends on value of two parameters:
+create_with_separate_qdistr_idx_all:    # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
+create_with_separate_qdistr_idx_all:    # Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
+create_with_separate_qdistr_idx_all:    # Recommended value: 0.
+create_with_separate_qdistr_idx_all:    #
+create_with_separate_qdistr_idx_def_all:    create_with_separate_qdistr_idx = 0
+
+
+create_with_compound_columns_order_all:    # Parameter 'create_with_compound_columns_order' defines order of fields in the starting part
+create_with_compound_columns_order_all:    # of compound index key for the table which is subject to most heavy workload - QDistr. 
+create_with_compound_columns_order_all:    # Avaliable options: 'most_selective_first' or 'least_selective_first'.
+create_with_compound_columns_order_all:    # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / [W],
+create_with_compound_columns_order_all:    # where [W] = number of rows in the table 'WARES', depends on selected workload mode.
+create_with_compound_columns_order_all:    # Second and third columns will have poor selectivity = 1/6.
+create_with_compound_columns_order_all:    # When choice = 'least_selective_first' then first and second columns will have poor selectivity = 1/6,
+create_with_compound_columns_order_all:    # and third column will have selectivity = 1 / [W].
+create_with_compound_columns_order_all:    #
+create_with_compound_columns_order_all:    # Actual only when create_with_split_heavy_tabs = 0.
+create_with_compound_columns_order_all:    # Recommended value: most_selective_first
+create_with_compound_columns_order_all:    #
+create_with_compound_columns_order_def_all:    create_with_compound_columns_order = most_selective_first
+
+
+intro07_all: #:::::::::::::::::::::::::::::::::::::::::::::::::::::
+intro07_all: #  SETTINGS FOR SCHEDULED-BASIS JOB AND TEST REPORT
+intro07_all: #:::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+warm_time_all:    # Number of minutes since test launch for which evaluation of performance score is omited because database is 'cold' (not in cache).
+warm_time_all:    # Means the same as 'ramp-up' period in TPC-C specification: we have to allow all sessions to establish  attachments and read some
+warm_time_all:    # data into Firebird page cache.
+warm_time_all:    # Recommended value: DBSize_Gb/2, where DBSize_Gb is size of database in Gb, but not less than 30 minutes.
+warm_time_all:    # To estimate whether value of this parameter is apropriate, run test for 2-3 hours and look after its finish in report 
+warm_time_all:    # "Performance per minute". Performance counter at the end of <warm_time> period must be close to values for subsequent 20-30 minutes.
+warm_time_all:    # See also TPC-C specification rev 5.11:
+warm_time_all:    # * 5.6.4 (page 78) - graphical explanation of ramp-up period;
+warm_time_all:    # * Appendix C (page 132) - numerical quantities summary.
+warm_time_all:    #
+warm_time_def_all:    warm_time = 30
+
+
+test_time_all:    # Duration of main test phase which starts after 'ramp-up'. Means the same as 'measurement interval' in TPC-C specification.
+test_time_all:    # Overall performance score is evaluated as total number of successfully completed transactions during this phase divided by <test_time>.
+test_time_all:    # At the end of this phase test will stop itself, i.e. you do not have to interrupt ISQL sessions.
+test_time_all:    # Note that TPC-C requires minimum 120 minutes for this phase, but your system must allows to run test during 480 minutes - and this
+test_time_all:    # value does not include <warm_time> phase (see TPC-C rev 5.1, 5.5.2.1, page 75).
+test_time_all:    # ATTENTION. Reports and performance score for test_time less than 120 minutes must be considered as unreliable (doubtful).
+test_time_all:    # Recommended value: at least 180.
+test_time_all:    #
+test_time_def_all:    test_time = 180
+
+
+test_intervals_all:    # OBSOLETE. WILL BE REMOVED LATER.
+test_intervals_all:    # This parameter used earlier for one of reports which was removed.
+test_intervals_all:    # Currently its value will be ignored.
+test_intervals_all:    #
+test_intervals_def_all:    test_intervals = 30
+
+
+etalon_dbnm_all:    # This parameter is used in 'oltp-scheduled' scenario and points to the name of etalone DB which serves
+etalon_dbnm_all:    # as source for copy to work DB before every new test starts.
+etalon_dbnm_all:    # It is possible to get following error when DB was moved from one host to another without b/r:
+etalon_dbnm_all:    #     Statement failed, SQLSTATE = 22021
+etalon_dbnm_all:    #     COLLATION NAME_COLL for CHARACTER SET UTF8 is not installed
+etalon_dbnm_all:    # In this case try following command:
+etalon_dbnm_win:    #     <fbc>\gfix.exe -icu <etalon_dbnm>
+etalon_dbnm_nix:    #     <fbc>/gfix -icu <etalon_dbnm>
+etalon_dbnm_all:    # NOTE.
+etalon_dbnm_all:    # It is recommended to change state of this DB to 'full shutdown' or at least make it read only.
+etalon_dbnm_all:    #
+etalon_dbnm_def_win:    etalon_dbnm = c:\temp\oltp_%(fb)s.etalone.fdb
+etalon_dbnm_def_nix:    etalon_dbnm = /var/tmp/oltp_%(fb)s.etalone.fdb
+
+
+make_htm_all:    # Create report in HTML format (along with plain text) ? Avaliable options: 1 = yes, 0 = no.
+make_htm_all:    # NOTE: when this parameter is 1, time of reports creation will be slighly increased.
+make_htm_all:    #
+make_htm_def_all:    make_html = 1
+
+
+run_db_statistics_all:    # Should DB statistics be included into final report ? Avaliable options: 1 = yes, 0 = no.
+run_db_statistics_all:    # When this parameter is 1, statistics output is parsed in order to get data about amount of record versions 
+run_db_statistics_all:    # and maximal versions for each table. Final report will contain auxiliary table with aggregated info about versions.
+run_db_statistics_all:    # WARNING. This operation can take lot of time on big databases. Replace this setting with 0 for skip this action.
+run_db_statistics_all:    #
+run_db_statistics_def_all:    run_db_statistics = 0
+
+
+run_db_validation_all:    # Should online validation be done after test finish ? Avaliable options: 1 = yes, 0 = no.
+run_db_validation_all:    # Result of validation will not include messages about passed pointer pages in order to make report shorter.
+run_db_validation_all:    # WARNING. This operation can take lot of time on big databases. Replace this setting with 0 for skip this action.
+run_db_validation_all:    #
+run_db_validation_def_all:    run_db_validation = 0
+
+
+file_name_with_test_params_all:    # Optional parameter.
+file_name_with_test_params_all:    # Should final report be saved in file with name which contain info about FB, database, test settings ?
+file_name_with_test_params_all:    # If no, leave this parameter commented. In that case final report will be always saved with the same name.
+file_name_with_test_params_all:    # If yes, choose format according to one of following:
+file_name_with_test_params_all:    #     regular   - appropriate for quick found performance degradation, without details of test settings
+file_name_with_test_params_all:    #     benchmark - appropriate for analysis when different settings are applied
+file_name_with_test_params_all:    #
+file_name_with_test_params_all:    # Example of report name when this parameter = 'regular':
+file_name_with_test_params_25x_all:    #     YYYYmmDD_HHMM_score_00957_build_27152_sc%(fb)s__3h00m_100_att_fw__on.txt
+file_name_with_test_params_30x_all:    #     YYYYmmDD_HHMM_score_06543_build_31236_ss%(fb)s__3h00m_100_att_fw__on.txt
+file_name_with_test_params_40x_all:    #     YYYYmmDD_HHMM_score_07011_build_2241_ss%(fb)s__3h00m_100_att_fw__on.txt
+file_name_with_test_params_all:    # Example of report name when this parameter = 'benchmark':
+file_name_with_test_params_25x_all:    #     sc%(fb)s_fw_off_split_most__sel_1st_one_index_score_02545_build_27152__3h00m_100_att_YYYYmmDD_HHMM.txt
+file_name_with_test_params_30x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM.txt
+file_name_with_test_params_40x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM.txt
+file_name_with_test_params_all:    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
+file_name_with_test_params_all:    #
+file_name_with_test_params_all:    # Available options when uncommented: regular | benchmark
+file_name_with_test_params_all:    #
+file_name_with_test_params_def_all:    file_name_with_test_params = regular
+
+
+file_name_this_host_info_all:    # Suffix for adding at the end of report name. CHANGE this value to some useful info about host location, 
+file_name_this_host_info_all:    # hardware specifics, FB instance etc.
+file_name_this_host_info_win:    # For example, use value of %%COMPUTERNAME%% environment variable
+file_name_this_host_info_nix:    # For example, use value of 'hostname' command.
+file_name_this_host_info_all:    # It is also useful to specify here number of CPU cores and size of RAM, e.g.:
+file_name_this_host_info_all:    #     testsrv_cpu16_ram64
+file_name_this_host_info_all:    #
+file_name_this_host_info_def_win:    file_name_this_host_info = !COMPUTERNAME!
+file_name_this_host_info_def_nix:    file_name_this_host_info = linux_hostname
+
+
+gather_hardware_info_all:    # Do we want to include in the report details about server hardware and OS ?
+gather_hardware_info_all:    # Avaliable options: 1 = yes, 0 = no.
+gather_hardware_info_all:    # This setting has sense only when you launch ISQL sessions at the server which you are 
+gather_hardware_info_all:    # interesting on, i.e. when value of 'host' parameter is localhost or 127.0.0.1
+gather_hardware_info_nix:    # NOTE: scenario that is launched by cron will see PATH=/usr/bin:/bin, i.e. some utilities from /usr/sbin
+gather_hardware_info_nix:    # will not be avaliable. Some of these utilities ((e.g. fdisk and dmidecode) are used to gather hardware data.
+gather_hardware_info_nix:    # This can be solved if cron job line will contain: " . /etc/profile; " before the command that is to be launched.
+gather_hardware_info_nix:    # Example:
+gather_hardware_info_nix:    # 0   10,20     *       *       *     . /etc/profile; /opt/oltp-emul/1run_oltp_emul.sh 30 100
+gather_hardware_info_nix:    #
+gather_hardware_info_nix:    # See also: https://unix.stackexchange.com/questions/148133/how-to-set-crontab-path-variable
+gather_hardware_info_all:    #
+gather_hardware_info_def_all:    gather_hardware_info = 1
+
+
+intro08_all: #::::::::::::::::::::::::::::::::::::::::::::
+intro08_all: #  EXOTIC SETTINGS (USAGE WAS NOT CHECKED)
+intro08_all: #::::::::::::::::::::::::::::::::::::::::::::
+
+use_mtee_win:    # Do we use mtee.exe utility to provide timestamps for error messages 
+use_mtee_win:    # before they are logged in .err files (1=yes, 0=no) ?
+use_mtee_win:    # Windows only. Not implemented for Linux, will be ignored at runtime.
+use_mtee_win:    #
+use_mtee_def_win:    use_mtee = 0
+
+
+is_embed_all:    # Does Firebird running in embedded mode ? (1=yes, 0=no)
+is_embed_all:    #
+is_embed_def_all:    is_embed = 0
+
