@@ -36,6 +36,10 @@ entry_point 'SleepUDF' module_name 'SleepUDF'
 ;
 commit;
 
+-- added 17.05.2022\0: this UDF must be avail for non-privileged users (actually needed in FB 3.x only):
+-- grant execute on function sleep to public;
+-- commit;
+
 
 set list on;
 select 'Check results for UDF that will make pauses in execution:' as msg from rdb$database;

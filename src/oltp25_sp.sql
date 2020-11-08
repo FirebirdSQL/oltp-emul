@@ -304,7 +304,6 @@ begin
 
     if ( row_cnt = 0 ) then 
     begin
-        --exception ex_no_rows_in_shopping_cart;  -- 'shopping_cart is empty, check source ''@1'''
         v_detailed_exc_text = 'shopping_cart is empty; info: ' || coalesce(v_info, '<?>'); -- check source ' || coalesce(v_source_for_random_id,'<?>') ||''
         exception ex_no_rows_in_shopping_cart ( select result from sys_stamp_exception('ex_no_rows_in_shopping_cart', :v_detailed_exc_text) );
     end
@@ -3497,7 +3496,7 @@ end
 --------------------------------------------------------------------------------
 
 
-create or alter procedure tmp_aggregate_perf_data_autogen( a_dts_interval int = 0)
+create or alter procedure tmp_aggregate_perf_data_autogen( a_ignore_stop_flag dm_sign = 0 )
 returns (
     msg dm_info
 ) as
@@ -3509,248 +3508,9 @@ begin
 end
 ^
 
--- 18.03.2019
-create or alter procedure srv_aggregate_perf_data( a_ignore_stop_flag smallint = 0 )
-returns (
-    msg dm_info
-)
-as
-    declare v_semaphore_id type of dm_ids;
-    declare v_deferred_to_next_time smallint = 0;
-    declare v_gdscode int = null;
-    declare v_dts_beg timestamp;
-    declare v_this dm_dbobj = 'srv_aggregate_perf_data';
-    declare fn_infinity bigint;
-    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
-begin
-    if ( a_ignore_stop_flag = 0 ) then
-    begin
-        -- Check that table `ext_stoptest` (external text file) is EMPTY,
-        -- otherwise raises e`xception to stop test:
-        execute procedure sp_check_to_stop_work;
-    end
-
-    -- Check that current Tx run in NO wait or with lock_timeout.
-    -- Otherwise raise error: performance degrades almost to zero.
-    execute procedure sp_check_nowait_or_timeout;
-    
-    if ( (select result from fn_is_snapshot) <> 1 )
-    then
-        exception ex_snapshot_isolation_required;
-
-    -- Ensure that current attach is the ONLY one which tries to make totals.
-    -- Use locking record from `semaphores` table to serialize access to this
-    -- code:
-    begin
-        open c_semaphores;
-        while (1=1) do
-        begin
-            fetch c_semaphores into v_semaphore_id;
-            if ( row_count = 0 ) then
-                exception ex_record_not_found; -- using('semaphores', v_this);
-            update semaphores set id = id where current of c_semaphores;
-            leave;
-        end
-        close c_semaphores;
-    when any do
-        -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
-        -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
-        -- catched it's kind of exception!
-        -- 1) tracker.firebirdsql.org/browse/CORE-3275
-        --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
-        -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
-        begin
-            if ( (select result from fn_is_lock_trouble(gdscode)) = 1 ) then
-                begin
-                    -- concurrent_transaction ==> if select for update failed;
-                    -- deadlock ==> if attempt of UPDATE set id=id failed.
-                    v_gdscode = gdscode;
-                    v_deferred_to_next_time = 1;
-                end
-            else
-                exception;  -- ::: nb ::: anonimous but in when-block! (check will it be really raised! find topic in sql.ru)
-        end
-    end
-
-    if ( coalesce(v_deferred_to_next_time,0) <> 0 ) then
-    begin
-        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
-        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; -- current unit: srv_make_money_saldo
-        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
-
-    end
-
-    if ( a_ignore_stop_flag = 0 ) then
-    begin
-        -- add to performance log timestamp about start/finish this unit:
-        execute procedure sp_add_perf_log(1, v_this);
-    end
-
-    v_dts_beg = 'now';
-    select msg from tmp_aggregate_perf_data_autogen into msg; -- 'i=1234, u=3210' etc
-    msg =  msg ||', ms='||datediff(millisecond from v_dts_beg to cast('now' as timestamp) );
-
-    rdb$set_context('USER_SESSION','ADD_INFO', msg);  -- to be displayed in result log of isql
-
-    if ( a_ignore_stop_flag = 0 ) then
-    begin
-        -- add to performance log timestamp about start/finish this unit:
-        execute procedure sp_add_perf_log(0, v_this, v_gdscode, msg );
-    end
-
-    suspend;
-
-when any do
-    begin
-        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
-        -- in order to show this additional info in ISQL log after operation will finish:
-        execute procedure sp_add_to_abend_log(
-            msg,  -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
-            gdscode,
-            msg,
-            v_this,
-            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
-        );
-
-        --#######
-        exception;  -- ::: nb ::: anonimous but in when-block!
-        --#######
-    end
-end
-
-^ -- srv_aggregate_perf_data
-
---------------------------------------------------------------------------------
-
-create or alter procedure srv_recalc_idx_stat returns(
-    tab_name dm_dbobj,
-    idx_name dm_dbobj,
-    elapsed_ms int
-)
-as
-    declare msg dm_info;
-    declare v_semaphore_id type of dm_idb;
-    declare v_deferred_to_next_time smallint = 0;
-    declare v_dummy bigint;
-    declare idx_stat_befo double precision;
-    declare v_gdscode int = null;
-    declare v_this dm_dbobj = 'srv_recalc_idx_stat';
-    declare v_start timestamp;
-    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
-begin
-
-    -- Refresh index statistics for most changed tables.
-    -- Needs to be run in regular basis otherwise ineffective plans
-    -- can be generated when doing inner joins!
-
-    -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises ex`ception to stop test:
-    execute procedure sp_check_to_stop_work;
-
-    -- Check that current Tx run in NO wait or with lock_timeout.
-    -- Otherwise raise error: performance degrades almost to zero.
-    execute procedure sp_check_nowait_or_timeout;
-
-    -- Use locking record from `semaphores` table to synchronize access to this
-    -- code:
-    begin
-        v_semaphore_id = null;
-        open c_semaphores;
-        while (1=1) do
-        begin
-            fetch c_semaphores into v_semaphore_id;
-            if ( row_count = 0 ) then
-                exception ex_record_not_found;
-            update semaphores set id = id, dts = 'now'
-            where current of c_semaphores;
-            leave;
-        end
-        close c_semaphores;
-    when any do
-        -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
-        -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
-        -- catched it's kind of exception!
-        -- 1) tracker.firebirdsql.org/browse/CORE-3275
-        --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
-        -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
-        begin
-            if ( (select result from fn_is_lock_trouble(gdscode)) = 1 ) then
-                begin
-                    -- concurrent_transaction ==> if select for update failed;
-                    -- deadlock ==> if attempt of UPDATE set id=id failed.
-                    v_deferred_to_next_time = 1;
-                    v_gdscode = gdscode;
-                end
-            else
-                exception; -- ::: nb ::: anonimous but in when-block!
-        end
-    end
-
-    if ( v_deferred_to_next_time = 1 ) then
-    begin
-       -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
-        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; --  current unit: srv_recalc_idx_stat
-        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
-    end
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(1, v_this);
-
-    for
-        select ri.rdb$relation_name, ri.rdb$index_name, ri.rdb$statistics
-        from rdb$indices ri
-        where
-            coalesce(ri.rdb$system_flag,0)=0
-            -- make recalc only for most used tables:
-            and ri.rdb$relation_name in ( 'DOC_DATA', 'DOC_LIST', 'QDISTR', 'QSTORNED', 'PDISTR', 'PSTORNED')
-        order by ri.rdb$relation_name, ri.rdb$index_name
-    into
-        tab_name, idx_name, idx_stat_befo
-    do begin
-        -- Check that table `ext_stoptest` (external text file) is EMPTY,
-        -- otherwise raises ex`ception to stop test:
-        execute procedure sp_check_to_stop_work;
-
-        execute procedure sp_add_perf_log(1, v_this||'_'||idx_name);
-
-        v_start='now';
-
-        execute statement( 'set statistics index '||idx_name )
-        with autonomous transaction; -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
-
-        elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
-
-        execute procedure sp_add_perf_log(0, v_this||'_'||idx_name,null,tab_name, idx_stat_befo);
-        suspend;
-    end
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(0, v_this, v_gdscode);
-
-when any do
-    begin
-        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
-        -- in order to show this additional info in ISQL log after operation will finish:
-        execute procedure sp_add_to_abend_log(
-            msg, -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
-            gdscode,
-            null,
-            v_this
-        );
-
-        --#######
-        exception; -- ::: nb ::: anonimous but in when-block!
-        --#######
-    end
-
-end
-
-^ -- srv_recalc_idx_stat
-
 --------------------------------------------------------------------------
 -- ###########################    R E P O R T S   ########################
 --------------------------------------------------------------------------
-
 create or alter procedure srv_fill_mon(
     a_rowset bigint default null -- not null ==> gather info from tmp$mo_log (2 rows); null ==> gather info from ALL attachments
 )
@@ -3939,6 +3699,10 @@ begin
                 rec_waits,
                 rec_confl,
                 --------------- CURRENT attachment only: set #7
+                -- ATTENTION: counters in the MON$MEMORY_USAGE are *not* cumulative,
+                -- their values are like 'snapshots' and represent current memory consumption.
+                -- Delta between start and end of some query has no sense, we have to get only
+                -- value that was gathered at the FINAL of business action (i.e. after it ended but before commit).
                 mem_used,
                 mem_alloc,
                 --------------- CURRENT attachment only: set #8
@@ -3988,8 +3752,12 @@ begin
                 ,sum( t.mult * t.rec_waits)
                 ,sum( t.mult * t.rec_confl)
                 -------------- CURRENT attachment only: set #7: mem_used,mem_alloc
-                ,sum( t.mult * t.mem_used)
-                ,sum( t.mult * t.mem_alloc)
+                -- ATTENTION: counters in the MON$MEMORY_USAGE are *not* cumulative,
+                -- their values are like 'snapshots' and represent current memory consumption.
+                -- Delta between start and end of some query has no sense, we have to get only
+                -- value that was gathered at the FINAL of business action (i.e. after it ended but before commit).
+                ,max( nullif(t.mult,-1) * t.mem_used)  -- we are only interested in the values at the END of action
+                ,max( nullif(t.mult,-1) * t.mem_alloc) -- we are only interested in the values at the END of action
                 -------------- CURRENT attachment only: set #8 stat_id,server_pid,remote_pid
                 ,max( t.stat_id )
                 ,max( t.server_pid )
@@ -4004,8 +3772,13 @@ begin
                 ,max(fb_gdscode)
                 ,datediff(millisecond from min(t.dts) to max(t.dts) )
             from tmp$mon_log t
-            where t.rowset = :a_rowset
-            group by t.rowset;
+            where
+                t.rowset = :a_rowset
+            group by t.rowset
+            -- 16.05.2020. Verify that no abend occured during BOTH measures.
+            -- We must calc sum only for ***PAIRS***, otherwise values < 0 will be in the final report!
+            having count(*) = 2 and max( t.trn_id ) is not null and min(t.mult) = -1 and max(t.mult) = 1
+            ;
 
             v_total_stat_added_rows = row_count;
 
@@ -4046,8 +3819,9 @@ when any do
     end
 
 end
-
 ^ -- srv_fill_mon
+
+--------------------------------------------------------------------------------
 
 create or alter procedure srv_fill_tmp_mon(
     a_rowset dm_idb,
@@ -4206,267 +3980,13 @@ end
 
 ^ -- srv_fill_tmp_mon
 
+
 create or alter procedure report_stat_per_tables as
 begin
    ---- n/a in 2.5 ---
 end
 
 ^ -- srv_mon_stat_per_tables
-
-create or alter procedure srv_fill_mon_memo_consumption
-returns (
-    elapsed_ms int)
-as
-    declare dts_beg timestamp;
-    declare v_info dm_info;
-    declare v_ibe smallint;
-    declare v_rowset bigint;
-    declare v_this dm_dbobj = 'srv_fill_mon_memo_consumption';
-begin
-    -- 16.12.2018
-    v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
-    if ( v_ibe = 0 -- fn_remote_process() NOT containing 'IBExpert'
-         and
-         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
-       ) then
-    begin
-        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
-        suspend;
-        --###
-        exit;
-        --###
-    end
-    -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises e`xception to stop test:
-    execute procedure sp_check_to_stop_work;
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(1, v_this);
-
-    dts_beg  = 'now';
-    v_rowset = gen_id(g_common,1);
-    insert into mon_memory_consumption(
-        stat_type -- varchar(20)
-        ,sys_memo_used
-        ,usr_memo_used
-        ,active_attachments_cnt
-        ,active_transactions_cnt
-        ,running_statements_cnt
-        ,stalled_statements_cnt
-        ,rowset
-        --,sec --  datediff(second from current_date-1 to current_timestamp ) sec
-    )
-    select
-         decode( stat_gr, 1,'attachments', 2,'transactions', 3,'statements', 'UNKNOWN' ) as stat_type
-        ,sys_memo_used
-        ,usr_memo_used
-        ,active_attachments_cnt
-        ,active_transactions_cnt
-        ,running_statements_cnt
-        ,stalled_statements_cnt
-        ,:v_rowset
-        --,datediff(second from current_date-1 to current_timestamp ) 
-    from (
-        select
-            u.stat_gr
-           ,sum( iif( u.mon_system_flag = 1, m.mon$max_memory_used, 0) ) sys_memo_used
-           ,sum( iif( u.mon_system_flag is distinct from 1, m.mon$max_memory_used, 0) ) usr_memo_used
-           ,sum( iif( u.stat_gr = 1 and u.state = 1, 1, null ) ) active_attachments_cnt
-           ,sum( iif( u.stat_gr = 2 and u.state = 1, 1, null ) ) active_transactions_cnt
-           ,sum( iif( u.stat_gr = 3 and u.state = 1, 1, null ) ) running_statements_cnt
-           ,sum( iif( u.stat_gr = 3 and u.state = 2, 1, null ) ) stalled_statements_cnt
-        from mon$memory_usage m
-        join
-        (
-            select 1 as stat_gr, a.mon$stat_id as stat_id, 0 as mon_system_flag, a.mon$attachment_id as att_id, a.mon$state as state
-            from mon$attachments a union all
-            select 2,            t.mon$stat_id, 0, t.mon$attachment_id, t.mon$state
-            from mon$transactions t union all
-            select 3,            s.mon$stat_id, 0, s.mon$attachment_id, s.mon$state
-            from mon$statements s
-        )  u
-        on
-            m.mon$stat_id = u.stat_id and
-            m.mon$stat_group = u.stat_gr
-        -- do NOT: we want to measure TOTAL memory consumption, including ALL attachments: where u.att_id != current_connection
-        group by u.stat_gr
-    );
-
-    elapsed_ms = datediff(millisecond from dts_beg to cast('now' as timestamp));
-
-    v_info='done for ' || elapsed_ms || ' ms';
-    -- ::: nb ::: do NOT use the name 'ADD_INFO', it is reserved to common app unit result!
-    rdb$set_context( 'USER_SESSION','MON_INFO', v_info ); -- to be displayed in log of 1run_oltp_emul.bat
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(0, v_this, null, v_info );
-
-    suspend;
-
-when any do
-    begin
-        rdb$set_context( 'USER_SESSION','MON_INFO', 'gds='||gdscode );
-        execute procedure sp_add_to_abend_log(
-            '',
-            gdscode,
-            '',
-            v_this,
-            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
-        );
-
-        --#######
-        exception;  -- ::: nb ::: anonimous but in when-block!
-        --#######
-    end
-
-end
-^ -- srv_fill_mon_memo_consumption
-
--- 31.12.2018
-create or alter procedure srv_fill_mon_cache_memory
-returns (
-    v_elapsed_ms integer)
-as
-    declare v_dts_beg timestamp;
-    declare v_info dm_info;
-    declare v_dbkey dm_dbkey;
-    declare v_meta_cache_size bigint;
-    declare v_statements_running_cnt smallint;
-    declare v_statements_stalled_cnt smallint;
-    declare v_ibe smallint;
-    declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
-begin
-    -- 31.12.2018
-    v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
-    if ( v_ibe = 0 -- fn_remote_process() NOT containing 'IBExpert'
-         and
-         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
-       ) then
-    begin
-        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
-        suspend;
-        --###
-        exit;
-        --###
-    end
-
-    -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises e`xception to stop test:
-    execute procedure sp_check_to_stop_work;
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(1, v_this);
-
-    v_dts_beg  = 'now';
-
-    -- Result of subtraction: (m.memo_used_att - (memo_used_trn + memo_used_stm)) equals to:
-    -- 1) when pg_cache_type='dedicated' (SC, CS) then SUM of page cache and metadata cache
-    -- 2) when pg_cahce_type='shared' (SS) then only metadata cache
-    insert into mon_cache_memory (
-        pg_buffers
-        ,pg_size
-        ,pg_cache_type -- 'dedicated' (SC/CS) or 'shared' (SS); just for info
-        ,page_cache_size
-        ,meta_cache_size
-        ,memo_used_att
-        ,memo_used_trn
-        ,memo_used_stm
-        ,total_attachments_cnt
-        ,active_attachments_cnt
-        ,page_cache_operating_stm_cnt
-        ,data_transfer_paused_stm_cnt
-    )
-    select
-        d.mon$page_buffers pg_buffers
-        ,d.mon$page_size pg_size
-        ,iif(m.memo_database = 0, 'dedicated', 'shared') pg_cache_type
-        ,d.mon$page_buffers * d.mon$page_size * iif( m.memo_database = 0, total_attachments_cnt, 1 ) as page_cache_size
-        ,m.memo_used_att - (memo_used_trn + memo_used_stm) - iif( m.memo_database = 0, d.mon$page_buffers * d.mon$page_size * total_attachments_cnt, 0)  as meta_cache_size
-        ,m.memo_used_att
-        ,m.memo_used_trn
-        ,m.memo_used_stm
-        ,m.total_attachments_cnt
-        ,m.active_attachments_cnt
-        ,m.page_cache_operating_stm_cnt
-        ,m.data_transfer_paused_stm_cnt
-    from (
-        select
-            sum( iif( u.stat_gr = 0, m.mon$memory_used, 0) ) memo_database -- SC/CS: 0; SS: >0
-           ,sum( iif( u.stat_gr = 1, m.mon$memory_used, 0) ) memo_used_att
-           ,sum( iif( u.stat_gr = 2, m.mon$memory_used, 0) ) memo_used_trn
-           ,sum( iif( u.stat_gr = 3, m.mon$memory_used, 0) ) memo_used_stm
-           ,sum( iif( u.stat_gr = 1, 1, 0 ) ) total_attachments_cnt
-           ,sum( iif( u.stat_gr = 1 and u.state = 1, 1, 0 ) ) active_attachments_cnt
-           ,sum( iif( u.stat_gr = 2 and u.state = 1, 1, 0 ) ) active_transactions_cnt
-           ,sum( iif( u.stat_gr = 3 and u.state = 1, 1, 0 ) ) page_cache_operating_stm_cnt --  server_side_run_stm_cnt
-           ,sum( iif( u.stat_gr = 3 and u.state = 2, 1, 0 ) ) data_transfer_paused_stm_cnt -- data_transf_run_stm_cnt
-        from mon$memory_usage m
-        join
-        (
-            select 0 as stat_gr, m.mon$stat_id as stat_id, null as att_id, null as state
-            from mon$memory_usage m
-            where m.mon$stat_group =0
-            UNION ALL
-            select 1 as stat_gr, a.mon$stat_id as stat_id, a.mon$attachment_id as att_id, a.mon$state as state
-            from mon$attachments a
-            UNION ALL
-            select 2,            t.mon$stat_id, t.mon$attachment_id, t.mon$state
-            from mon$transactions t
-            UNION ALL
-            select 3,            s.mon$stat_id, s.mon$attachment_id, s.mon$state
-            from mon$statements s
-        )  u
-        on
-            m.mon$stat_id = u.stat_id and
-            m.mon$stat_group = u.stat_gr
-    ) m
-    cross join mon$database d
-    returning
-         rdb$db_key
-        ,meta_cache_size
-        ,page_cache_operating_stm_cnt
-        ,data_transfer_paused_stm_cnt
-    into
-        v_dbkey
-        ,v_meta_cache_size
-        ,v_statements_running_cnt
-        ,v_statements_stalled_cnt
-    ;
-
-    v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
-
-    update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
-    where rdb$db_key = :v_dbkey;
-
-    -- meta: 999777555111, stm_running: 29871, stm_stalled: 19955
-    v_info = 'meta: ' || lpad(v_meta_cache_size,12,' ')
-        || ', stm_running ' || lpad(v_statements_running_cnt,5,' ')
-        || ', stm_stalled ' || lpad(v_statements_stalled_cnt,5,' ')
-    ;
-
-    rdb$set_context( 'USER_SESSION','ADD_INFO', v_info ); -- to be displayed in log of ISQL, SID=1
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(0, v_this, null, v_info );
-
-    suspend;
-
-when any do
-    begin
-        rdb$set_context( 'USER_SESSION','MON_INFO', 'gds='||gdscode );
-        execute procedure sp_add_to_abend_log(
-            '',
-            gdscode,
-            '',
-            v_this,
-            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
-        );
-
-        --#######
-        exception;  -- ::: nb ::: anonimous but in when-block!
-        --#######
-    end
-end
-^ -- srv_fill_mon_cache_memory
 
 set term ;^
 commit;

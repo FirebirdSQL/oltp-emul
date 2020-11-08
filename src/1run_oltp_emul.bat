@@ -6,18 +6,29 @@
 @cls
 setlocal enabledelayedexpansion enableextensions
 
-if .%1.==.. goto no_arg1
+set THIS_DIR=%~dp0
+set THIS_DIR=!THIS_DIR:~0,-1!
+cd /d !THIS_DIR!
+
+set abendlog=!THIS_DIR!\abend.log.tmp
+del !abendlog! 2>nul
+
+set can_stop=1
+
+if .%1.==.. (
+    call :no_arg1 !abendlog!
+)
 
 set fb=%1
 if .%fb%.==.25. goto chk2
 if .%fb%.==.30. goto chk2
 if .%fb%.==.40. goto chk2
-goto no_arg1
+call :no_arg1 !abendlog!
 
 :chk2
 if .%2.==.. goto noarg1
 set /a k = %2
-if not .%k%. gtr .0. goto no_arg1
+if not .%k%. gtr .0. call :no_arg1 !abendlog!
 
 @rem moved here 12.08.2018: value is needed for updating SESSIONS table, parameter 'WORKERS_COUNT'
 @rem winq = number of opening isqls
@@ -26,29 +37,50 @@ if .%is_embed%.==.1. set winq=1
 
 @rem 06.02.2016: disable any pauses (even on severe errors like troubles with opening files etc)
 @rem when this batch is called on scheduling basis:
-set can_stop=1
 if /i .%3.==.nostop. set can_stop=0
 
 :ok
 echo %date% %time% - starting %~f0
 echo Input arg1 = ^|%1^|, arg2  = ^|%2^|
 
+set /a is_admin=0
+call :is_admin !abendlog! is_admin
+if !is_admin! EQU 0 (
+    call :admin_rights_req !abendlog!
+)
+
+@rem ---------------------------------------------------------------------
+
 set INIT_SHELL_DIR="%cd%"
-cd /d %~dp0
+
+@rem 09.05.2019: on some hosts execution of CScript can be prohibited with issuing:
+@rem CScript Error: Execution of the Windows Script Host failed. (Access is denied. )
+@rem Probably this can be because of parameter Enabled=0 in
+@rem HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Script Host
+
+%systemroot%\system32\cscript.exe 1>!abendlog! 2>&1
+findstr /i /c:"Windows Script Host" !abendlog! >nul
+if errorlevel 1 (
+    call :nocscript !abendlog!
+)
+
 
 set cfg=oltp%fb%_config.win
 
 set isc_user=
 set isc_password=
 
-echo Parsing config file ^>%cfg%^<. Please wait. . .
+set msg=Parsing config file '%cfg%'. Please wait. . .
+echo !msg!
+echo !msg!>!abendlog!
 set err_setenv=0
 
 ::::::::::::::::::::::::::::::::
 :::: R E A D    C O N G I G ::::
 ::::::::::::::::::::::::::::::::
 
-call :readcfg %cfg% !err_setenv!
+call :readcfg %cfg% err_setenv
+if .%err_setenv%.==.1. goto no_env
 
 if .%gather_hardware_info%.==.1. (
     echo %host% | findstr /r /i /c:"localhost" /c:"127.0.0.1" >nul
@@ -91,10 +123,7 @@ if defined tmpdir (
         set tmpdir=!tmp_deq!
     )
 ) else (
-  echo.
-  echo Missing variable with name 'tmpdir'.
-  echo.
-  goto :no_env
+    call :no_env !abendlog! tmpdir
 )
 
 set q_fbc=2
@@ -139,23 +168,80 @@ if defined dbnm (
     )
 )
 
-@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-@rem INITIATE REPORT FILE "oltp30.report.txt"
-@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-if defined tmpdir (
-    if not exist %tmpdir% md %tmpdir%
-    if not exist %tmpdir%\sql md %tmpdir%\sql
-    set log4all=%tmpdir%\oltp%fb%.report.txt
-    set log4tmp=%tmpdir%\oltp%fb%.prepare.log
-) else (
-    set log4all=%~dp0oltp%fb%.report.txt
-    set log4tmp=%~dp0oltp%fb%.prepare.log
+if not exist %tmpdir% md %tmpdir% 2>nul
+
+if not exist %tmpdir%\nul (
+    call :noaccess !abendlog!
+)
+if not exist %tmpdir%\sql md %tmpdir%\sql
+
+if .%make_html%.==.1. (
+
+    @rem HTML report always is compressed before writing to temporary .fdb
+    @rem which, in turn, further is backed up to %results_storage_fbk%.
+    @rem We have to ensure that compressor binary (if defined) really exists.
+    @rem When config parameter 'report_compress_cmd' is undefined then
+    @rem HTML report will be compressed using ZIP format via call cscript.
+
+    if not .%report_compress_cmd%.==.. (
+
+        @rem cmd /c !report_compress_cmd! 1>!abendlog! 2>&1
+        @rem set elev=!errorlevel!
+        @rem echo elev=!elev!
+        @rem if !elev! NEQ 0 (
+
+        if not exist "!report_compress_cmd!" (
+            call :nocompressor !abendlog!
+        )
+        call :trim report_compress_cmd !report_compress_cmd!
+
+        @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
+        echo !report_compress_cmd!| findstr /e /i /c:"\7za.exe" /c:"\7za" /c:"\7z.exe" /c:"\7z" >nul
+        if NOT errorlevel 1 (
+            @rem Check that 'report_compress_cmd' actually points to 7-Zip
+            cmd /c !report_compress_cmd! 1>!abendlog! 2>&1
+            findstr /i /c:"7-Zip" !abendlog!>nul
+            if errorlevel 1 (
+                call :noprodname !abendlog! report_compress_cmd 7-Zip
+            )
+        )
+
+        @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
+        echo !report_compress_cmd!| findstr /e /i /c:"\zstd.exe" /c:"\zstd" >nul
+        if NOT errorlevel 1 (
+            @rem Check that 'report_compress_cmd' actually points to Zstandard:
+            cmd /c !report_compress_cmd! 1>!abendlog! 2>&1
+            findstr /i /c:"zstd.exe" !abendlog! | findstr /i /c:"args" | findstr /i /c:"file" >nul
+            if errorlevel 1 (
+                call :noprodname !abendlog! report_compress_cmd Zstandard
+            )
+        )
+
+
+    )
+
+    @rem cer5tutil is used to convert COMPRESSED HTML content (7z, .zst, .zip)
+    @rem to base64 before it will be inserted into temporary .fdb and further
+    @rem backed up to %results_storage_fbk%.
+
+    %systemroot%\system32\certutil.exe -? 1>!abendlog! 2>&1
+    findstr /i /c:"-encode" !abendlog! 1>nul
+    if errorlevel 1 (
+        call :nocertutil !abendlog!
+    )
+
 )
 
-del %log4all% 2>nul
-::if errorlevel 1 goto :cannot_del
-del %log4tmp% 2>nul
-::if errorlevel 1 goto :cannot_del
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@rem INITIATE REPORT FILE "%tmpdir%\oltp30.report.txt"
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+set log4all=%tmpdir%\oltp%fb%.report.txt
+set log4tmp=%tmpdir%\oltp%fb%.prepare.log
+
+for /d %%x in (!abendlog!,!log4all!,!log4tmp!) do (
+    if exist %%x del %%x
+)
+
 
 (
   echo %date% %time%. Preparing for test started.
@@ -203,6 +289,7 @@ set varlist=!varlist!^
 ,separate_workers^
 ,sleep_max
 
+
 set varlist=!varlist!^
 ,test_time^
 ,test_intervals^
@@ -219,6 +306,7 @@ set varlist=!varlist!^
 ,working_mode^
 ,actions_todo_before_reconnect
 
+
 for %%v in (%varlist%) do (
     if "!%%v!"=="" (
         set msg=### MISSED: %%v ###
@@ -233,30 +321,133 @@ for %%v in (%varlist%) do (
 
 if .%err_setenv%.==.1. goto no_env
 
+@rem 04.05.2020 do NOT ever leave this parameter undefined!
+if not defined sleep_min (
+    set sleep_min=0
+)
+
+if !sleep_min! GTR !sleep_max! (
+    echo Incorrect value of 'sleep_min' parameter: !sleep_min!. It must be in the scope 0...!sleep_max!
+    echo Press any key to FINISH this batch. . .
+    pause>nul
+    goto final
+)
+
 if %mon_unit_perf% EQU 2 (
     if not defined sleep_ddl (
         echo.
-        echo CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'sleep_ddl' must be UNCOMMENTED.
+        echo CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'sleep_ddl' must be defined.
         echo It must point to existing SQL script that declares UDF for delays from .so file avaliable to engine.
         if .%can_stop%.==.1. (
              echo.
-             echo Press any key to FINISH this batch. . .
+             echo Press any key to FINISH this batch.
              pause>nul
         )
         goto final
     )
 
     if not defined mon_query_interval (
-        echo CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'mon_query_interval' must be UNCOMMENTED.
+        echo.
+        echo CONFIGURATION ISSUE. Parameter 'mon_unit_perf' = 2 requires that parameter 'mon_query_interval' must be defined.
         echo Its value must be greater than zero and means duration of delay between receiving monitoring snapshots, in seconds.
         if .%can_stop%.==.1. (
              echo.
-             echo Press any key to FINISH this batch. . .
+             echo Press any key to FINISH this batch.
              pause>nul
         )
         goto final
     )
+
+    findstr /i /r /c:"declare[ ]*external[ ]*function" !sleep_ddl! > nul
+    if NOT errorlevel 1 (
+        for /f "tokens=4" %%a in ('findstr /i /r /c:"declare[ ]*external[ ]*function" !sleep_ddl!') do (
+            set sleep_udf=%%a
+        )
+        if .!sleep_udf!.==.. (
+            echo.
+            echo SQL script '!sleep_ddl!' must contain name of UDF for delays
+            echo in one line with 'DECLARE EXTERNAL FUNCTION' clause.
+            echo Open this script in editor and adjust it.
+            echo.
+            echo Press any key to FINISH this batch. . .
+            pause
+        ) else (
+            echo Parsing of '!sleep_ddl!' finished, name UDF for delays is: !sleep_udf!
+        )
+    ) else (
+        echo.
+		echo SQL script '!sleep_ddl!' must contain line with UDF declaration
+		echo that starts with:
+		echo.
+		echo     declare external function ^<UDF_name^>
+		echo.
+		echo NOTE: all these four words must be written in one line.
+		echo Example:
+		echo.    declare external function sleep
+		echo.    integer
+		echo.    returns integer by value
+		echo.    entry_point 'SleepUDF' module_name 'SleepUDF';
+		echo.
+		echo Press any key to FINISH this batch.
+		pause
+		goto final
+    )
+
+
 )
+
+if not .%fb%. == .25. (
+    
+    set some_undefined=0
+
+    if .%mon_query_role%.==.. (
+       if not .%mon_usr_prefix%.==.. (
+           set some_undefined=1
+       )
+    ) else if .%mon_usr_prefix%.==.. (
+       if not .%mon_query_role%.==.. (
+           set some_undefined=1
+       )
+    )
+    echo mon_usr_prefix=%mon_usr_prefix%
+    echo mon_query_role=%mon_query_role%
+
+    if !some_undefined! EQU 1 (
+        echo CONFIGURATION ISSUE. Parameters 'mon_query_role' and  'mon_usr_prefix' must be either both defined or both commented.
+        echo Press any key to FINISH this batch. . .
+        pause>nul
+        goto final
+    )
+
+    if not .%mon_unit_perf%.==.0. (
+        if .%mon_usr_prefix%.==.. (
+            set mon_usr_prefix=tmp_oltp_emul_user_
+            echo Config parameter 'mon_usr_prefix' is commented. We use DEFAULT value for it: !mon_usr_prefix!
+        )
+        if .%mon_query_role%.==.. (
+            set mon_query_role=tmp_oltp_emul_worker
+            echo Config parameter 'mon_query_role' is commented. We use DEFAULT value for it: !mon_query_role!
+        )
+    )
+
+)
+
+if .!gather_hardware_info!.==.1. (
+    echo !host! | findstr /i /c:"localhost" /c:"127.0.0.1">nul
+    if errorlevel 1 (
+		echo CONFIGURATION ISSUE.
+		echo Parameter 'gather_hardware_info' = 1 requires parameter 'host' having value 'localhost' or '127.0.0.1'.
+		echo Hardware and OS info will not be gathered because probably you are going to run test on REMOTE server.
+		echo Current value of 'host' parameter is: !host!
+		pause
+        @rem ###############################################################################################
+        @rem ###  C H A N G E    C O N F I G   'G A T H E R _ H A R D W A R E _ I N F O'   T O   Z E R O ###
+        @rem ###############################################################################################
+		set gather_hardware_info=0
+    )
+)
+
+sleep_ddl
 
 (
   echo !date! !time!. Created by: %~f0, at host: %file_name_this_host_info%
@@ -277,12 +468,12 @@ call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled %can_stop% %log
 
 @rem Result: build_was_cancelled = 1 ==> previous building process was cancelled (found "SQLSTATE = HY008" in .err).
 
-if not exist %fbc%\isql.exe goto bad_fbc_path
-if not exist %fbc%\gfix.exe goto bad_fbc_path
-if not exist %fbc%\fbsvcmgr.exe goto bad_fbc_path
 
-set msg=All necessary FB utilities found in %fbc% 
-echo %msg% & echo %msg% >> %log4tmp%
+for /d %%x in (isql,gfix,fbsvcmgr,gbak) do (
+    if not exist %fbc%\%%x.exe goto bad_fbc_path
+)
+
+call :sho "All needed FB utilities found in the folder defined by parameter 'fbc': %fbc%" %log4tmp%
 
 set tmplog=%tmpdir%\tmp_get_fb_db_info.log
 set tmperr=%tmpdir%\tmp_get_fb_db_info.err
@@ -351,11 +542,17 @@ for /f "tokens=1-3 delims= " %%a in ('findstr /i /c:version %tmplog%') do (
 )
 
 if not defined fbb (
-    echo.
-    echo Could not detect Firebird build number from 'FBSVCMGR info_server_version' log.
-    echo Probably FBSVCMGR output was changed or error in this batch algorithm.
-    echo.
-    echo See details in %log4tmp%
+    (
+        echo.
+        echo Could not detect Firebird build number from 'FBSVCMGR info_server_version' log.
+        echo Probably FBSVCMGR output was changed or error in this batch algorithm.
+        echo.
+        echo See details in %log4tmp%
+    ) > %tmplog%
+    type %tmplog%
+    type %tmplog% >> %log4tmp%
+    del %tmplog%
+
     if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
         echo.
         echo Press any key to FINISH this batch. . .
@@ -385,9 +582,7 @@ call :repl_with_bound_quotes %tmpsql% tmpsql
 call :repl_with_bound_quotes %tmpchk% tmpchk
 call :repl_with_bound_quotes %tmpclg% tmpclg
 
-set msg=Check that database is avaliable.
-echo !msg! & echo !msg! >>%log4tmp%
-echo.
+call :sho "Check that database is avaliable." %log4tmp%
 
 @rem ##############################################################
 @rem TODO LATER: change this alg! use hash of all db object names ?
@@ -395,16 +590,59 @@ echo.
 @rem ..................... check that all DB objects was already created Ok ..............
 
 (
-     echo set heading off; 
-     echo set list on;
-     echo set bail on;
-     echo -- check that all database objects already exist:
-     echo select iif( exists( select * from semaphores where task='all_build_ok' ^),
-     echo                     'all_dbo_exists',
-     echo                     'some_dbo_absent'
-     echo           ^) as "build_result="
-     echo from rdb$database;
-)>%tmpsql%
+    echo "set list on;"
+    echo "set bail on;"
+    echo "-- set echo on;"
+
+    echo "-- check that all database objects already exist:"
+    echo "select iif( exists( select * from semaphores where task='all_build_ok'),"
+    echo "                    'all_dbo_exists',"
+    echo "                    'some_dbo_absent'"
+    echo "          ) as "build_result=""
+    echo "from rdb$database;"
+
+    echo "-- Sequence g_stop_test serves as 'stop-flag' for every ISQL attachment."
+    echo "-- It must be always set to ZERO before test launch."
+    echo "-- Here we forcedly set this sequence to 0 and, at the same time, check that DB is not read-only."
+    echo "select gen_id(g_stop_test,0) gen_stop_before_restart from rdb$database;"
+    echo "-- Added 07.08.2020:"
+    echo "set term ^;"
+    echo "execute block as"
+    echo "    declare c bigint;"
+    echo "begin"
+    echo "   -- DISABLED 07.08.2020:"
+    echo "   -- alter sequence g_stop_test restart with 0; -- DOES NOT WORK since 4.0.0.2131:"
+    echo "   -- gen_id(,0) will return -1 instead of 0."
+    echo "   c = gen_id(g_stop_test, -gen_id(g_stop_test, 0));"
+    echo "end ^"
+    echo "commit ^"
+    echo "select gen_id(g_stop_test,0) gen_stop_after_restart from rdb$database ^"
+    echo "commit ^"
+
+    set tmp_ddl=recreate exception exc_gen_stop_test_invalid 'Test can not start because value of generator ''g_stop_test'' is NOT zero
+    if not .%fb%.==.25. (
+        set tmp_ddl=!tmp_ddl!: @1'
+    ) else (
+        set tmp_ddl=!tmp_ddl!'
+    )
+    echo !tmp_ddl!
+    echo "^"
+    echo "execute block as"
+    echo "begin"
+    echo "    if ( gen_id(g_stop_test,0) <> 0 ) then"
+    if not .%fb%.==.25. (
+        echo "        exception exc_gen_stop_test_invalid using ( gen_id(g_stop_test,0) );"
+    ) else  (
+        echo "        exception exc_gen_stop_test_invalid;"
+    )
+    echo "end ^"
+    echo "set term ;^"
+    echo "commit;"
+    echo "drop exception exc_gen_stop_test_invalid;"
+    echo "commit;"
+)>!tmpsql!
+
+call :remove_enclosing_quotes !tmpsql!
 
 set run_isql=%fbc%\isql
 call :repl_with_bound_quotes %run_isql% run_isql
@@ -422,10 +660,11 @@ echo %time%. Run: !run_isql! 1^>%tmpclg% 2^>%tmperr%  >>%log4tmp%
 ) >>%log4tmp% 2>&1
 
 @rem This .sql can raise exception when:
+@rem 0. Table 'semaphores' does not exist or has no field 'task' ==> previous creation was not completed:
 @rem 1. Database does not exist or its name is a directory (incorrect value of config 'dbnm' parameter)
-@rem 2. FB is not running or not listening port specified in config 'port' parameter
-@rem 3. Database is in shutdown mode
-@rem 4. Table 'semaphores' does not exist or has no field 'task' ==> previous creation was not completed:
+@rem 2. File <dbnm> is not a valid database
+@rem 3. Database is in shutdown or in read-only mode
+@rem 4. Database has incompatible ODS
 
 call :catch_err run_isql !tmperr! !tmpsql! db_not_ready 0
 @rem                1        2        3          4      5 (0=do NOT make abend of this batch)
@@ -441,34 +680,68 @@ set db_build_finished_ok=2
 @rem      -Error while trying to open file
 @rem PS. Explanation: sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1120390&msg=16689978
 
-@rem Seems that "Is a directory" can be on linux only:
-find /c /i "Is a directory" %tmperr% >nul
-if errorlevel 1 goto chk4unav
-goto bad_dbnm
+@rem ###########################################################
+@rem WE HAVE TO IGNORE MESSAGE 'Error while trying to open file' BECAUSE IN SUCH CASE WE RECREATE DATABASE NOW.
+@rem ###########################################################
+set unavail_db=0
+for /d %%x in ("unavailable database", "file !dbnm! is not a valid database", "database !dbnm! shutdown", "attempted update on read-only database", "unsupported on-disk structure") do (
+    @rem Seems that "Is a directory" can be on linux only:
+    @rem On Windows this error has text 
+    @rem     I/O error during "CreateFile (open)" operation for file "
+    @rem     -Error while trying to open file
+    set pattern=%%x
+    @rem call :dequote_string !pattern! pattern
+    
+    findstr /m /i /c:!pattern! !tmperr! > nul
+    if NOT errorlevel 1 (
+        set unavail_db=1
+    )
+)
 
-:chk4unav
-find /c /i "unavailable database" %tmperr% >nul
-if errorlevel 1 goto chk4ods
-goto unavail_db
-
-:chk4ods
-find /c /i "unsupported on-disk" %tmperr% >nul
-if errorlevel 1 goto chk4online
-goto bad_ods
-
-:chk4online
-find /c /i "shutdown" %tmperr% >nul
-if errorlevel 1 goto chk4open
-goto db_offline
+if .!unavail_db!.==.1. (
+    call :sho "Could not connect to DB or write in it. Check parameter 'dbnm': !dbnm!." %log4tmp%
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH this batch. . .
+        pause>nul
+    )
+    goto final
+)
 
 :chk4open
 find /c /i "Error while trying to open file" %tmperr% >nul
-
 if errorlevel 1 (
 
     if .%build_was_cancelled%.==.0. (
-        for /f "usebackq tokens=*" %%a in ('%tmperr%') do set size=%%~za
+
+        findstr /i /c:"collation" !tmperr! | findstr /i /c:"not installed" >nul
+        if NOT errorlevel 1 (
+            (
+                echo Missed collation. Database probably was copied from host with different ICU libraries set.
+                echo Run following command locally:
+                echo.
+                echo !fbc!\gfix -icu !dbnm!
+                echo.
+                echo After this you can resume this test.
+            ) > !tmplog!
+            type !tmplog!
+            type !tmplog!>>%log4tmp%
+            del !tmplog!
+
+            if .%can_stop%.==.1. (
+                echo.
+                echo Press any key to FINISH this batch. . .
+                pause>nul
+            )
+            goto final
+
+        )
+
+        for /f "usebackq tokens=*" %%a in ('%tmperr%') do (
+            set size=%%~za
+        )
         if .!size!.==.. set size=0
+
         if !size! gtr 0 (
             set db_build_finished_ok=0
         ) else (
@@ -477,7 +750,9 @@ if errorlevel 1 (
             @rem -------------------------------------------------------------------------------------------------------
             set db_build_finished_ok=1
             find /c /i "all_dbo_exists" !tmpclg! >nul
-            if errorlevel 1 set db_build_finished_ok=0
+            if errorlevel 1 (
+                set db_build_finished_ok=0
+            )
         )
     ) else (
         set db_build_finished_ok=0
@@ -538,6 +813,7 @@ if .%need_rebuild_db%.==.1. (
     call :prepare
 )
 
+
 @rem ********************
 @rem *** COMMON BLOCK ***
 @rem ********************
@@ -594,6 +870,19 @@ if NOT errorlevel 1 (
 )
 @rem !fbc!\gstat -h !dbnm! | findstr /i /c:"sweep" /c:"attrib"
 
+
+@rem ...................... c r e a t e _ r e s u l t s _ s t o r a g e   ............
+
+@rem 19.10.2020. Check and create (if needed) database for storing settings and performance results 
+@rem for each subsequent test run. Database will be immediately backed up after creation.
+@rem See config parameter 'results_storage_fbk' for explanations.
+if .!results_storage_fbk!.==.. (
+    call :sho "Parameter results_storage_fbk is undefined, skip creation of separate DB for storing test results." %log4tmp%
+) else (
+    call :create_results_storage_fbk !results_storage_fbk! %log4tmp%
+)
+
+
 set sleep_mul=1
 
 @rem NOTE: we have to declare UDF and evaluate sleep_mul even when sleep_max = 0 - it can be required
@@ -629,7 +918,6 @@ if NOT .%sleep_ddl%.==.. (
 )
 
 
-
 @rem ################### check for non-empty stoptest.txt ################################
 
 if  defined use_external_to_stop (
@@ -638,6 +926,12 @@ if  defined use_external_to_stop (
     echo Config parameter 'use_external_to_stop' is UNDEFINED (this is DEFAULT^).
     echo SKIP checking for non-empty external file.
 )     
+
+@rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+@rem :::   A D D    R O L E     a n d    N O N - P R I V I L E G E D     U S E R S     F O R    M O N$    :::
+@rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+call :adjust_grants !mon_unit_perf!
 
 if !need_rebuild_db! EQU 1 (
     @rem 02.11.18: moved here from db_build
@@ -654,10 +948,10 @@ if !need_rebuild_db! EQU 1 (
     )
 )
 
+@echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+@echo :::   c h e c k    u p c o m i n g     t e s t     s e t t i n g s   :::
+@echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-@rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-@rem :::    S h o w     c o m i n g     t e s t     s e t t i n g s   :::
-@rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 @rem  08.11.2018: SP sys_get_db_arch that shows current FB instance architercute (CS/SC/SS) uses
 @rem  ES/EDS in order to detect whether FB runs as Classic server or no. This ES/EDS can remain
@@ -700,7 +994,7 @@ if !required_docs! GTR 0 (
     
     call :sho "Start initial data population until total number of documents will be not less than !required_docs!." !log4all!
 
-    @rem creating temp batch 'c:\temp\1stoptest.tmp.bat' for premature stop all working ISQLs:
+    @rem creating temp batch '!tmpdir!\1stoptest.tmp.bat' for premature stop all working ISQLs:
 
     call :gen_batch_for_stop 1stoptest.tmp info
     @rem                        ^           ^
@@ -739,10 +1033,10 @@ if !required_docs! GTR 0 (
 del %tmpclg% 2>nul
 echo.
 
-@rem ##############################################################
-@rem ###             w o r k i n g     p h a s e                ###
-@rem ##############################################################
 
+@echo ##############################################################
+@echo ###             w o r k i n g     p h a s e                ###
+@echo ##############################################################
 
 :more
 
@@ -777,17 +1071,6 @@ if exist %tmp_run_test_sql% (
     findstr /i /c:"FINISH packet" %tmp_run_test_sql% 1>nul
     if not errorlevel 1 (
         call :sho "Generation of script %tmp_run_test_sql% was completed w/o interruptions." %log4tmp%
-        @rem call :getFileDTS gen_vbs
-        @rem call :getFileDTS get_dts !tmp_run_test_sql! sqldts
-        @rem call :getFileDTS get_dts %~f0 thisdts
-        
-        @rem -----------------------------------------------
-        @rem 09.05.2019: use WMIC instead of CScript where it is possible.
-        @rem To get exact timestamp of file:
-        @rem wmic.exe datafile where name="C:\\pagefile.sys" get filename,LastModified,size /format:list
-        @rem -----------------------------------------------
-
-        @rem Get file timestamp using WMIC:
 
         call :getFileTimestamp !tmp_run_test_sql! sqldts
         call :getFileTimestamp %~f0 thisdts
@@ -795,7 +1078,6 @@ if exist %tmp_run_test_sql% (
         if .!thisdts!. lss .!sqldts!. (
             call :sho "This batch is OLDER than %tmp_run_test_sql%" %log4tmp%
 
-            @rem call :getFileDTS get_dts !cfg! cfgdts
             call :getFileTimestamp !cfg! cfgdts
 
             if .!cfgdts!. lss .!sqldts!. (
@@ -930,14 +1212,14 @@ if not .%file_name_with_test_params%.==.. (
         @rem ---- ?! 20.08.2018 -- 
         call :repl_with_bound_quotes !log_with_params_in_name! log_with_params_in_name
     )
-    echo Final report will be saved with name = !log_with_params_in_name!.txt >> %log4tmp%
 ) else (
     set log_with_params_in_name=%log4all%
     if not .%file_name_this_host_info%.==.. (
         set log_with_params_in_name=!log_with_params_in_name!_%file_name_this_host_info%
     )
-    echo Final report will be saved with name = %log4all% >> %log4tmp%
 )
+call :sho "Final report will be saved with name = !log_with_params_in_name!.txt" %log4tmp%
+
 
 del %tmpsql% 2>nul
 del %tmpclg% 2>nul
@@ -952,13 +1234,15 @@ if .1.==.0. (
     set /a k=10000+!sid!
     echo +DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+
     echo RUN: call oltp_isql_run_worker.bat !sid!  %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
-    echo check result of select * from sp_get_test_time_dts
-    pause
+
+    @rem echo check result of select * from sp_get_test_time_dts
+    @rem pause
 
 
     call oltp_isql_run_worker.bat !sid! %winq%  !conn_pool_support! tmp_run_test_sql log4all %logbase%-!k:~1,4! %fbb%   %file_name_with_test_params%
 
     @rem                            1      2               3                4            5            6            7                 8
+
     echo +DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+DEBUG+
     pause
     exit
@@ -1052,58 +1336,137 @@ if .%make_html%.==.1. (
 
 goto :end_of_test
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :no_arg1
     @echo off
-    cls
-    echo.
-    echo Please specify:
-    echo.
-    echo arg #1 =  25 ^| 30 ^| 40 -- version of Firebird which will be tested:
-    echo           ^^    ^^    ^^
-    echo           ^|    ^|    ^|
-    echo           ^|    ^|    +--- Firebird 4.0
-    echo           ^|    ^|
-    echo           ^|    +------------ Firebird 3.0
-    echo           ^|
-    echo.          +--------------------- Firebird 2.5
-    echo.
-    echo arg #2 =  ^<N^> -- number of ISQL sessions to be started;
-    echo.
-    echo arg #3 = nostop -- (optional) skip any pauses during work 
-    echo.
-    echo Samples:
-    echo.
-    echo     1. For Firebird 2.5:
-    echo.
-    echo        %~f0 25 100
-    echo        %~f0 25 100 nostop
-    echo.
-    echo     2. For Firebird 3.0:
-    echo.
-    echo        %~f0 30 100
-    echo        %~f0 30 100 nostop
-    echo.
-    echo.
-    echo Press any key to FINISH this batch file. . .
-    @pause>nul
-    @goto final
+    setlocal
 
-:no_env
-    @echo off
-    echo.
-    echo #######################################################
-    echo Missed at least one of necessary environment variables.
-    echo #######################################################
-    echo,
-    echo Check %cfg% file!
+    set tmplog=%1
+    (
+        echo.
+        echo Please specify:
+        echo.
+        echo arg #1 =  25 ^| 30 ^| 40 -- version of Firebird which will be tested:
+        echo           ^^    ^^    ^^
+        echo           ^|    ^|    ^|
+        echo           ^|    ^|    +--- Firebird 4.0
+        echo           ^|    ^|
+        echo           ^|    +------------ Firebird 3.0
+        echo           ^|
+        echo.          +--------------------- Firebird 2.5
+        echo.
+        echo arg #2 =  ^<N^> -- number of ISQL sessions to be started;
+        echo.
+        echo arg #3 = nostop -- /optional/ skip any pauses during work 
+        echo.
+        echo Examples:
+        echo.
+        echo     1. For Firebird 2.5:
+        echo.
+        echo        %~f0 25 100
+        echo        %~f0 25 100 nostop
+        echo.
+        echo     2. For Firebird 3.0:
+        echo.
+        echo        %~f0 30 100
+        echo        %~f0 30 100 nostop
+        echo.
+        echo.
+        echo Press any key to FINISH this batch file. . .
+    ) >!tmplog!
+    type !tmplog!
+
     if .%can_stop%.==.1. (
         echo.
         echo Press any key to FINISH. . .
         echo.
         @pause>nul
     )
+
     @goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:no_env
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo #######################################################
+        echo Missed at least one of necessary environment variables.
+        echo #######################################################
+        echo Name of variable: '%2'
+        echo.
+        echo Check config file '%~dp0%cfg%'.
+        echo.
+    ) >!tmplog!
+    type !tmplog!
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    @goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:noaccess
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo Can NOT create directory defined by config parameter 'tmpdir':
+        echo !tmpdir!
+        echo.
+        echo Check config file '%~dp0%cfg%' and adjust this parameter.
+        echo.
+    ) > !abendlog!
+    type !abendlog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:nocscript
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo Windows Script executive is unavaliable.
+        echo Check access rights to %systemroot%\system32\cscript.exe
+        echo Check Windows registry:
+        echo Key: HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Script Host
+        echo Parameter: Enabled, type DWORD
+        echo If it exists then its value must be 1.
+        echo.
+    ) > !abendlog!
+    type !abendlog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :bad_fbc_path
     @echo off
@@ -1119,6 +1482,8 @@ goto :end_of_test
         @pause>nul
     )
     @goto final
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :bad_dbnm
     @echo off
@@ -1136,6 +1501,8 @@ goto :end_of_test
         @pause>nul
     )
     @goto final
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :unavail_db
     @echo off
@@ -1157,6 +1524,8 @@ goto :end_of_test
     )
     @goto final
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :bad_ods
     @echo off
     echo.
@@ -1172,6 +1541,8 @@ goto :end_of_test
     )
     @goto final
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :db_offline
     @echo off
     echo.
@@ -1186,6 +1557,8 @@ goto :end_of_test
     )
     goto final
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :db_read_only
     @echo off
     echo.
@@ -1198,6 +1571,8 @@ goto :end_of_test
         @pause>nul
     )
     goto final
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :build_not_finished
     @echo off
@@ -1216,6 +1591,8 @@ goto :end_of_test
     )
     @goto final
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :no_script
     @echo off
     echo.
@@ -1227,6 +1604,8 @@ goto :end_of_test
         @pause>nul
     )
     @goto final
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :err_setenv
     @echo off
@@ -1241,6 +1620,8 @@ goto :end_of_test
     )
     @goto final
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :test_canc
     @echo off
     echo.
@@ -1254,6 +1635,8 @@ goto :end_of_test
         @pause>nul
     )
     EXIT
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :err_del
 
@@ -1271,8 +1654,7 @@ goto :end_of_test
     )
     @goto final
 
-
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :gen_working_sql
       setlocal
@@ -1365,7 +1747,9 @@ goto :end_of_test
       @rem =======================================================================================
       call :display_win_defender_notes screen
 
+
       del %generated_sql% 2>nul
+
       (
           echo -- ### WARNING: DO NOT EDIT ###
           echo -- GENERATED AUTO BY %~f0.
@@ -1374,13 +1758,17 @@ goto :end_of_test
           echo.
       ) >> %generated_sql%
 
+      set TIL_FOR_WORK=snapshot
+      if !fb! GEQ 40 (
+          set TIL_FOR_WORK=read committed read consistency
+          echo SET KEEP_TRAN_PARAMS ON;>>%generated_sql%
+       )
+
       if /i .%mode%.==.init_pop. (
           (
             echo -- Check settings of database.
             echo -- NB-1: FW must be (temply^) set to OFF
             echo -- NB-2: cache buffers temply set to pretty big value
-            @rem echo alter sequence g_stop_test restart with 0; -- 16.11.2018
-            @rem echo commit;
             echo set list on;
             echo select mon$database_name, mon$page_size, mon$sweep_interval, mon$page_buffers, mon$forced_writes from mon$database;
             echo set list off;
@@ -1394,7 +1782,7 @@ goto :end_of_test
           (
             echo ' Generated AUTO by %~f0 at !date! !time!. Called via SHELL from %generated_sql%, do NOT edit.
             echo ' This file is used by Windows CSCRIPT.EXE for DELAYS between transactions.
-            echo ' Sample: shell cscript //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp ^<sleep_min^> ^<sleep_max^>
+            echo ' Sample: shell %systemroot%\system32\cscript.exe //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp ^<sleep_min^> ^<sleep_max^>
             echo.
             echo option explicit
             echo.
@@ -1552,7 +1940,7 @@ goto :end_of_test
                               echo.
                               echo -- Delay is evaluated within scope sleep_min ... sleep_max = %sleep_min% ... %sleep_max%.
                               echo.
-                              echo shell cscript //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp %sleep_min% %sleep_max% ;
+                              echo shell %systemroot%\system32\cscript.exe //nologo //e:vbscript !tmpdir!\sql\tmp_longsleep.vbs.tmp %sleep_min% %sleep_max% ;
 
                           )
                           @rem sleep_UDF=UNDEFINED == false / true
@@ -1690,14 +2078,16 @@ goto :end_of_test
           )
 
           @rem %%i EQU 1 --> true / false
-
+              
           (
               echo.
               echo -- ################################################################
               echo -- START TRANSACTION WHICH WILL BE USED FOR BUSINESS UNIT EXECUTION
               echo -- ################################################################
               echo.
-              echo set transaction no wait %nau%; -- check oltp%fb%_config.win for optional setting NO AUTO UNDO
+
+              echo set transaction !TIL_FOR_WORK! no wait %nau%; -- see config param. 'nau' for using NO AUTO UNDO
+
               echo set heading off;
               echo set term ^^;
               echo -- 18.01.2019. Avoid from querying rdb\$database: this can affect on performance
@@ -1888,7 +2278,7 @@ goto :end_of_test
                       echo ^^
                       echo set term ;^^
                       echo commit; --  ##### C O M M I T  #####  after gathering mon$data
-                      echo set transaction no wait %nau%;
+                      echo set transaction !TIL_FOR_WORK! no wait %nau%;
                   )>>%generated_sql%
 
               ) else if .%mon_unit_perf%.==.2. (
@@ -1970,7 +2360,6 @@ goto :end_of_test
               echo --     2019-01-16 12:09:12.802 tra_663        att_61         name_of_selected_business_unit            30 start            TEST_TIME, minute N 12345
               echo.
               echo SET STAT ON;
-              echo -- SET BAIL ON; -- 28.09.2018: we have to cancel script if any error occured during selection business unit to be run
               echo.
               echo set term ^^;
               echo execute block as
@@ -2055,6 +2444,9 @@ goto :end_of_test
 
           (
               echo            rdb$set_context('USER_SESSION', 'RUN_RESULT', 'error, gds='^|^|gdscode^);
+		      echo            -- ##############################
+		      echo            -- r a i s e    e x c e p t i o n
+		      echo            -- ##############################
               echo            exception;
               echo         end
               echo     end
@@ -2062,7 +2454,6 @@ goto :end_of_test
               echo ^^
               echo set term ;^^
               echo.
-              echo -- SET BAIL OFF; -- 28.09.2018
               echo SET STAT OFF;
               echo.
           )>>%generated_sql%
@@ -2113,7 +2504,6 @@ goto :end_of_test
                       echo set term ;^^
                       @rem 22.04.2019:
                       @rem -- do NOT otherwise tmp$perf_log become empty -- echo commit; --  ##### C O M M I T  #####  after gathering mon$data
-                      @rem -- echo set transaction no wait %nau%;
                   )>>%generated_sql%
               
               ) else if .%mon_unit_perf%.==.2. (
@@ -2141,10 +2531,11 @@ goto :end_of_test
                   if .%mon_unit_perf%.==.1. (
                       echo      -- this variable will be defined in SP srv_fill_mon:
                       echo     ,v.mon_logging_info
-                      echo     ,v.mon_gathering_time_ms
+                      @rem 17.05.2020: 'OLTP_USER_nnnn' instead of SYSDBA when FB = 3.x and above:
+                      echo     ,current_user ^|^| ' ' ^|^| v.mon_gathering_time_ms as mon_gathering_user_and_time_ms
                       echo     ,v.traced_units
                   ) else if .%mon_unit_perf%.==.2. (
-                      echo    ,'MON$ statistics is queried from session N1, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
+                      echo    ,'MON$ statistics is queried by session N1, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
                   ) else (
                       echo    ,'MON$ statistics is NOT gathered, see config parameter ''mon_unit_perf''=%mon_unit_perf%' as mon_logging_info
                   )
@@ -2326,8 +2717,10 @@ goto :end_of_test
     @rem end of `gen_working_sql`
 
 goto:eof
+@rem ^
+@rem end of :gen_working_sql
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :display_win_defender_notes
     setlocal
@@ -2346,67 +2739,28 @@ goto:eof
     echo!prefix! ----------------------------------------------------------------------------------------------------
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :getFileTimestamp
     setlocal
-    
-    @rem Introduced 09.05.2019 for usage instead old routine :getFileDTS
-    @rem Sample: 
-    @rem     set this_dts=UNKNOWN
-    @rem     call :getFileTimestamp %~f0 this_dts
-    @rem Result: variable 'this_dts' will contain timestamp in form: YYYYMMDDhhmiss of this batch file
 
-    set fname=%~nx1
-    set fpath=%~dp1
-    set fpath=!fpath:\=\\!
-    set ffull=!fpath!!fname!
-
-    @rem NOTE: within for-loop we have to escape COMMA characters and, moreover, 
-    @rem use DOUBLE quotes to enclose both prefix (NAME=) and name of interested file, like this:
-    @rem "NAME='full-path-to-interested-file'"
-    @rem Otherwise wmic will issue invalid verb or invalid get expression error.
-    @rem https://superuser.com/questions/1078734/wmic-in-for-loop
-
-    @rem THIS WORKS OK:
-    @rem for /f "usebackq" %%a in (`wmic datafile where "name='C:\\pagefile.sys'" get Size^,LastModified /format:list ^| findstr /r /v "^$"`) do ...
-    @rem Full list of supported properties: wmic datafile get /?
-
-    @rem wmic datafile where "name='!ffull!'" get LastModified /format:list | more | findstr = >tmp-wmic-list.tmp
-
-    for /f "usebackq" %%a in (`wmic datafile where "name='!ffull!'" get LastModified /format:list ^| more ^| findstr /r /v "^^$"`) do (
-        set filedts=%%a
-        @rem for timestamp with millisecond: set filedts=!filedts:~13,18!
-        @rem it is enough for this test to get timetsamp only up to seconds:
-        set filedts=!filedts:~13,14!
-    )
-    
-    endlocal & set "%~2=%filedts%"
-
-goto:eof
-@rem ^
-@rem end of getFileTimestamp
-
-:getFileDTS
     @rem http://www.dostips.com/DtTutoFunctions.php
+    @rem Get timestamp of file in format YYYYmmDDHHMMSS.
+    @rem DO NOT use wmic.exe! It can suddenly issue 'out of memory' after lot of runs.
+    @rem ====================
 
-    @rem === NOT USED === since 09.05.2019: on some hosts execution of CScript can be prohibited.
-    @rem CScript Error: Execution of the Windows Script Host failed. (Access is denied. )
-
-    setlocal
-    set vbs=!tmpdir!\getFileTimeStamp.tmp.vbs
-    set dts=!tmpdir!\getFileTimeStamp.tmp.log
-    if /i .%1.==.gen_vbs. (
-        del %vbs% 2>nul
-
+    set tmpvbs=!tmpdir!\getFileTimeStamp.tmp.vbs
+    if not exist !tmpvbs! (
         (
-            echo 'Created auto, do NOT edit!
-            echo 'Used to obtain exact timestamp of file
-            echo 'Usage: cscript ^/^/nologo %vbs% ^<file^>
+            echo 'Created auto, do NOT edit. Used to obtain exact timestamp of file.
+            echo 'Usage: %systemroot%\system32\cscript.exe ^/^/nologo //e:vbs !tmpvbs! ^<file^>
+            echo.
             echo 'Result: last modified timestamp, in format: YYYYMMDDhhmiss
-            echo Set objFS ^= CreateObject("Scripting.FileSystemObject"^)
-            echo Set objArgs ^= WScript.Arguments
-            echo strFile ^= objArgs(0^)
-            echo ts ^= timeStamp(objFS.GetFile(strFile^).DateLastModified^)
+            echo.
+            echo Set objFS = CreateObject("Scripting.FileSystemObject"^)
+            echo Set objArgs = WScript.Arguments
+            echo strFile = objArgs(0^)
+            echo ts = timeStamp(objFS.GetFile(strFile^).DateLastModified^)
             echo WScript.  echo ts
             echo.
             echo Function timeStamp( d ^)
@@ -2417,22 +2771,16 @@ goto:eof
             echo   Right("0" ^& Minute(d^),2^) ^& _
             echo   Right("0" ^& Second(d^),2^)
             echo End Function
-        )>>%vbs%
-
-        endlocal&goto:eof
+        )>>!tmpvbs!
     )
-
-    if /i .%1.==.get_dts. (
-
-      echo|set /p=Obtaining timestamp of %2...
-      cscript //nologo %vbs% %2 1>%dts%
-      type %dts%
-      endlocal&set /p %~3=<%dts%
+    
+    for /f %%a in ('%systemroot%\system32\cscript.exe //nologo //e:vbs !tmpvbs! %1') do (
+        set fileDTS=%%a
     )
-    endlocal
-
+    endlocal & set "%~2=%fileDTS%"
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :prepare
     @rem Works Ok: create database 'localhost/3255:c:\TEMP\test fdb 2 5\e 2 1.fdb'; -- remove any quotes from path and file name
@@ -2462,6 +2810,8 @@ goto:eof
    
     endlocal
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :chk_db_access
     setlocal
@@ -2510,7 +2860,41 @@ goto:eof
          echo commit;
          echo drop table tmp!rndname!;
          echo.
-         echo alter sequence g_stop_test restart with 0;
+         echo -- ### RESTART sequence g_stop_test with 0 ###
+         echo -- This sequence serves as 'stop-flag' for every ISQL attachment.
+         echo -- Also here we check that database is not in read_only mode.
+         echo.
+         echo -- DISABLED 17.09.2020:
+         echo -- alter sequence g_stop_test restart with 0; -- DOES NOT WORK since 4.0.0.2131: gen_id(,0^) will return -1 instead of 0.
+         echo.
+         echo recreate exception exc_gen_stop_test_invalid 'Test can not start because value of generator ''g_stop_test'' is NOT zero: @1';
+         echo -- Added 17.09.2020:
+         echo set term ^^;
+         echo execute block returns(gen_stop_before_restart bigint, gen_stop_after_restart bigint^) as
+         echo     declare c bigint;
+         echo begin
+         echo    gen_stop_before_restart = gen_id(g_stop_test,0^);
+         echo    c =  gen_id(g_stop_test, -gen_id(g_stop_test, 0^)^);
+         echo    gen_stop_after_restart = gen_id(g_stop_test,0^);
+         echo    suspend;
+         echo end
+         echo ^^
+         echo commit
+         echo ^^
+         echo execute block as
+         echo begin
+         echo     if ( gen_id(g_stop_test,0^) ^<^> 0 ^) then
+         echo         exception exc_gen_stop_test_invalid
+
+         if not .%fb%.==.25. (
+             echo                   using ( gen_id(g_stop_test,0^) ^)
+         )
+         echo     ;
+         echo end
+         echo ^^
+         echo set term ;^^
+         echo commit;
+         echo drop exception exc_gen_stop_test_invalid;
          echo commit;
     ) > !tmpsql!
 
@@ -2528,7 +2912,7 @@ goto:eof
     ) >>%log4tmp% 2>&1
 
     call :catch_err run_isql !tmperr! !tmpsql! db_cant_write 1
-    call :sho "Success. FIREBIRD_TMP allows to create and write into GTT." %log4tmp%
+    call :sho "Success. GTT can be created in the folder defined by FIREBIRD_TMP. Database is in READ-WRITE mode." %log4tmp%
 
     @rem                1       2        3         4         5 (1 = do abort from this script).
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
@@ -2536,7 +2920,7 @@ goto:eof
     )
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :chk_conn_pool_support
     echo.
@@ -2627,7 +3011,7 @@ goto:eof
     endlocal & set "%~2=%result%"
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :try_create_db
 
@@ -2776,6 +3160,96 @@ goto:eof
 
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:create_results_storage_fbk
+    setlocal
+
+    echo.
+    call :sho "Internal routine: create_results_storage_fbk" %log4tmp%
+    echo.
+
+    set results_storage_fbk=%1
+    set log4all=%2
+    
+    set tmpsql=%tmpdir%\tmp_make_results_storage.sql
+    set tmplog=%tmpdir%\tmp_make_results_storage.log
+    set tmperr=%tmpdir%\tmp_make_results_storage.err
+    set tmpfdb=%tmpdir%\tmp_results_storage.tmp
+    del !tmpfdb! 2>nul
+
+    if exist !tmpfdb! (
+        echo Can NOT remove temporary file that will be target for restore from 'results_storage_fbk'.
+        echo Name of file: %results_storage_fbk%
+        echo You have to ensure that this file currently not opened by some other process.
+        echo Job terminated. Press any key...
+        pause>nul
+        goto :final
+    )
+
+    if exist %results_storage_fbk% (
+
+        call :sho "Backup of results storage already EXISTS, skip its recreation" %log4all%
+        set run_cmd="%fbc%\gbak -c -v -user %usr% -pas %pwd% %results_storage_fbk% %host%/%port%:!tmpfdb!"
+
+        call :display_intention "Check ability to restore from results storage backup" !run_cmd! !tmplog! !tmperr!
+        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+
+        @rem set runcmd=!%1!
+        @rem set err_file=%2
+        @rem set sql_file=%3
+        @rem set add_label=%4
+        @rem set do_abend=%5, default=1
+        
+        call :catch_err run_cmd !tmperr! n/a :fbk_storage_failed_restore
+        @rem                1      2      3                4
+
+    ) else (
+
+      	(
+            echo set echo on;
+            echo set bail on;
+            echo create database '!host!/!port!:!tmpfdb!' user '!usr!' password '!pwd!';
+            type %~dp0\oltp_results_storage_DDL.sql
+      	) >!tmpsql!
+        set run_cmd="!fbc!\isql -q -c 256 -i !tmpsql!"
+        call :display_intention "Generating new storage DB for tests run results." !run_cmd! !tmplog! !tmperr!
+        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+        call :catch_err run_cmd !tmperr! n/a :fdb_storage_failed_create
+        @rem                1      2      3                4
+
+        set run_cmd="!fbc!\gfix -w async !host!/!port!:!tmpfdb! -user !usr! -pas !pwd!"
+        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+
+        set run_cmd="!fbc!\gfix -use full !host!/!port!:!tmpfdb! -user !usr! -pas !pwd!"
+        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+        
+        set run_cmd="!fbc!\gbak -b -v -user !usr! -pas !pwd! !host!/!port!:!tmpfdb! !results_storage_fbk!"
+
+        call :display_intention "Back up just created results storage." !run_cmd! !tmplog! !tmperr!
+
+        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+
+        call :catch_err run_cmd !tmperr! n/a :fbk_storage_failed_complete
+        @rem                1      2      3                4
+
+    )
+
+    for /d %%x in (!tmpsql!,!tmplog!,!tmperr!,!tmpfdb!) do (
+        if exist %%x del %%x
+    )
+
+    call :sho "Leaving routine: create_results_storage_fbk" %log4tmp%
+
+
+    endlocal
+
+goto:eof
+@rem ^
+@rem end of subroutine 'create_results_storage_fbk'
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :repl_with_bound_quotes
 
     @rem Used for returning proper command that is full path and name of executable so that 
@@ -2809,6 +3283,8 @@ goto:eof
     endlocal & set "%~2=%result%"
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :dequote_if_need
     setlocal
     set must_quote=-1
@@ -2826,7 +3302,7 @@ goto:eof
     endlocal & set "%~2=%result%"
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :make_db_objects
 
@@ -3140,9 +3616,9 @@ goto:eof
     endlocal
 
 goto:eof
-@rem end of: make_db_objects
+@rem end of :make_db_objects
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :chk_stop_test
 
@@ -3245,7 +3721,7 @@ goto:eof
     endlocal
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :show_db_and_test_params
 
@@ -3259,99 +3735,293 @@ goto:eof
     set log4tmp=%2
     set log4all=%3
 
-    echo.
     call :sho "Internal routine: show_db_and_test_params." !log4tmp!
-    echo.
 
     @rem PUBL: tmpir, fbc,dbconn,dbauth,is_embed
-    @echo off
+
 
     set tmpsql=%tmpdir%\sql\tmp_show_all_params.sql
     for /f %%a in ("!tmpsql!") do (
         set tmpclg=%%~dpna.log
         set tmperr=%%~dpna.err
     )
+    del !tmpsql! 2>nul
+
+    set db_host_name=%COMPUTERNAME%
+    set db_host_name=!db_host_name:'=''!
+
+    set tmpvbs=!tmpdir!\tmp_cpu_and_memory_info.vbs
+
+    @rem We have to obtain CPU and RAM info: NumberOfCores and TotalPhysicalMemory.
+    @rem These values will be written into SETTINGS table for saving further overall
+    @rem results to seperate DB defined by config parameter 'oltp_results.fdb'
+
+    @rem #=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#
+    @rem AVOID USAGE OF CONSOLE UTILITY WMIC! IT CAN ISSUE OUT OF MEMORY!
+    @rem VBS can be used to get NumberOfCores and TotalPhysicalMemory.
+    @rem #=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#=#
+    (
+        echo ' https://www.vbsedit.com/scripts/misc/wmi/scr_1343.asp
+        echo ' List System Information
+        echo option explicit
+
+        echo dim wmObj,result,o
+
+        echo '------------------------------------------------------------
+        echo function ceil(Number^)
+        echo     ceil = Int(Number^)
+        echo     if ceil ^<^> Number then
+        echo         ceil = ceil + 1
+        echo     end if
+        echo end function
+
+        echo '------------------------------------------------------------
+
+        @rem EXCLAMATION sign must be escaped by SINGNE caret when echoed string is enclosed in double quotes:
+        echo set wmObj = GetObject("winmgmts:{impersonationLevel=impersonate}^!\\.\root\cimv2"^)
+        echo set result = wmObj.ExecQuery("Select * from Win32_ComputerSystem"^)
+        echo for each o in result
+        echo     Wscript.Echo "TotalPhysicalMemory=" ^& ceil(o.TotalPhysicalMemory/1024/1024/1024^)
+        echo next
+
+        echo set result = wmObj.ExecQuery("Select * from Win32_Processor"^)
+        echo for each o in result
+        echo     Wscript.Echo "NumberOfCores=" ^& o.NumberOfCores
+        echo next
+
+        echo set result=nothing
+        echo set wmObj=nothing
+    ) > !tmpvbs!
+
+    %systemroot%\system32\cscript.exe //nologo /e:vbs !tmpvbs! 1>!tmpclg! 2>!tmperr!
+
+    type !tmperr! >>!log4tmp!
+    call :catch_err "Could not obtain NumberOfCores and TotalPhysicalMemory" !tmperr! n/a nosysinfo
+
+    for /f "tokens=1,2 delims==" %%a in (!tmpclg!) do (
+        set line=%%a
+        if not "!line:NumberOfCores=#!"=="!line!" (
+            set cpu_cores=%%b
+            call :sho "CPU info: NumberOfCores=!cpu_cores!" !log4tmp!
+        )
+        if not "!line:TotalPhysicalMemory=#!"=="!line!" (
+            set mem_total=%%b
+            call :sho "RAM info: TotalPhysicalMemory=!mem_total! Gb" !log4tmp!
+        )
+    )
+    for /d %%x in (!tmpvbs!,!tmperr!,!tmpclg!) do (
+        del %%x
+    )
+
+    
+    set run_cmd="!fbc!\fbsvcmgr !host!/!port!:service_mgr user !usr! password !pwd! info_server_version"
+    cmd /c !run_cmd!  1>!tmpclg! 2>!tmperr!
+    call :catch_err run_cmd !tmperr! n/a nofbvers
+
+    @rem Server version: WI-V2.5.9.27150 Firebird 2.5
+    for /f "tokens=3" %%a in (!tmpclg!) do (
+        @rem WI-V2.5.9.27150
+        @rem |-1-| 2 3 |-4-|
+        set fb_vers=%%a
+        for /f "delims=. tokens=4" %%b in ("!fb_vers!") do (
+            @rem Number of build: 27150 etc
+            set /a fb_build_no=%%b
+        )
+    )
+
+    @rem :::NOTE:::
+    @rem Value of 'fb_build_no' will be written here in the SETTINGS table and further, at the final stage of test,
+    @rem will be saved in <results_storage> DB by executing its SP eds_obtain_last_test_results (it will query SETTINGS
+    @rem for each value that is stored in it).
+    @rem Column 'fb_build_no' is participated in the PK of table 'all_fb_overall' when overall report is made.
+    @rem Because of this, now it it crusial that fb_build_no has POSITIVE value.
+    @rem See oltp_overall_report_DDL.sql:
+    @rem recreate table all_fb_overall(
+    @rem     run_id bigint          -- come from oltpNN_results.fdb; do NOT PK containing only this field!
+    @rem     ,fb_build_no int       -- come from oltpNN_results.fdb; run_id + fb_build_no ==> PK
+    @rem     ...
+    @rem     ,constraint all_fb_overall_pk primary key(run_id, fb_build_no) using descending index all_fb_overall_pk_desc
+    @rem );
+
+    if !fb_build_no! GTR 0 (
+        call :sho "Build number parsed OK: !fb_build_no!" !log4tmp!
+    ) else (
+        call :sho "Problem with parsing build number. Result: .!fb_build_no!. - is INVALID. Job terminated." !log4tmp!
+        goto final
+    )
+
+    call :sho "Adjusting table SETTINGS with current settings..." !log4tmp!
+
+    if not .!sleep_min!.==.. (
+        set v_sleep_min=0
+    ) else (
+        set v_sleep_min=!sleep_min!
+    )
+
+    if .!trc_unit_perf!.==.. (
+        set v_trace_units='0'
+    ) else (
+        set v_trace_units='!trc_unit_perf!'
+    )
 
     echo Firebird instance and database parameters, main test settings: > !tmpclg!
     
     (
-          echo set list on;
-          echo set width fb_arch 70;
+          echo "set list on;"
+          echo "set width fb_arch 70;"
+          echo "set term ^;"
+          echo "execute block returns ("
+          echo "    fb_arch varchar(50)"
+          echo "   ,db_name varchar(255)"
+          echo "   ,db_current_size bigint"
+          echo "   ,forced_writes varchar(3)"
+          echo "   ,sweep_int int"
+          echo "   ,page_buffers int"
+          echo "   ,page_size int"
+          echo "   ,creation_timestamp timestamp"
+          echo ") as"
+          echo "    declare c varchar(255);"
+          echo "begin"
+          echo "    if ( exists(select * from rdb$procedures where rdb$procedure_name = upper('sys_get_fb_arch')) ) then"
+          echo "        begin"
+          echo "            select fb_arch"
+          echo "            from sys_get_fb_arch('%usr%', '%pwd%')"
+          echo "            into c;"
+          echo "            rdb$set_context('USER_TRANSACTION', 'FB_ARCH', c);"
+          echo "        end"
+          echo "    else"
+          echo "        begin"
+          echo "            rdb$set_context('USER_TRANSACTION', 'FB_ARCH', 'UNKNOWN: no SP SYS_GET_FB_ARCH.' );"
+          echo "        end"
+          echo "    --------------------------------------------------------------------------------------------"
+          echo "    select"
+          echo "        coalesce( rdb$get_context('USER_TRANSACTION', 'FB_ARCH'), 'UNKNOWN')"
+          echo "        ,m.mon$database_name"
+          echo "        ,m.mon$page_size * m.mon$pages"
+          echo "        ,iif(m.mon$forced_writes=0, 'OFF', 'ON')"
+          echo "        ,m.mon$sweep_interval"
+          echo "        ,m.mon$page_buffers"
+          echo "        ,m.mon$page_size"
+          echo "        ,m.mon$creation_date"
+          echo "    from mon$database m"
+          echo "    into"
+          echo "        fb_arch"
+          echo "        ,db_name"
+          echo "        ,db_current_size"
+          echo "        ,forced_writes"
+          echo "        ,sweep_int"
+          echo "        ,page_buffers"
+          echo "        ,page_size"
+          echo "        ,creation_timestamp;"
+          echo "    suspend;"
 
-          echo set term ^^;
-          echo execute block as
-          echo    declare c varchar(255^);
-          echo begin
-          echo      if ( exists(select * from rdb$procedures where rdb$procedure_name = upper('sys_get_fb_arch'^)^) ^) then
-          echo      begin
-          echo          select fb_arch
-          echo          from sys_get_fb_arch('%usr%', '%pwd%'^)
-          echo          into c;
-          echo          rdb$set_context('USER_TRANSACTION', 'FB_ARCH', c^);
-          echo     end
-          echo     else
-          echo     begin
-          echo         rdb$set_context('USER_TRANSACTION', 'FB_ARCH', 'UNKNOWN: missing procedure SYS_GET_FB_ARCH.' ^);
-          echo     end
-          echo end
-          echo ^^
-          echo set term ;^^
-   
+          echo "    -- 24.10.2020: add settings which will be used only AFTER TEST for saving its overall results to seperate DB: 'oltp_results.fdb'."
+          echo "    -- NOTE: all these settings are NOT needed by ISQL workers thus we can set working_mode='INIT' rather than 'COMMON'."
+          echo "    -- This allows to avoid excessive usage of session-level context variables:"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('cpu_cores'), !cpu_cores! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('mem_total'), !mem_total! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('db_host_name'), '!db_host_name!' )"
+          echo "    matching (working_mode, mcode);"
 
-          echo select
-          echo        coalesce( rdb$get_context('USER_TRANSACTION', 'FB_ARCH'^), 'UNKNOWN'^) as fb_architecture
-          echo       ,m.mon$database_name as db_name
-          echo       ,iif(m.mon$forced_writes=0, 'OFF', 'ON'^) as forced_writes
-          echo       ,m.mon$sweep_interval as sweep_int
-          echo       ,m.mon$page_buffers as page_buffers
-          echo       ,m.mon$page_size as page_size
-          echo       ,m.mon$creation_date as creation_date
-          echo       ,current_timestamp
-          echo from mon$database m;
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('fb_arch'), :fb_arch )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('fb_engine'), rdb$get_context('SYSTEM', 'ENGINE_VERSION') )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('fb_build_no'), !fb_build_no! )"
+          echo "    matching (working_mode, mcode);"
 
-          echo set list off;
-          echo set width working_mode 12;
-          echo set width setting_name 40;
-          echo set width setting_value 20;
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('db_name'), :db_name )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('db_file_size'), :db_current_size )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('db_fw'), iif(upper(:forced_writes) = upper('ON'),1,0)  )"
+          echo "    matching (working_mode, mcode);"
 
-          
-          echo set heading off;
-          echo select 'Workload level settings (see definitions in oltp_main_filling.sql^):' as " " from rdb$database;
-          echo set heading on;
-          echo select * from z_settings_pivot;
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('sweep_int'), :sweep_int )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('page_buffers'), :page_buffers )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('page_size'), :page_size )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('db_created'), :creation_timestamp )"
+          echo "    matching (working_mode, mcode);"
 
-          echo set heading off;
-          echo select 'Current launch settings:' as " " from rdb$database;
-          echo set heading on;
-          echo select z.setting_name, z.setting_value from z_current_test_settings z;
+          echo "    -- do not add 'workers_count, this is done in routine 'inject_actual_setting'"
 
-          echo set width tab_name 13;
-          echo set width idx_name 31;
-          echo set width idx_key 65;
-          echo -- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES.
-          echo -- set heading off;
-          echo -- select 'Index(es^) for heavy-loaded table(s^):' as " " from rdb$database;
-          echo -- set heading on;
-          echo -- select * from z_qd_indices_ddl;
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('test_time'), !test_time! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('mon_query_interval'), !mon_query_interval! )"
+          echo "    matching (working_mode, mcode);"
+
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('no_auto_undo'), !no_auto_undo! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('run_db_statistics'), !run_db_statistics! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('run_db_validation'), !run_db_validation! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('sleep_min'), !v_sleep_min! )"
+          echo "    matching (working_mode, mcode);"
+
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('sleep_max'), !sleep_max! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('trc_unit_perf'), !v_trace_units! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('detailed_info'), !detailed_info! )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('expected_workers'), !expected_workers! )"
+          echo "    matching (working_mode, mcode);"
+
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('test_phase_beg'), dateadd( !warm_time! minute to cast('now' as timestamp) ) )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('test_phase_end'), dateadd( !warm_time! + !test_time! minute to cast('now' as timestamp) ) )"
+          echo "    matching (working_mode, mcode);"
+          echo "    update or insert into settings(working_mode, mcode, svalue) values( upper('init'), upper('warm_phase_beg'), cast('now' as timestamp) )"
+          echo "    matching (working_mode, mcode);"
+
+          echo "end"
+          echo "^"
+          echo "set term ;^"
+
+          echo "set list off;"
+          echo "set width working_mode 12;"
+          echo "set width setting_name 40;"
+          echo "set width setting_value 20;"
+          echo "set heading off;"
+          echo "select 'Workload level settings (see definitions in oltp_main_filling.sql):' as " " from rdb$database;"
+          echo "set heading on;"
+          echo "select * from z_settings_pivot;"
+
+          echo "set heading off;"
+          echo "select 'Current launch settings:' as " " from rdb$database;"
+          echo "set heading on;"
+          echo "select z.setting_name, z.setting_value from z_current_test_settings z;"
+
+          echo "set width tab_name 13;"
+          echo "set width idx_name 31;"
+          echo "set width idx_key 65;"
+          echo "-- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES."
+          echo "-- set heading off;"
+          echo "-- select 'Index(es) for heavy-loaded tables:' as " " from rdb$database;"
+          echo "-- set heading on;"
+          echo "-- select * from z_qd_indices_ddl;"
+          echo "set heading off;"
+          echo "select 'Table(s) WITHOUT primary and unique constrains:' as " " from rdb$database;"
+          echo "set heading on;"
+          echo "set count on;"
+          echo "set width tab_name 32;"
+          echo "select distinct r.rdb$relation_name as tab_name"
+          echo "from rdb$relations r"
+          echo "left join rdb$relation_constraints c on"
+          echo "    r.rdb$relation_name = c.rdb$relation_name"
+          echo "    and c.rdb$constraint_type in( 'PRIMARY KEY', 'UNIQUE' )"
+          echo "where"
+          echo "    r.rdb$system_flag is distinct from 1"
+          echo "    and r.rdb$relation_type = 0"
+          echo "    and c.rdb$relation_name is null;"
+          echo "set count off;"
     ) > !tmpsql!
-
-    (
-          echo set heading off;
-          echo select 'Table(s^) WITHOUT primary and unique constrains:' as " " from rdb$database;
-          echo set heading on;
-          echo set count on;
-          echo set width tab_name 32;
-          echo select distinct r.rdb$relation_name as tab_name
-          echo from rdb$relations r 
-          echo left join rdb$relation_constraints c on
-          echo     r.rdb$relation_name = c.rdb$relation_name 
-          echo     and c.rdb$constraint_type in( 'PRIMARY KEY', 'UNIQUE' ^)
-          echo where 
-          echo     r.rdb$system_flag is distinct from 1 
-          echo     and r.rdb$relation_type = 0  
-          echo     and c.rdb$relation_name is null ;
-          echo set count off;
-    ) >> !tmpsql!
 
     if !conn_pool_support! EQU 1 (
         @rem ::: NB ::: 05.11.2018
@@ -3359,31 +4029,31 @@ goto:eof
         @rem If current implementation actually supports connection pool then we have to clear it, otherwise idle
         @rem connection will use metadata and we will not be able to drop existing PK from some tables.
         (
-            echo set bail on;
-            echo create or alter view v_pool_info as
-            echo select 
-            echo    cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE'^) as int^) as pool_size,
-            echo    cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT'^) as int^) as pool_idle,
-            echo    cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT'^) as int^) as pool_active,
-            echo    cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME'^) as int^) as pool_lifetime
-            echo from rdb$database;
-            echo commit;
-            echo select 'Before clear connections pool' as msg, v.* from v_pool_info v;
-            echo ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-            echo select 'After clear connections pool' as msg, v.* from v_pool_info v;
-            echo set bail off;
+            echo "set bail on;"
+            echo "create or alter view v_pool_info as"
+            echo "select"
+            echo "   cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as int) as pool_size,"
+            echo "   cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT') as int) as pool_idle,"
+            echo "   cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT') as int) as pool_active,"
+            echo "   cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as int) as pool_lifetime"
+            echo "from rdb$database;"
+            echo "commit;"
+            echo "select 'Before clear connections pool' as msg, v.* from v_pool_info v;"
+            echo "ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;"
+            echo "select 'After clear connections pool' as msg, v.* from v_pool_info v;"
+            echo "set bail off;"
         ) >>!tmpsql!
     )
+
+    call :remove_enclosing_quotes !tmpsql!
     
     set isql_exe=%fbc%\isql.exe
     call :repl_with_bound_quotes %isql_exe% isql_exe
 
-    
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -pag 999999 -i !tmpsql!
 
     cmd /c !run_isql! 1>>!tmpclg! 2>!tmperr!
 
-   
     (
         for /f "delims=" %%a in ('type %tmpsql%') do echo RUNSQL: %%a
         echo %time%. Got:
@@ -3394,8 +4064,11 @@ goto:eof
     call :catch_err run_isql !tmperr! !tmpsql! failed_show_params
 
 
-    type %tmpclg%
+    type %tmpclg% >> %log4tmp%
     type %tmpclg% >> %log4all%
+
+    call :sho "Table SETTINGS successfully adjusted with current settings." !log4tmp!
+
 
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
         del %%f
@@ -3416,7 +4089,7 @@ goto:eof
          echo !date! !time!. Test uses config file '%cfg%' with following parameters:
          echo.
          @rem for /f "tokens=*" %%a in ('findstr /r /c:"^[^#;]" %cfg% ^| findstr /i /c:"=" ^| sort') do (
-         for /f "tokens=*" %%a in ('findstr /r /v /c:"#" %~dp0oltp30_config.win ^| findstr /i /c:"=" ^| sort') do (
+         for /f "tokens=*" %%a in ('findstr /r /v /c:"#" %cfg% ^| findstr /i /c:"=" ^| sort') do (
 
              echo.     %%a
          )
@@ -3463,8 +4136,10 @@ goto:eof
         )
     ) > !tmpclg!
 
-    type !tmpclg!
+    @rem type !tmpclg!
     type !tmpclg! >> %log4all%
+
+    call :sho "All other parameters are shown in %log4all%." !log4tmp!
 
     findstr /m /i /c:"DefaultDbCachePages" !tmpclg! >nul
     if NOT errorlevel 1 (
@@ -3489,16 +4164,14 @@ goto:eof
 
     @rem Logging DDL of QDistr / XQD* indices: do NOT run it here, it will appear in final report by call from oltp_run_worker
 
-    del !tmpclg! 2>nul
-
     call :sho "Leaving routine: show_db_and_test_params." %log4tmp%
-    
+
     endlocal
 
 goto:eof
 @rem end of: show_db_and_test_params
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :count_existing_docs
     
@@ -3598,7 +4271,7 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :run_init_pop
 
@@ -3777,15 +4450,12 @@ goto:eof
                 echo set list on; set heading on;
                 echo commit;
                 echo set transaction no wait;
-                @rem echo select count(*^) as srv_make_invnt_saldo_result from srv_make_invnt_saldo;
                 echo select * from srv_make_invnt_saldo;
                 echo commit;
                 echo set transaction no wait;
-                @rem echo select count(*^) as srv_make_money_saldo_result from srv_make_money_saldo;
                 echo select * from srv_make_money_saldo;
                 echo commit;
                 echo set transaction no wait;
-                @rem echo select count(*^) as srv_recalc_idx_stat_result from srv_recalc_idx_stat;
                 echo select * from srv_recalc_idx_stat;
                 echo commit;
             ) > %tsrvsql%
@@ -3898,7 +4568,6 @@ goto:eof
 
         for /d %%f in (!tmperr!,!tmpchk!,!tmpclg!) do (
             if exist %%f del %%f
-            if exist goto err_del
         )
 
         @rem +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -3987,7 +4656,7 @@ goto:eof
 @rem end of run_init_pop
 
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :change_db_attr
     setlocal
@@ -4105,7 +4774,7 @@ goto:eof
         )
 
         @rem 20.09.2015. Do NOT also use gfix in embedded 3.0 until CORE-4938 will be fixed! Also hangs!
-        if .1.==.0. (
+        if .1.==.2. (
           echo|set /p=Use gfix instead...
           echo %time%. Run: %gfixrun% %dbnm% -w %new_fw% 2^>%tmperr% >>%log4tmp%
   
@@ -4126,7 +4795,7 @@ goto:eof
     endlocal
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :readcfg
     set cfg=%1
@@ -4140,29 +4809,110 @@ goto:eof
         @rem value should NOT be changed by removing its whitespaces.
 
           for /F "tokens=1-2 delims==" %%i in ("%%a") do (
-            @rem echo Parsed: param="%%i" val="%%j"
-            set par=%%i
-            call :trim par !par!
+            @rem echo Parsed: param="%%i" _tmp_val_="%%j"
+            set _tmp_par_=%%i
+            call :trim _tmp_par_ !_tmp_par_!
 
             if "%%j"=="" (
               set err_setenv=1
               echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
             ) else (
-              for /F "tokens=1" %%p in ("!par!") do (
-                set val=%%j
-                call :trim val !val!
-                set %%p=!val!
+              for /F "tokens=1" %%p in ("!_tmp_par_!") do (
+                set _tmp_val_=%%j
+                call :trim _tmp_val_ !_tmp_val_!
+                set %%p=!_tmp_val_!
               )
             )
           )
       )
     )
-    set %~2 = %err_setenv%
-    @rem if .%err_setenv%.==.1. goto err_setenv
+    set _tmp_par_=
+    set _tmp_val_=
+    set "%~2=%err_setenv%"
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:trim_old
+    setLocal
+    @rem EnableDelayedExpansion
+    set Params=%*
+    for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:dequote_string
+
+    setlocal
+
+    set src_list=%1
+
+    set left_char=!src_list:~0,1!
+    set righ_char=!src_list:~-1!
+
+    set result=src_list
+    @rem Remove enclosing double quotes from !src_list!:
+    set chksym=!left_char:"=!
+    if .!chksym!.==.. (
+       set chksym=!righ_char:"=!
+       if .!chksym!.==.. (
+          set result=!src_list:~1,-1!
+       )
+    )
+    endlocal & set "%~2=%result%"
+
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:trim
+    setLocal
+
+    @rem 22.10.2020: we have to enclose assignment of Params into double quotes.
+    @rem Otherwise caret will be duplicated here, i.e.
+    @rem when call this routine with string like: "set term ^;"
+    @rem then output will be: "set term ^^;"
+    set "Params=%*"
+
+    for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:remove_enclosing_quotes
+
+    setlocal
+
+    @rem 17.10.2020. "Dequotes" each line from input file:
+    @rem 22.10.2020. We have to replace all occurences of "<" and "<" with some plain text like this is done in HTML-escaping.
+    @rem Otherwise :trim subroutine will fail to handle such rows :(
+
+    set input_file=%1
+    for /f %%a in ("!input_file!") do (
+        set tmp_output=%%~dpna.dequote_lines.tmp
+        if exist !tmp_output! del !tmp_output!
+    )
+    for /f "tokens=*" %%a in (!input_file!) do (
+        set val=%%a
+        set val=!val:^>=$GREATER$THEN$!
+        set val=!val:^<=$LESS$THEN$!
+
+        call :trim val !val!
+
+        for /f "useback tokens=*" %%x in ('!val!') do (
+                set val=%%~x
+        )
+        set val=!val:$GREATER$THEN$=^>!
+        set val=!val:$LESS$THEN$=^<!
+        echo !val!>>!tmp_output!
+    )
+    move !tmp_output! !input_file! 1>nul
+
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :check_for_prev_build_err
     echo.
@@ -4252,7 +5002,7 @@ goto:eof
     endlocal & set "%~3=%build_was_cancelled%"
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :show_time_limits
 
@@ -4406,10 +5156,9 @@ goto:eof
 goto:eof
 @rem end of :show_time_limits
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
-
-:adjust_sep_wrk_count 
+:adjust_sep_wrk_count
 
     echo.
     call :sho "Internal routine: adjust_sep_wrk_count." %log4tmp%
@@ -4438,6 +5187,7 @@ goto:eof
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i %~dp0oltp_adjust_DDL.sql
 
     cmd /c !run_isql! 1>!tmpsql! 2>!tmperr!
+
     call :catch_err run_isql !tmperr! n/a
 
     for /f "usebackq tokens=*" %%a in ('!tmpsql!') do set size=%%~za
@@ -4462,7 +5212,7 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :adjust_replication
 
@@ -4516,7 +5266,110 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:adjust_grants
+
+    setlocal
+    set mon_unit_perf=%1
+
+    echo.
+    call :sho "Internal routine: adjust_grants." !log4all!
+    echo.
+    @rem  Use file: $shdir/adjust_grants
+    @rem  1. GENERATE temporary script "tmp_adjust_grants.sql" which will contain generated statements for
+    @rem     creating role '!mon_query_role!' and temp. users !mon_usr_prefix!_0001 !mon_usr_prefix}_0002!, ...
+    @rem     for querying MON$ tables (this strongly reduces negative affect generated by actions with MON$ tables).
+    @rem  2. APPLY temporary script "tmp_adjust_grants.sql".
+ 
+    @rem PUBL: fbc, dbconn, dbauth, tmpdir
+
+    if not .%fb%.==.25. (
+
+        @rem FB = 3.x+: we create non-privileged users in all cases except mon_unit_perf=0.
+        @rem Working as NON_dba is much closer to the real-world applications when doing common business tasks as SYSDBA.
+
+        set isql_exe=%fbc%\isql.exe
+
+        @rem do NOT pass %isql_exe% here, use only !isql_exe!
+        @rem Otherwise get 'syntax of command is incorrect' inside routine repl_with_bound_quotes
+        @rem ----------------------------------------------
+        call :repl_with_bound_quotes !isql_exe! isql_exe
+
+        set tmpsql=%tmpdir%\sql\tmp_adjust_grants.sql
+        for /f %%a in ("!tmpsql!") do (
+            set tmpclg=%%~dpna.log
+            set tmperr=%%~dpna.err
+        )
+
+
+        call :sho "Drop temporary non-privileged USERS and ROLE which could be created for reducing affect of mon$ data gathering." !log4all!
+        (
+            echo rollback;
+            echo set transaction no wait;
+            echo execute procedure srv_drop_oltp_worker;
+            echo commit;
+        ) >!tmpsql!
+
+        set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -i !tmpsql!
+        cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+        call :catch_err run_isql !tmperr! n/a
+
+        @rem -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-
+
+        if .%mon_unit_perf%.==.0. (
+
+    		@rem ####################################################################
+    		@rem ### ::: NB ::: mon_unit_perf = 0 --> all sessions work as SYSDBA ###
+    		@rem ####################################################################
+    		@rem # !!!CAUTION!!! This logic is duplicated in oltp_isql_run_worker.bat
+
+		    call :sho "NOTE. config parameter mon_unit_perf = 0. All sessions can work as '%usr%'" !log4all!
+
+		) else (
+            if not .%mon_query_role%.==.. (
+                if not .%mon_usr_prefix%.==.. (
+        
+                    call :sho "Create temporary ROLE and non-privileged USERS for reducing affect of mon$ data gathering." !log4all!
+
+                    @rem #########################################################
+                    @rem ###   O L T P _ A D J U S T  _  G R A N T S . S Q L   ###
+                    @rem #########################################################
+                    set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -i %~dp0oltp_adjust_grants.sql
+
+                    call :sho "    Step-1: generate temporary SQL." !log4all!
+                    cmd /c !run_isql! 1>!tmpsql! 2>!tmperr!
+                    
+                    call :catch_err run_isql !tmperr! n/a
+
+                    call :sho "    Step-2: apply temporary SQL." !log4all!
+                    set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i !tmpsql!
+
+                    cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+                    call :catch_err run_isql !tmperr! n/a
+
+                )
+            )
+        )
+
+        @rem -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-
+
+        for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
+            del %%f
+        )
+
+    ) else (
+        call :sho "SKIP: no sense to create temporary role and users in FB 2.5 because feature was not implemented here." !log4all!
+    )
+
+    call :sho "Leaving routine: adjust_grants." !log4all!
+    endlocal
+
+
+goto:eof
+
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :declare_sleep_UDF
 
@@ -4570,8 +5423,7 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :sync_settings_with_conf
     @rem %fb% %log4tmp%
@@ -4632,6 +5484,8 @@ goto:eof
     endlocal
 
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :sync_settings_generate_sql
     echo.
@@ -4723,6 +5577,14 @@ goto:eof
             @rem Added 21.03.2019
             call :inject_actual_setting %fb% common test_intervals '%test_intervals%' 1
 
+            @rem Added 17.05.2020. Role name and prefix for users who will execute SQL and query mon$ tables.
+
+            @rem Actual only for FB 3.x+. If values are commented in .conf
+            @rem then empty strings will be written in SETTINGS table:
+            @rem -----------------------------------------------------
+            call :inject_actual_setting %fb% init tmp_worker_role_name upper('%mon_query_role%'^) 1
+            call :inject_actual_setting %fb% init tmp_worker_user_prefix upper('%mon_usr_prefix%'^) 1
+
         echo end
         echo ^^
         echo set term ;^^
@@ -4736,7 +5598,7 @@ goto:eof
 goto:eof
 @rem end of sync_settings_with_conf
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :inject_actual_setting 
     setlocal
@@ -4806,7 +5668,7 @@ goto:eof
     endlocal
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :has_spaces
 
@@ -4829,32 +5691,77 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :remove_CR_from_file
 @rem https://www.computing.net/answers/windows-xp/removing-carriage-returns-from-a-textfile/197677.html
 setLocal
+
+set in_place=0
+
 set sourfile=%1
-set targfile=%2
-if exist !targfile! del !targfile!
-for /f "tokens=*" %%a in ('find /n /v "" ^< !sourfile!') do (
-    set line=%%a
-    set line=!line:*]=!
-    @rem "set /p" won't take "=" at the start of a line....
-    if "!line:~0,1!"=="=" set line= !line!
+if .%2.==.. (
+   set in_place=1
+   set targfile=!sourfile!.!random!.tmp
+) else (
+    set targfile=%2
+)
 
-    @rem ::::::::::::::::: NB :::::::::::::::::::::::
-    @rem there must be a blank line after "set /p"
-    @rem and "<nul" must be at the start of the line
-    @rem ::::::::::::::::: NB :::::::::::::::::::::::
-    set /p =!line!^
+@rem 05.03.2020: remove excessive CR symbols using VBS:
+@rem ==================================================
+for /f %%a in ("!sourfile!") do (
+    set remove_extra_cr_vbs=%%~dparemove_excessive_CR.vbs.tmp
+    if NOT exist !remove_extra_cr_vbs! (
+        (
+            echo ' Generated auto by %~f0 at !date! !time!
+            echo ' Open STDIN, read it content line-by-line and for every line:
+            echo ' #   remove all duplicates of carrige return character;
+            echo ' #   add line feed character to the end if needed;
+            echo ' #   write changed line to STDOUT.
+            echo ' Usefult for processing result of miscelaneous utilities: handle, psexec et al.
+            echo ' Usage: %systemroot%\system32\cscript.exe //nologo //e:vbscript !remove_extra_cr_vbs! ^< C:\temp\input_file.txt ^> C:\temp\output_file.txt
+            echo ' https://stackoverflow.com/questions/41232510/remove-all-carriage-return-and-line-feed-from-file
+            echo set inp = wscript.stdin
+            echo set outp = wscript.stdout
+            echo do until inp.atendofstream
+            echo     text = inp.readline
+            echo     do while instr( text, vbcr ^& vbcr ^) ^> 0
+            echo         text = replace( text, vbcr ^& vbcr, vbcr ^)
+            echo     loop
+            echo     if instr( text, vblf ^) = 0 then
+            echo         if instr( text, vbcr ^) ^> 0 then
+            echo             text = replace( text, vbcr, vbcr ^& vblf ^)
+            echo         else
+            echo             text = text ^& vbcr ^& vblf
+            echo         end if
+            echo     end if
+            echo     text = replace( text, vblf ^& vblf, vblf ^)
+            echo     outp.write text
+            echo loop
+        ) >!remove_extra_cr_vbs!
+    )
+)
 
-<nul
-) >> !targfile!
+%systemroot%\system32\cscript.exe //nologo //e:vbscript !remove_extra_cr_vbs! < !sourfile! > !targfile!
+
+if !in_place! EQU 1 (
+    move !targfile! !sourfile! 1>nul
+    set elev=!errorlevel!
+    if !elev! NEQ 0 (
+        set msg=### ERROR ### in 'remove_CR_from_file' routine when move !targfile! !sourfile!: errorlevel = !elev!
+        echo !msg!
+        if not "!log!"=="" (
+            echo !msg! >>!log!
+        )
+        exit
+    )
+)
 endlocal 
 goto:eof
+@rem ^
+@rem end of ':remove_CR_from_file'
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :sho
     setlocal
@@ -4894,21 +5801,43 @@ goto:eof
 
 endlocal & goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :bulksho
     setlocal
-    set tmp=%1
-    set log=%2
-    for /f "tokens=*" %%a in (!tmp!) do (
-       set line=%%a
-       set line=!line:"=`!
-       call :sho "!line!" !log!
+    set tmplog=%1
+    set joblog=%2
+    set keep_tmp=%3
+
+    set dts=!time!
+    set dts=!dts: =!
+    set dts=10!dts:,=.!
+    set dts=!dts:~-11!
+
+    for /f "tokens=*" %%a in (!tmplog!) do (
+       set msg=%%a
+
+       @rem Remove enclosing double quotes (if needed):
+       set left_char=!msg:~0,1!
+       set righ_char=!msg:~-1!
+       set chksym=!left_char:"=!
+       if .!chksym!.==.. (
+          set chksym=!righ_char:"=!
+          if .!chksym!.==.. (
+             set msg=!msg:~1,-1!
+          )
+       )
+
+       set msg=!dts!. !msg!
+       echo !msg!
+       echo !msg!>>!joblog!
     )
-    del !tmp!
+    if not .!keep_tmp!.==.1. (
+        del !tmplog!
+    )
 endlocal & goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :display_intention
     setlocal
@@ -4953,6 +5882,8 @@ endlocal & goto:eof
 
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :catch_err
     
     setlocal
@@ -4988,7 +5919,9 @@ goto:eof
         echo.
         echo Command: !runcmd!
         echo.
-        echo SQL script: %sql_file%
+        if /i not .!sql_file!.==.n/a. (
+            echo SQL script: %sql_file%
+        )
         echo Content of error log (%err_file%^):
         echo ^=^=^=^=^=^=^=
         type %err_file%
@@ -5007,7 +5940,7 @@ goto:eof
     endlocal
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :gen_batch_for_stop
 
@@ -5042,21 +5975,23 @@ goto:eof
         echo     echo set list on; 
         echo     echo -- set echo on;
         echo     echo set term #;
-        echo     echo execute block returns("Cancelling test, start at:" timestamp, "'g_stop_test' value:" bigint^^^) as
+        echo     echo execute block returns("Cancelling test, start at:" timestamp, "OLD 'g_stop_test' value:" bigint^^^) as
+        echo     echo     declare c bigint;
         echo     echo begin
         echo     echo     "Cancelling test, start at:" = current_timestamp;
-        echo     echo     "'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
+        echo     echo     "OLD 'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
         echo     echo     suspend;
+        echo     echo     c = gen_id( g_stop_test, -abs(gen_id(g_stop_test,0^^^)^^^)-999999999 ^^^);
         echo     echo end
         echo     echo #
-        echo     echo alter sequence g_stop_test restart with -999999999
-        echo     echo #
+        echo     echo --  DISABLED 17.09.2020: alter sequence g_stop_test restart with -999999999
+        echo     echo -- #
         echo     echo commit
         echo     echo #
-        echo     echo execute block returns("Cancelling test, finish at:" timestamp, "'g_stop_test' value:" bigint^^^) as
+        echo     echo execute block returns("Cancelling test, finish at:" timestamp, "NEW 'g_stop_test' value:" bigint^^^) as
         echo     echo begin
         echo     echo     "Cancelling test, finish at:" = current_timestamp;
-        echo     echo     "'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
+        echo     echo     "NEW 'g_stop_test' value:" = gen_id(g_stop_test, 0^^^);
         echo     echo     suspend;
         echo     echo end
         echo     echo #
@@ -5065,6 +6000,7 @@ goto:eof
         echo echo ^^!time^^!. Script that is to be executed now: !b4stop_sql!
         echo.
         echo echo Trying to kill all running cscript.exe
+        echo.
         echo taskkill /f /im cscript.exe
         echo.
         echo !fbc!\isql !dbconn! !dbauth! -q -n -nod -i !b4stop_sql! 2^>!b4stop_err!
@@ -5100,7 +6036,7 @@ goto:eof
     endlocal
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :getfblst
 
@@ -5184,7 +6120,7 @@ goto:eof
 
 goto:eof
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :nofbvers
     echo Can not extract version of Firebird using FBSVCMGR utility.
@@ -5200,6 +6136,14 @@ goto:eof
     )
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:nosysinfo
+    echo Could not get system information.
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :db_cant_write
     echo FAILED check that database is on read-write mode and/or one may to write data into GTT.
     echo.
@@ -5207,25 +6151,37 @@ goto:eof
     echo directory that is specified by FIREBIRD_TMP environment variable on server side.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :db_not_ready
     echo FAILED check that database is avaliable and has all needed objects.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :cant_create_or_connect
     echo FAILED attempt to create new database or test connection to existing one.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :failed_fbsvc
     echo FAILED result of fbsvcmgr launch.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_gfix
     echo FAILED result of gfix launch.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :failed_bld_sql
     echo FAILED building database objects.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_ext_table
     echo FAILED to detect content of EXTERNAL table that is used to test self-stop.
@@ -5234,31 +6190,45 @@ goto:eof
     echo to some folder where 'firebird' account has enough rights.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :failed_show_params
     echo FAILED fo run script with commands for show database and test parameters.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_count_old_docs
     echo FAILED to run script which tries to obtain number of already existing
     echo documents and to determine need in initial data population.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :failed_reset_pop_gen
     echo FAILED to run script which resets generator for initial data population.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_init_pop_srv_sp
     echo FAILED to run auxiliary stored procedures during initial data population.
 goto:eof
 
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :failed_count_pop_docs
     echo FAILED to run script which tries to get number of current docs in database.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_show_time
     echo FAILED to run script which tries to add 'signal' record into log that will be
     echo used to evaluate planning finish time.
 goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :failed_udf_decl
     echo ###  Config parameter 'sleep_ddl' points to file '!sleep_ddl!' which
@@ -5268,17 +6238,156 @@ goto:eof
     echo ###  UDFaccess. Usually it is enough to put .dll into %%FIREBIRD_HOME%%\UDF folder.
 goto:eof
 
-:trim
-    setLocal
-    @rem EnableDelayedExpansion
-    set Params=%*
-    for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:fbk_storage_failed_restore
+    echo FAILED to restore from backup file defined by config parameter 'results_storage_fbk'.
+    echo You have to ensure that file '%results_storage_fbk%' was created
+    echo for database with ODS older or equal than required by current version of Firebird.
 goto:eof
-@rem exit /b
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:fdb_storage_failed_create
+    echo FAILED to create temporary database for storing result of test runs.
+    echo You have to check free space on disk where folder '%tmpdir%' was created.
+    echo Also ensure that Firebird service account has all necessary access rights
+    echo to this folder.
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:nocompressor
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo Config parameter 'report_compress_cmd': !report_compress_cmd!
+        echo -- points to invalid or missed binary.
+        echo.
+    ) > !abendlog!
+    type !abendlog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:noprodname
+    setlocal
+    set tmplog=%1
+    set param_name=%2
+    set expected_nm=%3
+    @rem !%1:"=!
+    (
+        echo.
+        echo Config parameter '!param_name!': !%2!
+        echo -- points to executable that actually is NOT !expected_nm!
+        echo.
+    ) > !abendlog!
+    type !abendlog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:nocertutil
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo Windows command CERTUTIL.EXE is unavaliable.
+        echo This utility is used to convert binary data to base64 format.
+        echo Check access rights to %systemroot%\system32\certutil.exe
+        echo.
+    ) > !tmplog!
+    type !tmplog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:is_admin
+    setlocal
+    set log=%1
+ 
+    @rem https://stackoverflow.com/questions/4051883/batch-script-how-to-check-for-admin-rights
+ 
+    echo !date! !time! Administrative permissions required for this scenario. Command to check: >>!log!
+    set run_cmd=net session
+    @rem set run_cmd=fsutil dirty query %systemdrive%
+    echo !date! !time! !run_cmd! 1>>!log! 2>&1
+    cmd /c !run_cmd! 1>>!log! 2>&1
+    set elev=!errorlevel!
+    (
+        if !elev! EQU 0 (
+            echo !date! !time! Success: Administrative permissions confirmed.
+            set is_admin=1
+        ) else (
+            @rem When current scenario has NO admin rights then result of NET SESSION will be:
+            @rem ---------------
+            @rem System error 5
+            @rem Access denied
+            @rem ---------------
+            echo !date! !time! Failure: Current permissions inadequate.
+            set is_admin=0
+        )
+    ) >> !log!
+    endlocal & set "%~2=%is_admin%"
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:admin_rights_req
+    setlocal
+    set tmplog=%1
+    (
+        echo.
+        echo This scenario requires must be executed by user with ADMIN rights.
+        echo.
+    ) > !tmplog!
+    type !tmplog! 
+
+    if .%can_stop%.==.1. (
+        echo.
+        echo Press any key to FINISH. . .
+        echo.
+        @pause>nul
+    )
+
+    goto final
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :haltHelper
 ()
 exit /b
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
 :final
 @rem http://stackoverflow.com/questions/10534911/how-can-i-exit-a-batch-file-from-within-a-function
@@ -5293,3 +6402,4 @@ echo.
 echo %date% %time%. Final point of script %~f0. 
 echo Now you can close this window. Bye-bye...
 echo.
+exit /b

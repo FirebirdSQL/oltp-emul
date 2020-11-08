@@ -1,5 +1,10 @@
 @echo off
 setlocal enabledelayedexpansion enableextensions
+
+set THIS_DIR=%~dp0
+set THIS_DIR=!THIS_DIR:~0,-1!
+cd /d !THIS_DIR!
+
 path=..\util;%path%
 set isc_user=
 set isc_password=
@@ -17,12 +22,25 @@ set sid=%1
 set winq=%2
 set conn_pool_support=%3
 set sql=!%4!
+
+@rem ##################################
+@rem ### name of final text report: ###
+@rem ### !tmpdir!\oltp40.report.txt ###
+@rem ##################################
 set log4all=!%5!
+
 for /f %%f in ("!log4all!") do (
     set tmpdir=%%~dpf
     set tmpdir=!tmpdir:~0,-1!
 )
+
+
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@rem lognm: !tmpdir!\oltp40_IMAGE-PC1-0001
+@rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 set lognm=!tmpdir!\%6
+
+
 set build=%7
 
 @rem fname = value of config parameter file_name_with_test_params: regular | benchmark
@@ -46,9 +64,9 @@ if NOT errorlevel 1 (
             echo.
             echo Could not define numbers in major FB version: 25, 30 or 40.
             echo.
-            echo #############################################################
-            echo Ensure that this batch must be called from 1run_oltp_emul.bat 
-            echo #############################################################
+            echo ########################################################
+            echo Ensure that this batch is called from 1run_oltp_emul.bat 
+            echo ########################################################
             echo.
             pause
             goto fin
@@ -86,7 +104,7 @@ if .1.==.0. (
 @rem lognm  = c:\temp\logs.oltp25\oltp25_IMAGE-PC1-0001
 @rem build  = WI-V2.5.9.27117
 @rem fname  = regular
-@rem pause &exit
+
 
 @rem log where current acitvity of this ISQL will be:
 set log=%lognm%.log
@@ -144,6 +162,14 @@ set fblog_final=!tmpdir!\%fblog_endnm%
 call :repl_with_bound_quotes %fblog_start% fblog_start
 call :repl_with_bound_quotes %fblog_final% fblog_final
 
+if .%is_embed%.==.1. (
+    set dbauth=
+    set dbconn=%dbnm%
+) else (
+    set dbauth=-user %usr% -password %pwd%
+    set dbconn=%host%/%port%:%dbnm%
+)
+
 for %%i in ("%sql%") do (
     set trace_lst=%%~dpitmp_trace.lst
     set trace_sql=%%~dpitmp_trace.sql
@@ -158,44 +184,154 @@ for %%i in ("%sql%") do (
     @rem with session-level scope. Main script will be invoked from THIS starter, thus it will know
     @rem sequential ID of THIS command window: 1, 2, 3, ..., !winq!
     set sid_starter_sql=%%~dpitmp_sid_!sid!_starter.sql
-    (
-        echo set term ^^;
-        echo execute block as
-        echo begin
-        echo     -- Define 'sequential number' of current ISQL session and make it be known 
-        echo     -- for main script and every business operations that are called from there:
-        echo     -- NB: name 'WORKER_SEQUENTIAL_NUMBER' is used in procedures for storing
-        echo     -- value in doc_list.worker_id for possible separation of scope that is avaliable
-        echo     -- for each ISQL session. Purpose - reduce frequency of lock conflicts.
-        echo     rdb$set_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', '%sid%'^);
-        echo     rdb$set_context('USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE', '%sid%'^);
-        echo.
-        echo end^^
-        echo set term ;^^
-        echo -- Call main script that was created on prepare phase of oltp-emul scenario:
-        echo in %sql%;
-    ) >!sid_starter_sql!
 )
 
-if .%is_embed%.==.1. (
-    set dbauth=
-    set dbconn=%dbnm%
-) else (
-    set dbauth=-user %usr% -password %pwd%
-    set dbconn=%host%/%port%:%dbnm%
+set conn_as_locksmith=1
+
+set check_for_locksmith=0
+if not .%fb%.==.25. (
+    if not .!mon_query_role!.==.. (
+        if not .!mon_usr_prefix!.==.. (
+            @rem We create non-privileged users in all cases except mon_unit_perf=0
+            @rem Working as NON_dba is much closer to the real-world applications
+            @rem then doing common business tasks as SYSDBA.
+            set check_for_locksmith=1
+        )
+    )
 )
 
-@rem before 12.08.2018: set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i %sql% %dbauth% 
+if .!check_for_locksmith!.==.1. (
 
-set run_isql=%fbc%\isql %dbconn% -now -q -n -pag 9999 -i !sid_starter_sql! %dbauth% 
+    if .%mon_unit_perf%.==.1. (
+        @rem  mon_unit_perf=1 requires that *each* worker will gather monitoring data
+        @rem  before and after each selected business action, i.e. very frequently.
+        @rem  Despite that every worker is interesting only for data related to himself
+        @rem  (i.e. makes filter 'where mon$attachment_id = curent_connection'), every
+        @rem  mon$ gathering involves all other workers to make 'dumps' of their state
+        @rem  to the monitoring data pool.
+        @rem  This leads to EXTREMELY high penalty of performance for approx. 15 times.
+        @rem  -----------------------
+        @rem  Engine FB 3.x was optimized for this case: if monitoring data are queried
+        @rem  by non-privileged user then all connections from other users will not take
+        @rem  in account this event and their work will continue without any delay for
+        @rem  dumping data for this user.
+        @rem  See: http://sourceforge.net/p/firebird/code/62745
+        @rem  "Tag the shmem session clumplets with username. This allows much faster lookups for non-locksmith users."
+        @rem  -----------------------
+        @rem  Benchmark shows that cost of monitoring in this case is almost zero:
+        @rem  overall performance score is equal to the case when mon_unit_perf=0.
+        @rem  For this reason ALL attachments must connect as NON-privileged users
+        @rem  (with different names for each connection):
 
-echo.>>%sts%
-echo %date% %time%, batch running now: %~f0 - check start command: >>%sts%
-echo --- beg of command for launch isql --->>%sts%
-echo !run_isql!>>%sts%
-echo --- end of command for launch isql --->>%sts%
-echo.>>%sts%
-echo sid=%sid%
+        set conn_as_locksmith=0
+
+    ) else if .%mon_unit_perf%.==.2. (
+        if .%sid%.==.1. (
+            @rem First ISQL session will gather mon$ info for *ALL* attachments.
+            @rem This means that for SID=1 we must play as SYSDBA:
+
+            set conn_as_locksmith=1
+
+        ) else (
+            @rem  Other attachments do NOT query monitoring tables.
+            @rem  They must connect as NON-privileged users
+            @rem  /with different names for each connection/
+
+            set conn_as_locksmith=0
+
+        )
+    ) else (
+        @rem ####################################################################
+        @rem ### ::: NB ::: mon_unit_perf = 0 --> all sessions work as SYSDBA ###
+        @rem ####################################################################
+        @rem See also: 1run_oltp_emul.bat, routine: adjust_grants
+
+        set conn_as_locksmith=1
+
+    )
+)
+
+
+(
+
+    echo -- Generated !date! !time! by %~f0.
+    echo -- Do NOT edit. This script will be removed after test.
+
+    if !conn_as_locksmith! EQU 0 (
+        echo -- See: http://sourceforge.net/p/firebird/code/62745
+        echo -- "Tag the shmem session clumplets with username. This allows much faster lookups for non-locksmith users."
+        echo -- See config for logins prefix and role which must be used for non-privileged users:
+        echo -- mon_usr_prefix=%mon_usr_prefix%, mon_query_role=%mon_query_role%
+
+        set /a k=10000+!sid!
+        set v_username_for_sid=!k:~1,4!
+        echo rollback;
+        echo connect '%host%/%port%:%dbnm%' user !mon_usr_prefix!!v_username_for_sid! password '123' role '!mon_query_role!';
+
+    ) else (
+
+        if not .%fb%.==.25. (
+            echo -- #############################################################################
+            echo -- ###                   w o r k   a s   S Y S D B A                         ###
+            echo -- #############################################################################
+            if .%mon_unit_perf%.==.0. (
+                echo -- NOTE. config parameter mon_unit_perf = 0. All sessions can work as '%usr%'
+            ) else if .%mon_unit_perf%==.1. (
+                echo -- NOTE: config parameter 'mon_unit_perf' = 1 but parameters 'mon_usr_prefix' and 'mon_query_role'
+                echo -- are undefined /commented/. All ISQL sessions will work as '$usr'.
+                echo -- Queries to monitoring tables by each session will FORCE ALL other connections to transfer their own
+                echo -- monitoring data into the common monitor pool thus performance will be SIGNIFICANTLY REDUCED.
+            ) else if .%mon_unit_perf%==.2. (
+                if .%sid%.==.1. (
+                    echo -- NOTE. Text configuration parameter mon_unit_perf = 2.
+                    echo -- First launched ISQL session will query mon\$ data for
+                    echo -- ALL existing attachments thus have to work as SYSDBA.
+          	    )
+            )
+        )
+        echo rollback;
+        echo connect '%host%/%port%:%dbnm%' user '%usr%' password '%pwd%';
+    )
+    echo.
+    echo set term ^^;
+    echo execute block as
+    echo begin
+    echo     -- Define 'sequential number' of current ISQL session and make it be known 
+    echo     -- for main script and every business operations that are called from there:
+    echo     -- NB: name 'WORKER_SEQUENTIAL_NUMBER' is used in procedures for storing
+    echo     -- value in doc_list.worker_id for possible separation of scope that is avaliable
+    echo     -- for each ISQL session. Purpose - reduce frequency of lock conflicts.
+    echo     rdb$set_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', '%sid%'^);
+    echo     rdb$set_context('USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE', '%sid%'^);
+    echo.
+    echo end^^
+    echo set term ;^^
+    echo -- Call main script that was created on prepare phase of oltp-emul scenario.
+    echo -- Usually this is C:\temp\logs.oltpNN\sql\tmp_random_run.sql 
+    echo in %sql%;
+
+) > !sid_starter_sql!
+
+@rem we do NOT need to specify neither DB_name nor '-user .. -pas ...' command switches
+@rem because they already are in !sid_starter_sql!:
+
+set run_isql=%fbc%\isql -now -q -n -pag 9999 -i !sid_starter_sql!
+
+
+
+(
+    echo.
+    echo !date! !time!, batch running now: %~f0 - check command for launch ISQL:
+    echo --- beg ---
+    echo !run_isql!
+    echo --- end ---
+    echo.
+) >!tmp!
+
+type !tmp!
+type !tmp! >>%sts%
+
+@rem echo sid=%sid%
 
 set fbsvcrun=%fbc%\fbsvcmgr
 
@@ -223,7 +359,7 @@ if NOT .%fb%.==.25. (
 set run_get_db_sts=%fbsvcrun% action_db_stats sts_data_pages sts_idx_pages sts_record_versions dbname %dbnm%
 set run_get_db_hdr=%fbsvcrun% action_db_stats sts_hdr_pages dbname %dbnm%
 set run_db_validat=%fbsvcrun% action_validate dbname %dbnm% val_lock_timeout 1 
-set run_fc_compare=fc.exe /n %fblog_start% %fblog_final%
+set run_fc_compare=fc.exe /w /n %fblog_start% %fblog_final%
 
 if .%sid%.==.1. (
 
@@ -354,13 +490,7 @@ if .%sid%.==.1. (
     
     echo This ISQL session will make performance report after test make selfstop.>>%sts%
 
-    echo check %trace_sql%, %trace_run%
-
-    set msg=Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test.
-    echo !msg!
-    echo !msg!>>%log4all%
-
-    echo %time%. Run: %run_get_fb_log% 1^>%fblog_start% 2^>%err%  >>%log4tmp%
+    call :sho "Gathering firebird.log before opening 1st window for obtaining new text which will appear in it during test." %log4all%
     %run_get_fb_log% 1>%fblog_start% 2>%err%
     (
         echo %time%. Got:
@@ -375,9 +505,10 @@ if .%sid%.==.1. (
     dir /-c %fblog_start% | findstr /i /c:"%fblog_begnm%" 1>>%log4tmp% 2>&1
     echo.>>%log4all%
   
-    echo %date% %time%. Preparing for test finished. Now launch ISQL sessions. >>%log4tmp%
+    call :sho "Preparing for test finished. Now %winq% ISQL sessions are launching." %log4tmp%
 
 )
+@rem sid=1
 
 @set sql_execution_idx=0
 @echo off
@@ -396,7 +527,7 @@ if .%sid%.==.1. (
 @rem #     connection rejected by remote interface                                                      #
 @rem ####################################################################################################
 
-@rem Create temporary VBS * FOR_EACH * launching ISQL otherWise lot of strange errors will occured in MS script host:
+@rem Create temporary VBS with unique name FOR_EACH launching ISQL otherWise lot of strange errors will occured in MS script host:
 @rem "CScript Error: Loading script ... failed (The process cannot access the file because it is being used by another process. )"
 call :getRandom gen_vbs %sid%
 
@@ -447,6 +578,10 @@ if .1.==.0. (
     exit
 )
 
+@rem ###############################
+@rem ###   m a i n     l o o p   ###
+@rem ###############################
+
 :start
 
     set /a sql_execution_idx=!sql_execution_idx!+1
@@ -474,15 +609,11 @@ if .1.==.0. (
                 @rem NB: we have to copy script to separate file for each SID otherwise strange error will raise in many of launching sessions:
                 @rem "CScript Error: Loading script ... failed (The process cannot access ... used by another process.)"
 
-                copy !tmpdir!\sql\tmp_longsleep.vbs.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp
+                copy !tmpdir!\sql\tmp_longsleep.vbs.tmp !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp 1>nul
 
-                set run_cmd=cscript //nologo //e:vbscript !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp !random_delay! !random_delay!
-
-
-                @rem -- dis 10.05.2019 -- set run_cmd=cscript //nologo //e:vbscript //t:!random_delay! !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp
+                set run_cmd=%systemroot%\system32\cscript.exe //nologo //e:vbscript !tmpdir!\sql\tmp_sid_%sid%_sleep.vbs.tmp !random_delay! !random_delay!
 
                 call :sho "SID=%sid%. Pause is starting. Command: !run_cmd!" %sts%
-
                 cmd /c !run_cmd! 1>>%sts% 2>&1
 
                 call :sho "SID=%sid%. Pause finished. Start ISQL to make attachment and work..." %sts%
@@ -506,24 +637,21 @@ if .1.==.0. (
 
     for /f "usebackq tokens=*" %%a in ('%log%') do set size=%%~za
     if .%size%.==.. set size=0
-    echo size of %log% = %size%
     if %size% gtr %maxlog% (
-        echo %date% %time% size of log %log% = %size% - exceeds limit %maxlog%, make it EMPTY.>> %sts%
+        call :sho "Size of log %log% = %size% - exceeds limit %maxlog%, make it EMPTY" %sts%
         del %log%
     )
 
     for /f "usebackq tokens=*" %%a in ('%err%') do set size=%%~za
     if .%size%.==.. set size=0
-    echo size of %err% = %size%
     if %size% gtr %maxerr% (
-        echo %date% %time% size of %err% = %size% - exceeds limit %maxerr%, remove it >> %sts%
+        call :sho "Size of log %err% = %size% - exceeds limit %maxlog%, make it EMPTY" %sts%
         del %err%
     )
 
     echo ------------------------------------------
     (
         echo.
-        echo !date! !time!. Starting packet # !sql_execution_idx!.
         echo RUNCMD: %run_isql%
         echo STDLOG: %log% 
         echo STDERR: %err%
@@ -533,21 +661,19 @@ if .1.==.0. (
     type %tmp% >> %log%
     type %tmp% >> %sts%
     del %tmp%
-    echo ------------------------------------------
-    echo WAIT for ISQL will finish current packet...
 
-    @rem #############################    R U N     I S Q L    ##############################
+    call :sho "SID=%sid%. Launch ISQL for executing packet N !sql_execution_idx!..." %sts%
+
+    @rem ##############################
+    @rem ###   R U N     I S Q L    ###
+    @rem ##############################
     if .%use_mtee%.==.1. (
         %run_isql% 2>&1 1>>%log% | mtee /t /+ %err% >nul
     ) else (
         %run_isql% 1>>%log% 2>>%err%
-        @rem -- 4debug, when STDERR need to be near STDOUT -- 
-        @rem temply 17.12.2018 %run_isql% 1>>%log% 2>&1
     )
-    @rem ####################################################################################
 
     @echo off
-
 
     @rem -----------------------------------------------------------------
     @rem Stop trace session that was launched for ISQL #1
@@ -560,10 +686,7 @@ if .1.==.0. (
         @rem redirect ISQL output to other log = %tmpdir%\oltpNN_%computername%_001.log - thus we have to STOP trace
         @rem before doing any redirection to %tmpdir%\oltpNN_%computername%_001.log after get control here from ISQL.
 
-        set msg=!time!. Stop trace session that was launched for ISQL #1 
-        echo !msg!
-        echo !msg!>>%sts%
-
+        call :sho "Stop trace session that was launched for ISQL #1" %sts%
 
         %fbsvcrun% action_trace_list >!trace_lst! 2>&1
         type !trace_lst!>>%sts%
@@ -571,165 +694,220 @@ if .1.==.0. (
 
         for /f "tokens=1-3" %%a in ('findstr /i /c:"Session ID:" !trace_lst!') do (
             set run_repo=%fbsvcrun% action_trace_stop trc_id %%c
-            echo !run_repo!
-            echo !run_repo! >>%sts%
+            call :sho "Command: !run_repo!" %sts%
             cmd /c "!run_repo!" 1>>%sts% 2>&1
         )
-        ping -n 2 127.0.0.1>nul
+        ping -n 11 127.0.0.1>nul
         
-        set msg=!time!. Check that currently NO active trace sessions is running:
-        echo !msg!
-        echo !msg!>>%sts%
-        echo ---- list begin ----->>%sts%
-        %fbsvcrun% action_trace_list >>%sts% 2>&1
-        echo ---- list finish ---->>%sts%
+        call :sho "Check that currently NO active trace sessions is running:" %sts%
+        (
+            echo ---- list begin -----
+            %fbsvcrun% action_trace_list
+            echo ---- list finish ----
+        ) >>%sts%
         del !trace_lst!
     )
 
-    set msg=%date% %time%. Finished packet # %sql_execution_idx%.
-    echo %msg%
-    echo %msg% >> %log%
-    echo %msg% >> %sts%
+    call :sho "SID=%sid%. Completed packet N !sql_execution_idx!" %sts%
 
     if .%sid%.==.1. if .%trc_unit_perf%.==.1. (
 
-      @rem Now we have to parse trace log and extract from it name of business action, whether result was successful and statistics.
+        @rem Now we have to parse trace log and extract from it name of business action, whether result was successful and statistics.
 
-      set msg=!time!. Parsing trace log: obtaining name of units, results of execution and statistics.
-      echo !msg!
-      echo !msg!>>%sts%
-      findstr /i "EXECUTE_STATEMENT_FINISH ms fetched fetch(es) !unit_pattern!" !trace_log! > %trace_prs%
-      del %trace_sav% 2>nul
-      
-      set /a row=0
-      for /f "tokens=*" %%a in (%trace_prs%) do (
-         set /a row=!row!+1
-         set txt=%%a
-         set /a elapsed_ms=0
-         set /a reads=0
-         set /a writes=0
-         set /a fetches=0
-         set /a marks=0
-         set /a "rmod=!row! %% 4"
+        call :sho "Parsing trace log: obtaining name of units, results of execution and statistics." %sts%
 
-         if .!rmod!.==.1. (
-           @rem 2015-12-24T03:28:35.037
-           set dts_end=!txt:~0,23!
-           set dts_end=cast('!dts_end:T= !' as timestamp^)
-           (
-               echo -- Line: !txt! 
-               echo --   dts_end=!dts_end! 
-           ) >> %trace_sav%
-         )
+        findstr /i "EXECUTE_STATEMENT_FINISH ms fetched fetch(es) !unit_pattern!" !trace_log! > %trace_prs%
+        del %trace_sav% 2>nul
+        
+        set /a row=0
+        for /f "tokens=*" %%a in (%trace_prs%) do (
+           set /a row=!row!+1
+           set txt=%%a
+           set /a elapsed_ms=0
+           set /a reads=0
+           set /a writes=0
+           set /a fetches=0
+           set /a marks=0
+           set /a "rmod=!row! %% 4"
 
-         if .!rmod!.==.2. (
-           for /f "tokens=1-4" %%d in ("!txt!") do (
-             @rem select count(*) from sp_client_order
-             set opname=%%g
-             echo --   opname=!opname! >>%trace_sav%
+           if .!rmod!.==.1. (
+             @rem 2015-12-24T03:28:35.037
+             set dts_end=!txt:~0,23!
+             set dts_end=cast('!dts_end:T= !' as timestamp^)
+             (
+                 echo -- Line: !txt! 
+                 echo --   dts_end=!dts_end! 
+             ) >> %trace_sav%
            )
-         ) 
-         if .!rmod!.==.3. (
-           for /f "tokens=1" %%d in ("!txt!") do (
-             @rem 1 records fetched  __or__  0 records fetched
-             set success=%%d
-             echo --   success=!success! >>%trace_sav%
+
+           if .!rmod!.==.2. (
+             for /f "tokens=1-4" %%d in ("!txt!") do (
+               @rem select count(*) from sp_client_order
+               set opname=%%g
+               echo --   opname=!opname! >>%trace_sav%
+             )
+           ) 
+           if .!rmod!.==.3. (
+             for /f "tokens=1" %%d in ("!txt!") do (
+               @rem 1 records fetched  __or__  0 records fetched
+               set success=%%d
+               echo --   success=!success! >>%trace_sav%
+             )
            )
-         )
-         if .!rmod!.==.0. (
-           @rem Statistics. OMG...
-           @rem 314 ms, 3 read(s), 6 write(s), 3957 fetch(es), 754 mark(s)
-           for /f "tokens=1-10" %%d in ("!txt!") do (
-             set num=%%d
-             set chr=%%e
-             if "!chr:~0,2!"=="ms" set elapsed_ms=!num!
+           if .!rmod!.==.0. (
+             @rem Statistics. OMG...
+             @rem 314 ms, 3 read(s), 6 write(s), 3957 fetch(es), 754 mark(s)
+             for /f "tokens=1-10" %%d in ("!txt!") do (
+               set num=%%d
+               set chr=%%e
+               if "!chr:~0,2!"=="ms" set elapsed_ms=!num!
 
-             set num=%%f
-             set chr=%%g
-             if "!chr:~0,5!"=="read(" set reads=!num!
-             if "!chr:~0,6!"=="write(" set writes=!num!
-             if "!chr:~0,6!"=="fetch(" set fetches=!num!
-             if "!chr:~0,5!"=="mark(" set marks=!num!
+               set num=%%f
+               set chr=%%g
+               if "!chr:~0,5!"=="read(" set reads=!num!
+               if "!chr:~0,6!"=="write(" set writes=!num!
+               if "!chr:~0,6!"=="fetch(" set fetches=!num!
+               if "!chr:~0,5!"=="mark(" set marks=!num!
 
-             set num=%%h
-             set chr=%%i
-             if "!chr:~0,6!"=="write(" set writes=!num!
-             if "!chr:~0,6!"=="fetch(" set fetches=!num!
-             if "!chr:~0,5!"=="mark(" set marks=!num!
+               set num=%%h
+               set chr=%%i
+               if "!chr:~0,6!"=="write(" set writes=!num!
+               if "!chr:~0,6!"=="fetch(" set fetches=!num!
+               if "!chr:~0,5!"=="mark(" set marks=!num!
 
-             set num=%%j
-             set chr=%%k
-             if "!chr:~0,6!"=="fetch(" set fetches=!num!
-             if "!chr:~0,5!"=="mark(" set marks=!num!
+               set num=%%j
+               set chr=%%k
+               if "!chr:~0,6!"=="fetch(" set fetches=!num!
+               if "!chr:~0,5!"=="mark(" set marks=!num!
 
-             set num=%%l
-             set chr=%%m
-             if "!chr:~0,5!"=="mark(" set marks=!num!
+               set num=%%l
+               set chr=%%m
+               if "!chr:~0,5!"=="mark(" set marks=!num!
 
-             echo --   statistics: !txt! >>%trace_sav%
+               echo --   statistics: !txt! >>%trace_sav%
 
-           )
-           @rem           echo RESULT: !opname! !success! ms=!elapsed_ms! rd=!reads! wr=!writes! fe=!fetches! mk=!marks!
-           (
-             echo insert into trace_stat(unit, dts_end, success, elapsed_ms, reads, writes, fetches, marks^)
-             echo                 values('!opname!', !dts_end!, !success!, !elapsed_ms!, !reads!, !writes!, !fetches!, !marks!^);
-             echo.
-           ) >> %trace_sav%
+             )
+             @rem           echo RESULT: !opname! !success! ms=!elapsed_ms! rd=!reads! wr=!writes! fe=!fetches! mk=!marks!
+             (
+               echo insert into trace_stat(unit, dts_end, success, elapsed_ms, reads, writes, fetches, marks^)
+               echo                 values('!opname!', !dts_end!, !success!, !elapsed_ms!, !reads!, !writes!, !fetches!, !marks!^);
+               echo.
+             ) >> %trace_sav%
+          )
+
         )
+        echo commit;>>%trace_sav%
 
-      )
-      echo commit;>>%trace_sav%
+        call :sho "SID=%sid%. Saving parsed info from trace to database." %sts%
 
-      set msg=!time!. Saving parsed info from trace to database.
-      echo !msg!
-      echo !msg!>>%sts%
+        set run_repo=%fbc%\isql %dbconn% -nod -n -i %trace_sav% %dbauth% 
+        cmd /c !run_repo! 1>>%sts% 2>&1
 
-      set run_repo=%fbc%\isql %dbconn% -nod -n -i %trace_sav% %dbauth% 
-      cmd /c !run_repo! 1>>%sts% 2>&1
-      set msg=!time!. Done.
-      echo !msg!
-      echo !msg!>>%sts%
+        call :sho "SID=%sid%. Completed." %sts%
 
-      del %trace_prs% 2>nul
-      del %trace_sav% 2>nul
-      del %trace_log% 2>nul
-      del %trace_cfg% 2>nul
+        for /d %%x in (%trace_prs%,%trace_sav%,%trace_log%,%trace_cfg%) do (
+            del %%x 2>nul
+        )
 
     )
     @rem end of "if .%sid%.==.1. if .%trc_unit_perf%.==.1."
+
 
     @rem -------------------------------------------------------------------------
     @rem c h e c k    t h a t   n o    s y n t a x    e r r o r s    o c c u r e d
     @rem -------------------------------------------------------------------------
 
-    @rem 1. 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
-    @rem 2. 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
+    @rem --- DO NOT --- 1. 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
+    @rem ~~~~~~~~~~~~~~
+    @rem 1. 22003 ==> Numeric value out of range
+    @rem 2. 42S22 ==> -206 	335544578 	dsql_field_err 	Column not found
     @rem 3. 42S02 ==> -204  335544580   Table unknown
     @rem 4. 22001 ==> arith overflow / string truncation
-    @rem 5. 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
-    set syntax_msg1="SQLSTATE = 42000"
+    @rem 5. 39000 ==> function unknown: absent UDF or POSIX only: when forget to add backslash before rdb$get/rdb$set_context
+    @rem 6. 28000 ==> no permission for ... access to ... // 17.05.2020: OLTP_USER_nnnn via role WORKER instead of SYSDBA
+
+    @rem -- do NOT -- set syntax_msg1="SQLSTATE = 42000" -- this can be when FB crashes and client did EXECUTE STATEMENT at this time!
+    set syntax_msg1="SQLSTATE = 22003"
     set syntax_msg2="SQLSTATE = 42S22"
     set syntax_msg3="SQLSTATE = 42S02"
     set syntax_msg4="SQLSTATE = 22001"
     set syntax_msg5="SQLSTATE = 39000"
+    set syntax_msg6="SQLSTATE = 28000"
 
-    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! %err% >%tmp%
+    findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! /c:!syntax_msg6! %err% >%tmp%
     if NOT errorlevel 1 (
         (
-            echo At least one syntax-compile / string-arith error found during SQL script execution.
-            for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! %err% ^| find /i /c "SQLSTATE"') do (
+            echo At least one compile / runtime error found during SQL script execution.
+            echo #######################################################################
+            for /f "delims=" %%x in ( 'findstr /n /i /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! /c:!syntax_msg6! %err% ^| find /i /c "SQLSTATE"') do (
                 echo Total number of errors: %%x
             )
             echo.
-            echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!, !syntax_msg4!, !syntax_msg5!
+            echo Errors to be checked: !syntax_msg1!, !syntax_msg2!, !syntax_msg3!, !syntax_msg4!, !syntax_msg5!, !syntax_msg6!
             echo Details see in file: %err%. Job terminated.
+            
+            @rem prevent from removing logs if some syntax error occured:
+            @rem ########################################################
+            set remove_isql_logs=never
+
             echo.
         ) >%tmp%
         type %tmp%
         type %tmp%>>%sts%
+
         goto end
 
     )
+
+
+    @rem -------------------------------------------------------------
+    @rem c h e c k    i f    s e r v e r   i s   u n a v a i l a b l e
+    @rem -------------------------------------------------------------
+
+    @rem 26.10.2018: unable to establish connect under extremely heavy workload, ~2000-3000 attachments.
+
+    set GET_FB_REPLY_MAX_TRIES=30
+    set fb_unavail=0
+
+    @rem 20.10.2020. Windows FB service can be restarted NOT instantly.
+    @rem Check value of 'Restart service after <N> minutes' in this service properties, 'Recovery' tab.
+    for /l %%k in (1 1 %GET_FB_REPLY_MAX_TRIES%) do (
+
+        call :sho "SID=%sid%, !date! !time!. Check whether Firebird server is still in work. Attempt N %%k of total %GET_FB_REPLY_MAX_TRIES%" %sts%
+    	    
+        %run_get_fb_ver% 1>%tmp% 2>&1
+
+        findstr /m /i /c:"server version" %tmp% >nul
+
+        if not errorlevel 1 (
+            call :sho "SID=%sid%, !date! !time!. OK, Firebird is active" %sts%
+            type %tmp%>>%sts%
+            del %tmp% 2>nul
+
+            goto :continue_job
+
+        ) else (
+
+            call :sho "SID=%sid%, !date! !time!. Firebird is UNAVAILABLE." %sts%
+            type %tmp%>>%sts%
+            del %tmp% 2>nul
+            if %%k EQU %GET_FB_REPLY_MAX_TRIES% (
+                (
+                    echo Last attempt to establish connect to Firebird has done. Server still unavaliable.
+                    echo Check value of 'Restart service after [N] minutes' in this service properties, 'Recovery' tab.
+                    echo Batch will be terminated now.
+                ) >> %sts%
+
+                goto :fb_unavail
+
+            ) else (
+                call :sho "FAILED establish connect to Firebird. Take small delay before next iteration..." %sts%
+                ping -n 6 127.0.0.1>nul
+            )
+        )
+    )
+
+:continue_job
 
     @rem ------------------------------------------------
     @rem c h e c k    n u m b e r    o f    c r a s h e s
@@ -744,60 +922,91 @@ if .1.==.0. (
     set crash_msg1="SQLSTATE = 08006"
     set crash_msg2="SQLSTATE = 08003"
 
+    @rem this variable will be changed in routine get_diff_fblog() if phrase about crash ("terminated abnormally")
+    @rem will be detected in the difference file for $fblog_beg and $fblog_end.
+    set crash_during_run=0
+
     findstr /i /c:!crash_msg1! /c:!crash_msg2! %err% | find /i /c "SQLSTATE" >%tmp%
 
-    for /f "delims=" %%x in (%tmp%) do set /a crashes_cnt=%%x
+    for /f "delims=" %%x in (%tmp%) do (
+        set /a crashes_cnt=%%x
+    )
+
     if !crashes_cnt! gtr 5 (
         (
-          echo !time!. FB crashed during last run !crashes_cnt! times.
-          echo Error log contain  !crashes_cnt! message(s^) with phrase !crash_msg1! or !crash_msg2!
-          echo Number of this messages exceeds configurable limit.
-          echo Details see in file: %err%
-          echo.
+            echo SID=%sid%. Connection problem detected at least !crashes_cnt! times, patterns: !crash_msg1!, !crash_msg2!.
+            echo Number of this messages exceeds configurable limit. Details see in file: %err%
+            if not .%sid%.==.1. (
+                echo SID=%sid%: session is to be finished.
+            )
         ) >%tmp%
         type %tmp%>>%log%
         type %tmp%>>%sts%
-        goto fb_lot_of_crashes
+
+        set crash_during_run=1
+
     ) else (
+
         if !crashes_cnt! equ 0 (
-            set msg=!time!. There were NO connection problems during last run. Test will be continued.
+            set msg=SID=%sid%. No connection problems detected during last run. Test will be continued.
         ) else (
-            set msg=!time!. Detected !crashes_cnt! problems with connection. It's less than configurable limit. Test will be continued.
+            set msg=SID=%sid%. Found !crashes_cnt! phrases about connection problems. Perform additional check by parsing diff between old and current firebird.log
         )
         echo !msg!>>%log%
-        echo !msg!>>%sts%
+        call :sho "!msg!" %sts%
+
+        if !crashes_cnt! GTR 0 (
+            call :sho "SID=%sid%. Gathering current content of firebird.log" %sts%
+
+            set fblog_current=!tmpdir!\fblog_current.%sid%.log
+            %run_get_fb_log% 1>!fblog_current! 2>%err%
+
+            (
+                echo %time%. Got:
+                for /f "delims=" %%a in ('find /v /c "" !fblog_current!') do (
+                    echo STDOUT: %%a (number of rows in extracted log^)
+                )
+                for /f "delims=" %%a in ('type %err%') do (
+                    echo STDERR: %%a
+                )
+            ) 1>>%sts% 2>&1
+
+            @rem Get DIFF between initial and current content of firebird.log, count number of crashes in it:
+
+            fc.exe /w /n %fblog_start% !fblog_current! 1>!tmp! 2>&1
+            
+            findstr /m /i /c:"access violation" /c:"error reading data" /c:"error writing data" /c:"terminate abnormal" !tmp! >nul
+            if NOT errorlevel 1 (
+                set crash_during_run=1
+            )
+
+            del !fblog_current!
+
+        )
     )
 
-    @rem -------------------------------------------------------------
-    @rem c h e c k    i f    s e r v e r   i s   u n a v a i l a b l e
-    @rem -------------------------------------------------------------
-    echo !date! !time! Check whether Firebird server is still in work >>%log%
-    
-    %run_get_fb_ver% 1>%tmp% 2>&1
 
-    findstr /m /i /c:"server version" %tmp% >nul
+    if .!crash_during_run!.==.1. (
+        (
+            @echo !date! !time!
+            @echo ##############################################################################
+            @echo ###  C R A S H    D E T E C T E D,      S T O P    F U R T H E R    J O B  ###
+            @echo ##############################################################################
+        ) > %tmp%
+        type %tmp%
+        type %tmp% >>%sts%
 
-    if not errorlevel 1 (
-        echo OK, Firebird is active:>>%log%
-        type %tmp%>>%log%
-        type %tmp%>>%sts%
-        del %tmp% 2>nul
-        goto chk4shutdown
-    ) else (
-        echo Firebird is UNAVAILABLE.>>%log%
-        type %tmp%>>%log%
-        type %tmp%>>%sts%
-        del %tmp% 2>nul
-        goto fb_unavail
+        goto :test_canc
+
     )
 
-:chk4shutdown
-    @rem ------------------------------------------------------------------------------
-    @rem c h e c k    i f    d a t a b a s e   h a s    b e e n    s h u t d o w n e d:
-    @rem ------------------------------------------------------------------------------
+
+    @rem --------------------------------------------------------
+    @rem c h e c k    i f    d a t a b a s e     s h u t d o w n:
+    @rem --------------------------------------------------------
     (
-      echo !date! !time! Check whether database state is shutdown.
-      echo Command: %run_get_db_hdr%
+        echo !date! !time! Check whether database state is shutdown.
+        echo Command: %run_get_db_hdr%
     )>>%sts%
 
     %run_get_db_hdr% | findstr /i /r /c:"attributes.*shutdown" 1>>%sts% 2>&1
@@ -805,14 +1014,11 @@ if .1.==.0. (
         @rem Output msg about shutdown state and script termination.
         goto db_offline
     )
-    goto db_online
 
-:db_online
-    @echo database ONLINE, continue the job - check test cancellation string in %err%
     @rem ------------------------------------------------------------------
     @rem c h e c k    i f    t e s t   h a s   b e e n    C A N C E L L E D:
     @rem ------------------------------------------------------------------
-    echo !date! !time! Check whether test has been stopped >>%sts%
+    call :sho "SID=%sid%. Database ONLINE. Check whether test has been cancelled." %sts%
 
     @rem 30.05.2016, suggestion by Alexey Kovyazin: let's check first of all STDOUT log
     @rem for the signal about test cancellation. This allow to skip raising EXCEPTION inside
@@ -821,18 +1027,21 @@ if .1.==.0. (
 
     findstr /m /i "TEST_WAS_CANCELLED" %log% >nul
     if not errorlevel 1 (
-        echo !time! Found sign of TEST CANCELLATION in STDOUT log, file %log% >>%sts%
+        call :sho "SID=%sid%. Found sign of TEST CANCELLATION in STDOUT log, file %log%" %sts%
+
         goto test_canc
+
     )
 
     @rem Old way: check only ERROR log for message about test cancellation:
     findstr /m /i "EX_TEST_CANCEL" %err% >nul
     if not errorlevel 1  (
-        echo !time! Found sign of TEST CANCELLATION in STDERR log, file %err% >>%sts%
+        call :sho "SID=%sid%. Found sign of TEST CANCELLATION in STDERR log, file %log%" %sts%
+
         goto test_canc
     )
 
-    echo Test can be continued. Now we make loop and run ISQL with next packet.>>%sts%
+    call :sho "SID=%sid%. Test can continue. Make loop to run ISQL with next packet" %sts%
 
     @rem ############################################
     @REM ########                            ########
@@ -842,28 +1051,20 @@ if .1.==.0. (
     goto start
 
 :fb_unavail
-    set msg=Firebird Server is unavailable now. Test has been cancelled.
-    @echo.
-    @echo %date% %time% %msg%
-    @echo.
-    @echo %date% %time% %msg% >>%sts%
+    call :sho "Firebird Server is unavailable now. Test has been cancelled." %sts%
+
     goto end
 
 :fb_lot_of_crashes
-    set msg=Too many messages about connection problem during this test. Test has been cancelled.
-    @echo.
-    @echo %date% %time% %msg%
-    @echo.
-    @echo %date% %time% %msg% >>%sts%
+    call :sho "Too many messages about connection problem during this test. Test has been cancelled." %sts%
+
     goto end
 
 :db_offline
-    set msg=DATABASE SHUTDOWN DETECTED, test has been cancelled.
-    @echo.
-    @echo %date% %time% %msg%
-    @echo.
-    @echo %date% %time% %msg% >>%sts%
+    call :sho "DATABASE SHUTDOWN DETECTED, test has been cancelled" %sts%
+
     goto end
+
 :test_canc
 
     @rem ::: ACHTUNG ::: 10.05.2019
@@ -871,114 +1072,260 @@ if .1.==.0. (
     @rem Only SID=1 is allowed to write into final report but this can be started only after 
     @rem all other attachments will gone.
 
-    set msg=SID=%sid%. Return to %~f0. Test has been CANCELLED.
-    echo !date! !time! !msg! >>!log!
+    set msg=SID=%sid%. Return to %~f0. Test has been CANCELLED
     call :sho "!msg!" %sts%
+    echo !msg! >>!log!
 
+
+    @rem Remove temporary SID-unique .vbs file in %tmpdir%\sql that was used for delays:
     call :getRandom del_vbs %sid%
+
     del !sid_starter_sql!
     if not .%sid%.==.1. (
 
         @rem ---------------------------------------------------------------------------------------------------------------
         @rem E X I T    i f   c u r r e n t    I S Q L    w i n d o w   h a s   n u m b e r   g r e a t e r   t h a n   "1".
         @rem ---------------------------------------------------------------------------------------------------------------
-        set msg=!date! !time!. Session %sid% is now finishing its work: exit from batch.
-        echo !msg!
+        set msg=SID=%sid%: session is leaving from batch %~f0
         echo !msg! >>%log%
-        echo !msg! >>%sts%
-        set /a k=10000+%!sid%
+        call :sho "!msg!" %sts%
+        set /a k=10000+%sid%
         set k=!k:~1,4!
-        echo #####################################
-        echo ###   e x i t :   S I D  =  !k! ###
-        echo #####################################
+
         goto end
-    ) else (
-        call :sho "SID=1. Test is to be COMPLETED. Now we can forcedly detach all remaining sessions and make final reports." %sts%
-        @rem -- do NOT! will be shown in html -- call :sho "!msg!" %log4all%
+
     )
+
+    @rem ###########################################################################
+    @rem ### 10.05.2019. Following code is allowed to be executed only for SID=1 ###
+    @rem ###########################################################################
+    call :sho "SID=%sid%. Test is to be COMPLETED. All attachments will be forcedly detached and final reports will be made." %log4all%
     
-    @rem All other attachment have to be FINISH before we start to creaing report.
-    @rem We check this by periodical query to mon$attachments:
-
-    call :wait4all
-
     
     @echo ########################################################################################################################
     @echo ###   S I D = 1:    c h a n g e    D B    s t a t e    t o    F U L L   S H U T D O W N  /   R E T.   O N L I N E    ###
     @echo ########################################################################################################################
-    @rem 14.11.2018
 
-    call :sho "SID=1. Forcedly drop all other attachments: change DB state to full shutdown." %sts%
-    @rem run_fbs_dbshut="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname $dbnm"
-    set run_cmd=%fbsvcrun% action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname %dbnm%
-    call :sho "SID=1. Command: !run_cmd!" %sts%
+    set backup_lock=0
+    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>!tmp! 2>&1
+    findstr /i /r /c:"attributes.*backup lock" !tmp! 1>nul 2>&1
+    if NOT errorlevel 1 (
+        call :sho "SID=%sid%. Database is in BACKUP LOCK state. We can change DB state to multi-user maintenance rather than full shutdown." %log4all%
+        set run_cmd=%fbsvcrun% action_properties prp_shutdown_mode prp_sm_multi prp_shutdown_db 0 dbname %dbnm%
+        set backup_lock=1
+        
+        @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        @rem Value of 'run_db_statistics' is changed here to -1 in order to skip
+        @rem gathering DB statistics when DB is in 'backup lock' state.
+        @rem When DB is backup-lock then statistics will include only data from 'main' DB file
+        @rem and data from .delta will be IGNORED. See CORE-6399
+        @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        set run_db_statistics=-1
 
-    @rem ..................................................
-    @rem SHUTDOWN DATABASE IN ORDER TO KILL ALL ATTACMENTS
-    @rem THIS IS SYNCHRONOUS OPERATION, **NO** RETURN UNTIL
-    @rem ALL ATTACHMENTS WILL ACTUALLY DISCONNECT FROM DB.
-    @rem ..................................................
-    cmd /c !run_cmd! 1>>%sts% 2>&1
+    ) else (
+        call :sho "SID=%sid%. Forcedly drop all other attachments: change DB state to full shutdown." %log4all%
+        set run_cmd=%fbsvcrun% action_properties prp_shutdown_mode prp_sm_full prp_shutdown_db 0 dbname %dbnm%
+    )
+    call :sho "SID=%sid%. Command: !run_cmd!" %log4all%
 
-    call :sho "SID=1. Done. Check that DB is really in full shutdown mode:" %sts%
-    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
+    @rem ---------------------------------------------------
+    @rem t e m p - l y    s h u t d o w n    d a t a b a s e
+    @rem ---------------------------------------------------
+
+    cmd /c !run_cmd! 1>!tmp! 2>&1
+    type !tmp! >>%log4all%
+
+    @rem 06.10.2020: FB can crash when try to change DB state to shutdown!
+    @rem We have to check !err! for presence of text like: "Error reading/writing data from/to the connection"
+    @rem If such text presents then we have to try to write info about ABNORMAL finish into database!
+    set crash_on_db_shut=0
+
+    findstr /i /r /c:"error reading data" /c:"error writing data" !tmp! 1>nul 2>&1
+    if NOT errorlevel 1 (
+        set crash_on_db_shut=1
+    )
+
+
+    @rem NOTE: if DB was in 'backup lock' state then new attributes will not be seen in its header until nbackup -N.
+    @rem This means that following command will show the same as previous. See CORE-6399
+
+    call :sho "SID=1. Done. Check that DB is really in shutdown mode:" %log4all%
+    @rem ### NOTE ###
+    @rem OLD list of attributes will be shown if DB was initially in backup-lock state. See CORE-6399.
+    @rem This means that we will NOT see 'shutdown' in this case, only query to mon#database can issue this.
+    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>!tmp! 2>&1
+    type !tmp!
+    type !tmp! >>%log4all%
     
+    @rem -----------------------------------
+    @rem r e t u r n     D B     o n l i n e
+    @rem -----------------------------------
+
     set run_cmd=%fbsvcrun% action_properties prp_db_online dbname %dbnm%
-    call :sho "SID=1. Return DB to online state." %sts%
-    call :sho "SID=1. Command: !run_cmd!" %sts%
-    cmd /c !run_cmd! 1>>%sts% 2>&1
-    call :sho "SID=1. Done. Check that DB is online:" %sts%
-    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>>%sts% 2>&1
+    call :sho "SID=%sid%. Return DB to online state." %log4all%
+    call :sho "SID=%sid%. Command: !run_cmd!" %log4all%
+    cmd /c !run_cmd! 1>!tmp! 2>&1
+    type !tmp!
+    type !tmp!>>%log4all%
+
+    call :sho "SID=%sid%. Done. Check that DB is online:" %log4all%
+    %run_get_db_hdr% | findstr /i /r /c:"attributes" 1>!tmp! 2>&1
+    type !tmp!
+    type !tmp! >>%log4all%
 
     (
-		echo set heading off;
-		echo select 'SID=1. Attachments that still alive:' as " " from rdb$database;
-		echo set heading on;
-		echo set list on;
-		echo set blob all;
-		echo set count on;
-        echo select 
-        echo     a.mon$attachment_id as attachment_id
-        echo     ,a.mon$server_pid as server_pid
-        echo     ,a.mon$state as attachment_state
-        echo     ,a.mon$remote_protocol as remote_protocol
-        echo     ,a.mon$remote_address as remote_address
-        echo     ,a.mon$remote_pid as remote_pid
-        echo     ,a.mon$timestamp as attachment_timestamp
-        echo     ,s.mon$state as statement_state
-        echo     ,s.mon$timestamp as statement_timestamp
-        echo     ,s.mon$sql_text as statement_sql
-        echo from mon$attachments a
-        echo left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id
-        echo where 
-        echo     a.mon$attachment_id is distinct from current_connection 
-        echo     and a.mon$remote_address is not null
-        echo ;
-		echo set count off;
-		echo set list off;
+		
+		echo "set bail on;"
+		echo "set term #;"
+		echo "execute block as"
+		echo "    declare c int;"
+		echo "begin"
+		echo "    -- Count records in order to remove all garbage in this table:"
+		echo "    select count(*) from semaphores into c;"
+		echo "end"
+		echo "#"
+		echo "set term #;"
+		echo "commit;"
+		echo "set heading off;"
+		echo "select 'Attachments that still alive:' as " " from rdb$database;"
+		echo "set heading on;"
+		echo "set list on;"
+		echo "set blob all;"
+		echo "set count on;"
+		echo "set echo on;"
+        echo "select"
+        echo "    a.mon$attachment_id as attachment_id"
+        echo "    ,a.mon$server_pid as server_pid"
+        echo "    ,a.mon$state as attachment_state"
+        echo "    ,a.mon$remote_protocol as remote_protocol"
+        echo "    ,a.mon$remote_address as remote_address"
+        echo "    ,a.mon$remote_pid as remote_pid"
+        echo "    ,a.mon$timestamp as attachment_timestamp"
+        echo "    ,s.mon$state as statement_state"
+        echo "    ,s.mon$timestamp as statement_timestamp"
+        echo "    ,s.mon$sql_text as statement_sql"
+        echo "from mon$attachments a"
+        echo "left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id"
+        echo "where "
+        echo "    a.mon$attachment_id is distinct from current_connection"
+        echo "    and a.mon$remote_address is not null"
+        
+        @rem ############################# [[[ NOTE ]]] #####################################
+        @rem ###  FOUR PERCENT SIGNS MUST BE SPECIFIED FOR EACH SINGLE '%' TO BE PRODUCED ###
+        @rem ################################################################################
+        echo "    and upper(s.mon$sql_text) not similar to upper('%%%%execute[[:WHITESPACE:]]+block%%%%')"
+		@rem                                                      ^^^^                             ^^^^
+
+        echo ";"
+		echo "set echo off;"
+		echo "set count off;"
+		echo "set list off;"
     ) > %rpt%
-    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-    %run_repo% 1>>%log4all% 2>&1
+
+
+    if !crash_on_db_shut! EQU 1 (
+	    @rem 06.10.2020: update record in perf_log about test finish outcome:
+	    @rem write info about FB crash when changed DB state to shutdown.
+  		echo "set heading off;"
+  		echo "select 'Update test finish record: add info about crash when DB state was changed to shutdown.' as " " from rdb$database;"
+  		echo "set heading on;"
+		echo "set list on;"
+	    echo "set echo on;"
+		echo "update perf_log set"
+		echo "         stack = 'script: %~f0, crash_on_db_shut=1'"
+		echo "        ,exc_unit = '9' -- special for crashes, see sp SRV_GET_REPORT_NAME"
+		echo "        ,exc_info = 'CRASH DURING DB SHUTDOWN' || iif(exc_info is not null, '; ', '') || "
+		echo "                    trim(coalesce( iif( upper(exc_info) similar to"
+
+        @rem ############################# [[[ NOTE ]]] #####################################
+        @rem ###  FOUR PERCENT SIGNS MUST BE SPECIFIED FOR EACH SINGLE '%' TO BE PRODUCED ###
+        @rem ################################################################################
+		echo "                                        upper('normal:%%%%expired%%%%')"
+		@rem                                                        ^^^^       ^^^^
+
+		echo "                                       ,replace(exc_info,'NORMAL:', '')"
+		echo "                                       ,exc_info"
+		echo "                                      )"
+		echo "                                  ,''"
+		echo "                                )"
+		echo "                       )"
+		echo "where unit = 'sp_halt_on_error'"
+		echo "order by dts_beg desc"
+		echo "rows 1"
+		echo "returning exc_info;"
+	    echo "set echo off;"
+		echo "commit;"
+		echo "set list off;"
+
+    ) >>%rpt%
+
+	if !crash_during_run! EQU 1 (
+		@rem Record in perf_log with unit = 'sp_halt_on_error' mostly NOT YET exist at this point
+		@rem because SP sp_halt_on_error was not called for test self-stop.
+		@rem We have to *add* new record into perf_log in order to show it in the final report:
+  		echo "set heading off;"
+  		echo "select 'Insert record about crash during test run.' as " " from rdb$database;"
+  		echo "set heading on;"
+		echo "set list on;"
+	    echo "set echo on;"
+		echo "insert into perf_log(unit, dts_beg, dts_end, stack, exc_unit, exc_info)"
+		echo "values("
+		echo "    'sp_halt_on_error'"
+		echo "    ,'now'"
+		echo "    ,'now'"
+		echo "    ,'script: %~f0, crash_during_run=1'"
+		echo "    ,'9' -- special for crashes, see sp SRV_GET_REPORT_NAME"
+		echo "    ,'CRASH DURING TEST RUN, ' || left(cast(cast('now' as timestamp) as varchar(50)),16)"
+		echo ")"
+		echo "returning exc_info;"
+	    echo "set echo off;"
+		echo "commit;"
+		echo "set list off;"
+	) >>%rpt%
+
+
+    if !conn_as_locksmith! EQU 0 (
+        @rem ######################################################
+        @rem # 17.05.2020. Cleanup: remove all non-privileged users with names starting with '$mon_usr_prefix':
+        @rem ######################################################
+        (
+    		echo set heading off;
+    		echo select 'Drop all non-prvileged users with names defined by mon_usr_prefix=''%%mon_usr_prefix%%''' as " " from rdb$database;
+    		echo set heading on;
+            echo commit;
+            echo set transaction no wait;
+    	    echo set echo on;
+            echo execute procedure srv_drop_oltp_worker;
+    	    echo set echo off;
+            echo commit;
+        ) >>%rpt%
+    )
+    call :remove_enclosing_quotes !rpt!
+
+
+    call :sho "SID=%sid%. Perform additional checks and cleanup." %log4all%
+
+    set run_repo=%fbc%\isql %dbconn% -nod -n -pag 9999 -i %rpt% %dbauth% 
+
+    cmd /c %run_repo% 1>>%log4all% 2>!err!
+
+    @rem runcmd=!%1!
+    @rem err_file=%2
+    @rem sql_file=%3
+    @rem add_label=%4
+    @rem do_abend=%5
+
+    call :catch_err  run_repo  !err!  %rpt%  n/a   0
+    @rem -------------------------------------------
+    @rem                 1       2      3     4    5
 
     del %rpt% 2>nul
+    del !err! 2>nul
     del !tmpdir!\sql\tmp_longsleep.vbs.tmp 2>nul
     
-    @rem ###########################################################################
-    @rem ### 10.05.2019. Following code is allowed to be executed only for SID=1 ###
-    @rem ###########################################################################
 
-    for /f "delims=." %%a in ('wmic os get localdatetime ^| findstr /i /r /b /c:"[0-9]"') do (
-        set dts=%%a
-        set ymd=!dts:~2,6!
-        set hms=!dts:~8,6!
-    )
-    @rem 09.05.2019: it is MANDATORY to add current timestamp to HTML initial file for report
-    @rem thus makig in UNIQUE. Otherwise this report can become broken - without HEAD section 
-    @rem and some random number of lines from starting part of BODY. Reason is unknown, perhaps
-    @rem it is somewhat related to existense of two file with same part of name and "composed" extensions: 
-    @rem oltpNN.report.html and oltpNN.report.html.tmp
-
-    set htm_file=!tmpdir!\oltp%fb%.!dts!.report.html
+    @rem Name of final report in HTML format:
+    @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     set htm_file=!tmpdir!\oltp%fb%.report.html
     del %htm_file% 2>nul
 
@@ -988,14 +1335,19 @@ if .1.==.0. (
     set htm_repn=^<h4^>
     set htm_repc=^</h4^>
 
-    set tmp_file=!tmpdir!\oltp%fb%.report.tmp
+    set br=^<br^>
+    @rem set br=^<br /^>
 
-    call :sho "SID=1. Starting final performance analysys." %sts%
+    set tmp_file=!tmpdir!\oltp%fb%.report.tmp
+    set tmpcharts=!tmpdir!\tmp-chart-settings.tmp
+
+    call :sho "SID=1. Starting final performance analysys." %log4all%
 
     set vbs_oem_converter=%tmpdir%\oemcp_converter.vbs.tmp
     call :create_oemcp_converter %tmpdir% %log4all% %vbs_oem_converter%
 
     del %rpt% 2>nul
+    del %tmpcharts% 2>nul
 
     @rem QQQQQQQQQQQQQQQQQQQ
     if .%make_html%.==.1. (
@@ -1004,52 +1356,14 @@ if .1.==.0. (
         @rem #####   S t a r t i n g      w r i t e      i n t o    . h t m l  #####
         @rem #######################################################################
         (
-            @rem -- dis 14.12.2015 -- this will be added later, see below -- echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> 
+            echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^>
             echo ^<html^>
-            echo ^<head^>
-            echo ^<meta http-equiv="content-type" content="text/html; charset=utf-8" /^>
-            echo ^<meta http-equiv="cache-control" content="no-cache"^>
-            echo ^<meta http-equiv="pragma" content="no-cache"^>
-            @rem -- dis 14.12.2015 -- echo ^<title^>FB-%fb% OLTP-EMUL^</title^> -- this tag will be added with concrete info about FB, database and test settings plus performance score, see below
-            echo  ^<style type="text/css"^>
-            echo     table {
-            echo         border-collapse: collapse;
-            @rem echo         background: #99CCFF;
-            echo         border: 2px solid black;
-            echo     }
-            echo     th {
-            echo         padding: 5px; 
-            echo         background: #E6E6FA;
-            echo         border: 1px solid black;
-            echo     }
-            echo     td {
-            echo         padding: 4px;
-            echo         background: #FDF5E6;
-            echo         border: 1px solid black;
-            echo         white-space:nowrap;
-            echo     }
-            echo    .success {
-            echo       color: black;
-            echo       background-color: #00FF00;
-            echo    }
-            echo    .warning {
-            echo       color: black;
-            echo       background-color: #FFFF00;
-            echo    }
-            echo    .error {
-            echo       color: black;
-            echo       background-color: #FF0000;
-            echo    }
-            echo    .fault {
-            echo       color: #990000;
-            echo       background-color: #FFFFCC;
-            echo       font-weight: bold;
-            echo    }
-            echo    .monosp {
-            echo       font-family: monospace;
-            echo    }
-            echo ^</style^>
-            echo ^</head^>
+
+            @rem ----------------------------
+            @rem INCLUDE STATIC CONTENT: HEAD
+            @rem ----------------------------
+            type !THIS_DIR!\oltp_report_html_head.inc
+
             echo ^<body^>
             echo Generated by %~f0, ISQL session #1 of total launched %winq%. !date! !time!.
 
@@ -1061,42 +1375,82 @@ if .1.==.0. (
             echo ^<td^>
             echo ^<ol^>
 
-            if .%gather_hardware_info%.==.1. (
+            if .%gather_hardware_info%.==.0. (
+                echo     ^<li^>Hardware info was not gathered. Change config parameter 'gather_hardware_info' to 1. ^</li^>
+            ) else (
                 echo     ^<li^>^<a href="#hardwareinfo"^>Hardware and OS info^</a^> ^</li^>
             )
+
             echo     ^<li^>^<a href="#testsettings"^>Test configuration^</a^> ^</li^>
             echo     ^<li^>^<a href="#testfinishinfo"^>Test Finish details^</a^> ^</li^>
             echo     ^<li^>^<a href="#testworkload"^>Test workload details^</a^> ^</li^>
-            echo     ^<li^>^<a href="#qdindexesddl"^>Indices DDL for heavy-loaded table(s^)^</a^> ^</li^>
+            echo     ^<li^>^<a href="#qdindexesddl"^>Indices DDL for heavy-loaded tables^</a^> ^</li^>
             echo ^</ol^>
             echo ^</td^>
             echo ^<td^>
             echo ^<ol^>
-            echo     ^<li^>^<a href="#perftotal"^>Performance, TOTAL score^</a^> ^</li^>
-            echo     ^<li^>^<a href="#perfdynam"^>Performance, DYNAMIC, 20 intervals^</a^> ^</li^>
-            echo     ^<li^>^<a href="#perfminute"^>Performance, per MINUTE, since launch^</a^> ^</li^>
-            echo     ^<li^>^<a href="#perftrace"^>Performance, TRACE data for ISQL #1^</a^> ^</li^>
+            
+            
+	        echo    ^<li^>Performance, TOTAL score:
+	        echo        ^&nbsp;^&nbsp;^&nbsp;^<span^>^<a href="#perftotal"^>as table^</a^>^<span^> ^&nbsp;^&nbsp;^&nbsp; ^<span^>^<a href="#perf_total_chart"^>as chart^</a^>^<span^>
+	        echo    ^</li^>
+
+	        echo    ^<li^>Performance per MINUTE, during test_time phase:
+	        echo        ^&nbsp;^&nbsp;^&nbsp;^<span^>^<a href="#perfminute"^>as table^</a^>^<span^> ^&nbsp;^&nbsp;^&nbsp; ^<span^>^<a href="#perf_m1_chart"^>as chart^</a^>^<span^>
+	        echo    ^</li^>
+
+
+            if .!trc_unit_perf!.==.0. (
+                echo     ^<li^>TRACE was not launched by ISQL #1. Change config parameter 'trc_unit_perf' to 1. ^</li^>
+            ) else (
+                echo     ^<li^>^<a href="#perftrace"^>Performance, TRACE data for ISQL #1^</a^> ^</li^>
+            )
+
             echo     ^<li^>^<a href="#perfdetail"^>Performance, DETAILS per units^</a^> ^</li^>
 
-            @rem Link either to report data OR to comment about need to set mon_unit_perf = 1:
-            echo     ^<li^>^<a href="#perfmon4unit"^>MON$-analysis, per UNITS^</a^> ^</li^>
-            if .%mon_unit_perf%.==.1. (
-                if not .%fb%.==.25. (
-                    echo     ^<li^>^<a href="#perfmon4tabs"^>MON$-analysis, per units and TABLES^</a^> ^</li^>
+            if .!mon_unit_perf!.==.0. (
+                echo ^<li^>Monitoring statistics was not gathered. Change config parameter 'mon_unit_perf' to 1 or 2^</li^>
+            ) else if .!mon_unit_perf!.==.1. (
+                @rem query to: SP report_stat_per_units / table mon_log, group by unit.
+                @rem table mon_log is fulfilled by SP srv_fill_mon
+                echo ^<li^>Monitoring performance: per UNITS
+                echo     ^&nbsp;^&nbsp;^&nbsp;^<span^>^<a href="#perfmon4unit_table"^>as table^</a^>^<span^> ^&nbsp;^&nbsp; ^<span^>^<a href="#perfmon4unit_chart"^>as chart^</a^>^<span^>
+                echo ^</li^>
+                if not .!fb!.==.25. (
+                    echo ^<li^>^<a href="#perfmon4tabs"^>Monitoring performance: per UNITS and TABLES^</a^>^</li^>
                 )
+            ) else if .!mon_unit_perf!.==.2. (
+                echo ^<li^>Memory consumption, metadata cache, attachments activity
+                echo     ^&nbsp;^&nbsp;^&nbsp;^<span^>^<a href="#perfmon4meta"^>as table^</a^>^<span^> ^&nbsp;^&nbsp; ^<span^>^<a href="#perf_memo_consumption_chart"^>as chart^</a^>^<span^>
+                echo ^</li^>
+                echo ^<li^>Monitoring data: STATEMENTS activity, ^<span^>^<a href="#perf_attachments_activity_chart"^>as chart^</a^>^<span^>
+                echo ^</li^>
             )
-            @rem Link either to report data OR to comment about need to set mon_unit_perf = 2:
-            echo     ^<li^>^<a href="#perfmon4meta"^>MON$-analysis: METADATA cache^</a^> ^</li^>
+
 
             echo     ^<li^>^<a href="#exceptions"^>Exceptions during test run^</a^> ^</li^>
             echo ^</ol^>
             echo ^</td^>
             echo ^<td^>
             echo ^<ol^>
-            echo     ^<li^>^<a href="#fbdbinfo"^>mon$database and 'show version' results^</a^> ^</li^>
-            echo     ^<li^>^<a href="#dbstatistics"^>Database Statistics, full^</a^> ^</li^>
-            echo     ^<li^>^<a href="#dbverstotal"^>Ratio "Versions / Records" for tables^</a^> ^</li^>
-            echo     ^<li^>^<a href="#dbvalidation"^>Database Validation Results^</a^> ^</li^>
+            echo     ^<li^>^<a href="#fbdbinfo"^>Database and server info^</a^> ^</li^>
+            if .!run_db_statistics!.==.0. (
+                echo     ^<li^>Database statistics was not gathered. Change config parameter 'run_db_statistics' to 1. ^</li^>
+            ) else (
+                if .!run_db_statistics!.==.-1. (
+                    echo ^<li^>^<a href="#dbstatistics"^>Database statistics was not gathered: DB is in 'backup lock' state.^</a^> ^</li^>
+                ) else (
+                    echo ^<li^>^<a href="#dbstatistics"^>Database statistics, full^</a^> ^</li^>
+                    echo ^<li^>Record versions statistics
+                    echo     ^&nbsp;^&nbsp;^&nbsp;^<span^>^<a href="#dbvers_table"^>as table^</a^>^<span^> ^&nbsp;^&nbsp; ^<span^>^<a href="#dbvers_chart"^>as chart^</a^>^<span^>
+                    echo ^</li^>
+                )
+            )
+            if .!run_db_validation!.==.0. (
+                echo     ^<li^>Database validation was not performed. Change config parameter 'run_db_validation' to 1. ^</li^>
+            ) else (
+                echo     ^<li^>^<a href="#dbvalidation"^>Database Validation Results^</a^> ^</li^>
+            )
             echo     ^<li^>^<a href="#fblogcompare"^>New in firebird.log while test was run^</a^> ^</li^>
             echo     ^<li^>^<a href="#finalpart"^>Final processing of ISQL logs^</a^> ^</li^>
             echo ^</ol^>
@@ -1106,14 +1460,16 @@ if .1.==.0. (
 
         ) > %htm_file%
 
-        @rem  -- do NOT -- call :add_html_text tmp_file htm_file 0  // wrong output of "<!DOCTYPE", 1st line in html will start from wrong text: <//www.w3.org/TR/html4/strict.dtd">
-
     )
     @rem QQQQQQQQQQQQQQQQQQQ
     @rem .%make_html%.==.1.
 
+@rem echo REMOVE LATER :DEBUG_P1
+@rem pause
+@rem goto :DEBUG_P1
+
     if .%gather_hardware_info%.==.1. (
-        @echo %date% %time%. SID=1. Gathering hardware and OS info...
+        call :sho "SID=%sid%. Gathering hardware and OS info" %log4all%
         (
             echo.
             echo #########################################################
@@ -1130,78 +1486,53 @@ if .1.==.0. (
     )
 
     @rem RRRRRRRRRRRRRRRRRRR
+
+    del !tmp_file! 2>nul
+
+    set msg=Output test configuration
+    call :sho "SID=%sid%. !msg!" %log4all%
+    echo.>>%log4all%
+
+
     if .%make_html%.==.1. (
-
-        @rem -----------------------------------------------------------------------
-
-        echo !htm_sect! ^<a name="testsettings"^> Server and database settings ^</a^> !htm_secc! >> %htm_file%
-
-        %run_get_fb_ver% 1>%tmp_file% 2>&1
-
-        call :add_html_text tmp_file htm_file
-
-        del %tmp_file% 2>nul
-        (
-            echo set list on;
-            echo select
-            echo     p.fb_arch as fb_architecture
-            echo     ,mon$database_name as db_name
-            echo     ,iif(mon$forced_writes=0, '$css$warning$OFF', 'ON'^) as forced_writes
-            echo     ,mon$sweep_interval as sweep_int
-            echo     ,mon$page_buffers as page_buffers
-            echo     ,mon$page_size as page_size
-            echo from mon$database
-            echo left join sys_get_fb_arch('%usr%', '%pwd%'^) p on 1=1;
-        ) > %rpt%
-
-   
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-        del %rpt% 2>nul
-
-        echo !htm_sect! Test configuration settings !htm_secc! >> %htm_file%
-        echo File: %~dp0%cfg% >> %htm_file%
-        @rem ::: NB ::: Space + TAB should be inside `^[ ]` pattern!
-        @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-        (
-            set /a k=1
-            for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
-                if "%%a" neq "" (
-                    for /F "tokens=1-2 delims==" %%i in ("%%a") do (
-                      set par=%%i
-                      call :trim par !par!
-          
-                      if "%%j"=="" (
-                          set val=### NO VALUE defined ###
-                      ) else (
-                          for /F "tokens=1" %%p in ("!par!") do (
-                              set val=%%j
-                              call :trim val !val!
-                              set val=!val:'=''!
-                          )
-                      )
-                      if !k! gtr 1 echo union all
-                      echo select '!par!' as param_name, '!val!' as param_value from rdb$database
-                    )
-                )
-                @rem echo %%a
-                set /a k=!k!+1
-            )
-            if !k! gtr 1 echo ;
-        ) > %rpt%
-        @rem > %tmp_file%
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-
-        del %rpt% 2>nul
-        @rem call :add_html_text tmp_file htm_file
-        @rem del %tmp_file% 2>nul
-
+        @rem echo !htm_sect! !msg! !htm_secc! >> %htm_file%
+        echo !htm_sect! ^<a name="testsettings"^> !msg! ^</a^> !htm_secc! >> %htm_file%
     )
+
+    (
+        for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg% ^| sort') do (
+            if "%%a" neq "" (
+                for /F "tokens=1-2 delims==" %%i in ("%%a") do (
+                  set par=%%i
+                  call :trim par !par!
+      
+                  if "%%j"=="" (
+                      set val=### NO VALUE defined ###
+                  ) else (
+                      for /F "tokens=1" %%p in ("!par!") do (
+                          set val=%%j
+                          call :trim val !val!
+                          set val=!val:'=''!
+                      )
+                  )
+                  echo param=!par!, val=!val!
+                )
+            )
+        )
+    ) >>%tmp_file%
+
+    type !tmp_file! >> !log4all!
+    if .%make_html%.==.1. (
+        call :add_html_text tmp_file htm_file 0 null pre
+    )
+    del !tmp_file! 2>nul
+
     @rem RRRRRRRRRRRRRRRRRRR
-    @rem .%make_html%.==.1.
+
 
     @rem -----------------------------------------------------------------------
 
-    @echo %date% %time%. SID=1. Output test finish state...
+    call :sho "SID=%sid%. Obtain test finish state" %log4all%
     (
         echo.
         echo ##########################################
@@ -1210,20 +1541,8 @@ if .1.==.0. (
     ) >> %log4all%
 
     (
-        echo commit;
-        echo create or alter view tmp$for$report$only as
-        echo     select 
-        echo        p.exc_info as finish_state,
-        echo        p.dts_end, p.fb_gdscode, e.fb_mnemona, 
-        echo        coalesce(p.stack,''^) as stack,
-        echo        p.ip,p.trn_id, p.att_id,p.exc_unit
-        echo     from rdb$database r
-        echo     left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here TABLE "perf_log" table with VIEW "v_perf_log"
-        echo     left join fb_errors e on p.fb_gdscode = e.fb_gdscode
-        echo     order by p.dts_beg desc
-        echo     rows 1;
-        echo commit;
         echo set list on;
+        echo set echo on;
         echo select
         echo     x.finish_state
         echo    ,x.dts_end
@@ -1234,11 +1553,9 @@ if .1.==.0. (
         echo    ,x.trn_id 
         echo    ,x.att_id 
         echo    ,x.exc_unit
-        echo from tmp$for$report$only x
+        echo from z_finish_state x
         echo ;
-        echo commit;
     ) > %rpt%
-    @rem type %rpt% >>%log4all%
 
     set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
@@ -1248,110 +1565,116 @@ if .1.==.0. (
    
     if .%make_html%.==.1. (
         (
-          echo select
-          echo     iif(x.finish_state containing 'abnormal', '$css$error$', iif(x.finish_state containing 'premature', '$css$warning$', '$css$success$' ^) ^) ^|^| x.finish_state as finish_state
-          echo    ,x.dts_end
-          echo    ,x.fb_gdscode
-          echo    ,x.fb_mnemona
-          echo    ,x.stack
-          echo    ,x.ip 
-          echo    ,x.trn_id 
-          echo    ,x.att_id 
-          echo    ,x.exc_unit
-          echo from tmp$for$report$only x
-          echo ;
-          echo commit;
+          @rem Here we split patterns '$css$xxxxxxx' in order to prevent from undesirable indent for 2 characters when display result.
+          echo "set list on;"
+          echo "select"
+          echo "    iif( x.finish_state containing 'abnormal' or x.finish_state containing 'crash'"
+          echo "         ,'$css$' || 'error$'"
+          echo "         ,iif( x.finish_state containing 'premature'"
+          echo "               ,'$css$' || 'warning$'"
+          echo "               ,'$css$' || 'success$'"
+          echo "             )"
+          echo "       ) || x.finish_state as finish_state"
+          echo "   ,x.dts_end"
+          echo "   ,x.fb_gdscode"
+          echo "   ,x.fb_mnemona"
+          echo "   ,x.stack"
+          echo "   ,x.ip"
+          echo "   ,x.trn_id"
+          echo "   ,x.att_id"
+          echo "   ,x.exc_unit"
+          echo "from z_finish_state x"
+          echo ";"
+          echo "commit;"
         ) > !rpt!
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        call :remove_enclosing_quotes !rpt!
+
+        %run_repo% 1>%tmp_file% 2>&1
+        @rem .sh: add_html_text $tmpauxlog $phtm 0 "null" "pre"
+
+        @rem tmp_file=!%1!
+        @rem htm_file=!%2!
+        @rem add_br=%3
+        @rem line_prefix=%4
+        @rem use_style=%5
+        call :add_html_text tmp_file htm_file 0 null pre
+
+        del %tmp_file% 2>nul
+
+
     )
     del %rpt% 2>nul
 
-
     @rem ###################################
-    @rem do NOT disable when debug finished:
-    if .1.==.1. (
 
-        @rem TODO: put here commands for gathering hardware info when %gather_hardware_info%=1
+    set msg=Output workload related settings
+    echo.>>%log4all%
+    call :sho "SID=%sid%. !msg!" %log4all%
+    echo.>>%log4all%
 
-        (
-          echo.
-          echo #####################################################
-          echo ###  c u r r e n t    t e s t    s e t t i n g s  ###
-          echo #####################################################
-        ) >> %log4all%
+    if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> !msg! ^</a^> !htm_secc! >> %htm_file%
 
-        if .%make_html%.==.1. echo !htm_sect! ^<a name="testworkload"^> Workload settings ^</a^> !htm_secc! >> %htm_file%
+    (
 
-        (
+      echo set width working_mode 12;
+      echo set width setting 32;
+      echo set width val 30;
+      echo select 'WORKING_MODE' as setting_name, s.svalue as setting_value
+      echo from settings s
+      echo where s.working_mode = 'INIT' and s.mcode='WORKING_MODE'
+      echo UNION ALL
+      echo select s.mcode as setting, s.svalue as val
+      echo from settings s
+      echo join (
+      echo     select s.svalue as working_mode
+      echo     from settings s
+      echo     where s.working_mode = 'INIT' and s.mcode='WORKING_MODE'
+      echo      ^) w on s.working_mode = w.working_mode;
+    ) > %rpt%
 
-          echo set width working_mode 12;
-          echo set width setting 32;
-          echo set width val 30;
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
-          @rem           echo select 
-          @rem echo    s.working_mode as category, 
-          @rem echo    s.mcode as setting, 
-          @rem echo    s.svalue as val
-          @rem echo from settings s
-          @rem echo where s.working_mode='COMMON'
-          @rem echo union all
-          
-          echo select s.working_mode, s.mcode as setting, s.svalue as val
-          echo from settings s
-          echo join (
-          echo     select s.svalue as working_mode
-          echo     from settings s where s.working_mode = 'INIT'
-          echo ^) w on s.working_mode = w.working_mode;
+    type %rpt% >> %log4all%
+    %run_repo% 1>>%log4all% 2>&1
 
-        ) > %rpt%
+    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
 
-        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    del %rpt% 2>nul
 
-        echo Command for obtaining current test settings:>>%sts%
-        echo %run_repo%>>%sts%
-     
-        echo %date% %time%. SID=1. Output current database and test settings...
-        %run_repo% 1>>%log4all% 2>&1
+    (
+        echo set width tab_name 13;
+        echo set width idx_name 31;
+        echo set width idx_key 45;
+        echo select * from z_qd_indices_ddl;
+    ) > %rpt% 
 
-        if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
-        del %rpt% 2>nul
+    set msg=Indexes for heavy-loaded tables
 
-        @rem NORMALLY MUST BE DISABLED. ENABLE ONLY FOR DEBUG OR BENCHMARK PURPUSES
-        (
-            echo set width tab_name 13;
-            echo set width idx_name 31;
-            echo set width idx_key 45;
-            echo select * from z_qd_indices_ddl;
-        ) > %rpt% 
+    echo !msg!: >>%log4all%
+    if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> !msg! ^</a^> !htm_secc! >> %htm_file%
 
-        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+    %run_repo% 1>>%log4all% 2>&1
+    if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
 
-        set msg=Indexes for heavy-loaded tables
+    del %rpt% 2>nul
 
-        echo !msg!: >>%log4all%
-        if .%make_html%.==.1. echo !htm_sect! ^<a name="qdindexesddl"^> !msg! ^</a^> !htm_secc! >> %htm_file%
-
-        %run_repo% 1>>%log4all% 2>&1
-        if .%make_html%.==.1. call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-
-        del %rpt% 2>nul
-
-    )
-    @rem end of block for debug only
     @rem ###########################
+
 
     @rem ------------------------------------------------------------------------------
 
 
-    set msg=Final aggregation of data from PERF_FPLIT_nn tables to perf_agg
-    call :sho "SID=1. !msg!" %sts%
+    set msg=Final aggregation of data from PERF_SPLIT_nn tables to perf_agg
+    call :sho "SID=%sid%. !msg!" %log4all%
 
     @rem 18.03.2019
     (
         echo set list on;
         echo set echo on;
-        echo -- Final aggregation of data from PERF_FPLIT_nn tables to perf_agg:
+        echo -- Final aggregation of data from PERF_SPLIT_nn tables to perf_agg:
         echo commit;
         echo set transaction no wait;
         echo select * from srv_aggregate_perf_data( 1 ^); -- 1 = ignore stop-flag, do aggregation anyway.
@@ -1367,8 +1690,11 @@ if .1.==.0. (
     set t2=!time!
     set tdiff=0
     call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
-   
+
+    set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+    
+    call :sho "SID=%sid%. !tdmsg!" %log4all%
+
     @rem --------------------------------------------------------------------------
 
     (
@@ -1382,33 +1708,33 @@ if .1.==.0. (
    
     @rem --------------------------------------------------------------------------
 
-    set msg=Performance in TOTAL
-    call :sho "SID=1. Generating report '!msg!'" %sts%
+    set msg=Performance, TOTAL
+    call :sho "SID=%sid%. Generating report '!msg!'" %log4all%
     (
-      echo.
-      echo %msg%:
-      echo.
+        echo.
+        echo %msg%:
+        echo.
     ) >> %log4all%
 
     if .%make_html%.==.1. echo !htm_repn! ^<a name="perftotal"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
 
     (  
-      echo --  Get overall performance report for last 3 hours of activity:
-      echo --  Value in column "avg_times_per_minute" in 1st row is overall performance index.
-      echo.
-      echo set width action 35;
-      echo select 
-      echo     business_action as action
-      echo    ,avg_times_per_minute
-      echo    ,avg_elapsed_ms
-      echo    ,successful_times_done
-      echo from rdb$database
-      echo left join report_perf_total on 1=1;
-      echo commit;
-      @rem -- Result: table 'perf_log' contains overall performance value
-      @rem -- which can be found by query:
-      @rem -- select p.aux1 from perf_log p where p.unit = 'perf_watch_interval'
-      @rem -- order by dts_beg desc rows 1;
+        echo --  Get overall performance report for last 3 hours of activity:
+        echo --  Value in column "avg_times_per_minute" in 1st row is overall performance index.
+        echo.
+        echo set width action 35;
+        echo select 
+        echo     business_action as action
+        echo    ,avg_times_per_minute
+        echo    ,avg_elapsed_ms
+        echo    ,successful_times_done
+        echo from rdb$database
+        echo left join report_perf_total on 1=1;
+        echo commit;
+        @rem -- Result: table 'perf_log' contains overall performance value
+        @rem -- which can be found by query:
+        @rem -- select p.aux1 from perf_log p where p.unit = 'perf_watch_interval'
+        @rem -- order by dts_beg desc rows 1;
     ) > %rpt%
 
     type %rpt% >>%log4all%
@@ -1422,83 +1748,41 @@ if .1.==.0. (
     set t2=!time!
     set tdiff=0
     call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+    set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+    call :sho "SID=%sid%. !tdmsg!" %log4all%
 
     if .%make_html%.==.1. (
+        call :sho "SID=%sid%. Output to .html file" %log4all%
+        (
+            echo draw_func_name=perf_total_chart
+            echo href_name=perf_total_chart
+            echo href_title=Performance in TOTAL, chart
+            echo x_axis_field=action
+            echo y_fields_list=successful_times_done;
+            echo y_format_list=pattern:'0';
+            echo x_values_skip_pattern=OVERALL
+            echo chart_type=PieChart
+            echo chart_div_wid=1100
+            echo chart_div_hei=700
+		) > !tmpcharts!
+
         set t1=!time!
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-        set t2=!time!
-        set tdiff=0
-        call :timediff "!t1!" "!t2!" tdiff
-        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-        call :add_html_text tmp_file htm_file
-    )
-
-    del %rpt% 2>nul
-
-    @rem --------------------------------------------------------------------------
-
-    set msg=Performance in DYNAMIC
-    call :sho "SID=1. Generating report '!msg!'" %sts%
-    (
-      echo.
-      echo %msg%:
-      echo.
-    ) >> %log4all%
-
-    if .%make_html%.==.1. echo !htm_repn! ^<a name="perfdynam"^> %msg%: ^</a^> !htm_repc!>> %htm_file%
-
-    (
-      echo -- Get performance score for N equal time intervals, where N is defined by value 'test_intervals' config parameter:
-      echo set width action 24; 
-      echo set width itrv_no  7;
-      echo set width itrv_beg 8;         
-      echo set width itrv_end 8;         
-      echo select cast(interval_no as smallint^) as itrv_no
-      echo       ,cnt_ok_per_minute
-      echo       ,cnt_all
-      echo       ,cnt_ok
-      echo       ,cnt_err
-      echo       ,cast(err_prc as numeric(8,2^)^) as err_prc
-      echo       ,substring(cast(interval_beg as varchar(24^)^) from 12 for 8^) itrv_beg 
-      echo       ,substring(cast(interval_end as varchar(24^)^) from 12 for 8^) itrv_end 
-      echo from rdb$database 
-      echo left join report_perf_dynamic p on 1=1 -- number of intervals is defined by test config parameter
-      echo ;
-      echo commit;
-    ) > %rpt%
-    
-    type %rpt% >>%log4all%
-
-    set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
-    set t1=!time!
-
-    %run_repo% 1>>%log4all% 2>&1
-
-    set t2=!time!
-    set tdiff=0
-    call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
-
-    if .%make_html%.==.1. (
-        set t1=!time!
-
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+        @rem                  1    2      3      4     5     6         7
 
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff
-        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-        call :add_html_text tmp_file htm_file
+        set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+        call :sho "SID=%sid%. !tdmsg!" %log4all%
+        echo !br! !tdmsg! >> !htm_file!
     )
     del %rpt% 2>nul
-
-
 
     @rem --------------------------------------------------------------------------
 
     set msg=Performance for every MINUTE
-    call :sho "SID=1. Generating report '!msg!'" %sts%
+    call :sho "SID=1. Generating report '!msg!'" %log4all%
     (
       echo.
       echo %msg%:
@@ -1518,8 +1802,14 @@ if .1.==.0. (
         echo     test_phase_name
         echo     ,minutes_passed
         echo     ,perf_score
-        echo     ,distinct_workers
-        echo from report_perf_per_minute; -- since 27.03.2019
+        echo from report_perf_per_minute
+        echo where test_phase_name = 'TEST_TIME' -- remove 'WARM_TIME' phase in order to draw ONE line in chart
+        @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+        @rem echo UNION ALL select 'test_time', row_number(^)over(^), cast(10000+rand(^)*500 as int^) from rdb$types rows 20
+        @rem echo UNION ALL select 'test_time', 1, cast(10000+rand(^)*500 as int^) from rdb$database
+        @rem echo UNION ALL select 'test_time', 2, cast(10000+rand(^)*500 as int^) from rdb$database
+        @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+        echo ;
         echo commit;
     ) > %rpt%
 
@@ -1534,24 +1824,47 @@ if .1.==.0. (
     set t2=!time!
     set tdiff=0
     call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+    call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
     if .%make_html%.==.1. (
+        call :sho "SID=%sid%. Output to .html file" %log4all%
+        (
+            echo draw_func_name=perf_m1_chart
+            echo href_name=perf_m1_chart
+            echo href_title=Performance per minute, chart
+            echo axis_color=DarkBlue
+            echo x_axis_field=minutes_passed
+            echo x_axis_title=minute
+            echo y_fields_list=perf_score
+            echo y_format_list=pattern:'0'
+            echo y_colors_list=Blue
+            echo y_legends_list=performance: number of successfully completed business actions per minute.
+            echo chart_div_wid=1400
+            echo point_size=3
+            echo chart_area_options={ left:60, top:25 }
+            @rem DO NOT: echo y_scale_type=log
+		) > !tmpcharts!
+
         set t1=!time!
-        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+        @rem                  1    2      3      4     5     6         7
+
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff
-        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-        call :add_html_text tmp_file htm_file
+        set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+        call :sho "SID=%sid%. !tdmsg!" %log4all%
+        echo !br! !tdmsg! >> !htm_file!
     )
 
     del %rpt% 2>nul
 
+
     @rem --------------------------------------------------------------------------
     if .%trc_unit_perf%.==.1. (
         set msg=Performance from TRACE for ISQL instance #1
-        call :sho "SID=1. Generating report '!msg!'" %sts%
+        call :sho "SID=1. Generating report '!msg!'" %log4all%
 
         if .%make_html%.==.1. echo !htm_repn! ^<a name="perftrace"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
 
@@ -1603,18 +1916,21 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
         if .%make_html%.==.1. (
-            set t1=!time!
+    
+            call :sho "SID=%sid%. Output to .html file" %log4all%
 
+            set t1=!time!
             call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
 
             set t2=!time!
             set tdiff=0
             call :timediff "!t1!" "!t2!" tdiff
-            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-            call :add_html_text tmp_file htm_file
+            set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+            call :sho "SID=%sid%. !tdmsg!" %log4all%
+            echo !br! !tdmsg! >> !htm_file!
         )
         del %rpt% 2>nul
 
@@ -1635,7 +1951,7 @@ if .1.==.0. (
 
 
     set msg=Performance in DETAILS
-    call :sho "SID=1. Generating report '!msg!'" %sts%
+    call :sho "SID=1. Generating report '!msg!'" %log4all%
     (
       echo.
       echo %msg%:
@@ -1686,9 +2002,11 @@ if .1.==.0. (
     set t2=!time!
     set tdiff=0
     call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+    call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
     if .%make_html%.==.1. (
+        call :sho "SID=%sid%. Output to .html file" %log4all%
+
         set t1=!time!
 
         call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
@@ -1696,8 +2014,9 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff
-        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-        call :add_html_text tmp_file htm_file
+        set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+        call :sho "SID=%sid%. !tdmsg!" %log4all%
+        echo !br! !tdmsg! >> !htm_file!
     )
     del %rpt% 2>nul
 
@@ -1706,7 +2025,7 @@ if .1.==.0. (
     if .%mon_unit_perf%.==.1. (
 
         set msg=Monitoring data, per application UNITS
-        call :sho "SID=1. Generating report '!msg!'" %sts%
+        call :sho "SID=1. Generating report '!msg!'" %log4all%
         (
           echo.
           echo #####################################################################
@@ -1722,7 +2041,9 @@ if .1.==.0. (
           echo parameter 'mon_unit_perf' has value 1.
         ) >> %log4all%
 
-        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+        if .%make_html%.==.1. (
+            echo !htm_repn! ^<a name="perfmon4unit"^> !msg!: ^</a^> !htm_repc! >>%htm_file%
+        )
 
         (
             echo set width unit 31;
@@ -1742,22 +2063,443 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
         if .%make_html%.==.1. (
-            set t1=!time!
-            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-            set t2=!time!
-            set tdiff=0
-            call :timediff "!t1!" "!t2!" tdiff
-            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-            call :add_html_text tmp_file htm_file
+
+            @rem ::::::::::::::::::::::::::::::: 1a:  reads vs fetches ::::::::::::::::::::::::::::::::
+
+            call :sho "SID=%sid%. Report '!msg!': draw chart for reads and fetches" %log4all%
+
+            (
+                echo set width unit 31;
+                echo select
+			    echo     z.unit
+			    echo     ,z.avg_reads
+			    echo     ,z.avg_fetches
+                echo from rdb$database
+                echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast(10000+rand(^)*5000 as int^), cast(1000+rand(^)*3000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Performance: reads and fetches, average
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_reads_fetches_chart
+			    echo href_name=mon_reads_fetches_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_reads;      avg_fetches
+			    echo y_format_list=pattern:'0.00'; pattern:'0.00'
+			    echo y_colors_list=Teal;           DeepSkyBlue
+			    echo y_legends_list=Average reads; Average fetches
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+			) > !tmpcharts!
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+			@rem ::::::::::::::::::::::::::::: 1b: writes vs marks :::::::::::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw chart for writes and marks" %log4all%
+            (
+                echo set width unit 31;
+                echo select
+			    echo     z.unit
+			    echo     ,z.avg_writes
+			    echo     ,z.avg_marks
+                echo from rdb$database
+                echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast(200+rand(^)*200 as int^), cast(2000+rand(^)*2000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Performance: writes and marks, average
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_writes_marks_chart
+			    echo href_name=mon_writes_marks_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_writes;      avg_marks
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00'
+			    echo y_colors_list=DarkMagenta;     HotPink
+			    echo y_legends_list=Average writes; Average marks
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+			) > !tmpcharts!
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+            @rem :::::::::::::::::::::::::: 2a: page cache usage  :::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw page cache usage" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,1.0000*(z.avg_reads / z.avg_fetches^) as "reads / fetches"
+			    echo     ,1.0000*(z.avg_writes / z.avg_marks^) as "writes / marks"
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( rand(^) as numeric(10,4^)^), cast( rand(^) as numeric(10,4^)^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+    
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Performance: avg. ratio of page cache misses (0: good, 1: poor^)
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_page_cache_usage_chart
+			    echo href_name=mon_page_cache_usage_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=reads / fetches;           writes / marks
+			    echo y_format_list=pattern:'0.0000';          pattern:'0.0000'
+			    echo y_colors_list=DarkCyan;                  DarkOrchid
+			    echo y_legends_list=Average reads/fetches;    Average writes/marks
+			    @rem DO NOT: y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+            ) > !tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+            @rem :::::::::::::::::::::::::: 2b: memory usage  :::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw memory usage" %log4all%
+            (
+			    echo -- ATTENTION: counters in the MON$MEMORY_USAGE are *not* cumulative,
+			    echo -- their values are like 'snapshots' and represent current memory consumption.
+			    echo -- Delta between start and end of some query has no sense, we have to get only
+			    echo -- value that was gathered at the FINAL of business action /i.e. after it ended but before commit/.
+			    echo -- See SP SRV_FILL_MON: we take in account only values that was at the END of action and ignore
+			    echo -- starting values with t.mult=-1: select ... max( nullif(t.mult,-1^) * t.mem_...^) ...
+		        echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,z.avg_mem_used
+			    echo     ,z.avg_mem_alloc
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 100000+rand(^)*50000 as int^), cast(200000+rand(^)*50000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+			    echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=OS memory consumption, average at the end of each business action
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_os_memory_usage_chart
+			    echo href_name=mon_os_memory_usage_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_mem_used;              avg_mem_alloc
+			    echo y_format_list=pattern:'0';               pattern:'0'
+			    echo y_colors_list=RosyBrown;                 DarkOrange
+			    echo y_legends_list=Avg memory_used;          Avg memory_allocated
+			    @rem DO NOT y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:120, right:5, width:"100%" }
+			    echo point_size=3
+			) > !tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+            @rem :::::::::::::::::::::::::: 3a: scans, absolute values: sequential and indexed  :::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw number of sequential and indexed scans" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,z.avg_seq
+			    echo     ,z.avg_idx
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 10000 + 5000*rand(^) as numeric(10,4^)^), cast( 50000 + 25000*rand(^) as numeric(10,4^)^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Performance: sequential and indexed scans, average
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_seq_idx_chart
+			    echo href_name=mon_seq_idx_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_seq;         avg_idx
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00'
+			    echo y_colors_list=DarkRed;         DarkCyan
+			    echo y_legends_list=Average sequential reads; Average indexed reads
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+			) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+            @rem :::::::::::::::::::::::::: 3b: scans, absolute values: repeatable, backvers. and fragmented records  :::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw number of repeatable, backversion and fragmented records scan" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,z.avg_rpt -- monrecord_stats.monrecord_rpt_reads
+			    echo     ,z.avg_bkv -- monrecord_stats.monbackversion_reads -- since rev. 60012, 28.08.2014 19:16
+			    echo     ,z.avg_frg -- monrecord_stats.monfragment_reads
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 100000+rand(^)*50000 as int^), cast(200000+rand(^)*100000 as int^), cast(300000+rand(^)*150000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Avg number of: repeatable, back version and fragmented record scans
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_rbf_chart
+			    echo href_name=mon_rbf_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_rpt;         avg_bkv;           avg_frg
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00';    pattern:'0.00'
+			    echo y_colors_list=BlueViolet;      DarkGoldenRod;     Silver
+			    echo y_legends_list=Avg. repeatable scans; Avg. back versions scans; Avg. fragmented scans
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+			) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+            @rem :::::::::::::::::::::::::  4a:  scans, ratios  :::::::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw scan ratios" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,avg_bkv_per_rec &:: numeric 12,4, see: mon_log.bkv_per_seq_idx_rpt, computed by: bkv_reads / [rec_seq_reads + rec_idx_reads + rec_rpt_reads]
+			    echo     ,avg_frg_per_rec &:: numeric 12,4, see: mon_log.frg_per_seq_idx_rpt, computed by: frg_reads / [rec_seq_reads + rec_idx_reads + rec_rpt_reads]
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( rand(^) as numeric(12,4^)^), cast( rand(^) as numeric(12,4^)^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Avg. ratio of: 1. back_vers_scans / total_scans,  2. fragmented_record_scans / total_scans
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_bkv_frg_ratio_chart
+			    echo href_name=mon_rbf_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_bkv_per_rec;  avg_frg_per_rec
+			    echo y_format_list=pattern:'0.0000'; pattern:'0.0000'
+			    echo y_colors_list=PaleGoldenRod;    Orchid
+			    echo y_legends_list=Avg. back_vers_scans / total_scans; Avg. fragm_rec_scans / total_scans
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+            ) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+			@rem :::::::::::::::::::::::   4b:  modifications   ::::::::::::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw modifications statistics" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,avg_ins
+			    echo     ,avg_upd
+			    echo     ,avg_del
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 100000+rand(^)*50000 as int^), cast(200000+rand(^)*100000 as int^), cast(300000+rand(^)*150000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Avg. number of inserts, updates and deletes
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_ins_upd_del_chart
+			    echo href_name=mon_iud_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_ins;         avg_upd;         avg_del
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00';  pattern: '0.00'
+			    @rem echo y_format_list=pattern:'0.00';  pattern:'0.00';  pattern:'0.00'
+			    echo y_colors_list=Turquoise;       PeachPuff;       Maroon
+			    echo y_legends_list=Avg. inserts; Avg. updates ; Avg. deletes
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+            ) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+			@rem ....................
+			echo ^<br^> >> !htm_file!
+			@rem ....................
+
+
+			@rem ::::::::::::::::::::::::::  5a: garbage-related processing ::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw garbage-related statistics" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,avg_bko
+			    echo     ,avg_pur
+			    echo     ,avg_exp
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 100000+rand(^)*50000 as int^), cast(200000+rand(^)*100000 as int^), cast(300000+rand(^)*150000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Avg. number of backouts, purges and expunges
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_bko_pur_exp_chart
+			    echo href_name=mon_bpx_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_bko;         avg_pur;         avg_exp
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00';  pattern:'0.00'
+			    echo y_colors_list=Violet;          Coral ;          Gray
+			    echo y_legends_list=Avg. backouts;  Avg. purges ; Avg. expunges
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+            ) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+			@rem ::::::::::::::::::::   5b: record-level lock and conflicts  ::::::::::::::::::
+            call :sho "SID=%sid%. Report '!msg!': draw record-level lock and conflicts" %log4all%
+            (
+                echo set width unit 31;
+			    echo select
+			    echo     z.unit
+			    echo     ,z.avg_locks
+			    echo     ,z.avg_confl
+			    echo from rdb$database
+			    echo left join report_stat_per_units z on 1=1
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                @rem echo UNION ALL select unit, cast( 100000+rand(^)*50000 as int^), cast(200000+rand(^)*100000 as int^) from business_ops
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+			    echo ;
+                echo commit;
+            ) > %rpt%
+
+            (
+			    echo chart_only_show=1
+			    echo chart_type=ColumnChart
+			    echo chart_title=Performance: record-level locks and conflicts, average
+			    echo chart_inline_block=1
+			    echo draw_func_name=mon_lock_and_conflict_chart
+			    echo href_name=mon_lock_and_conflict_chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=unit
+			    echo x_axis_title=action
+			    echo y_fields_list=avg_locks;       avg_confl
+			    echo y_format_list=pattern:'0.00';  pattern:'0.00'
+			    echo y_colors_list=DarkOrange;      Yellow
+			    echo y_legends_list=Average record locks; Average lock-conflicts
+			    echo y_scale_type=log
+			    echo chart_div_wid=550
+			    echo chart_area_options={ left:90, right:5, width:"100%" }
+			    echo point_size=3
+            ) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+			@rem ....................
+			echo ^<br^> >> !htm_file!
+			@rem ....................
+        
         )
+        @rem make_html==1
+
         del %rpt% 2>nul
     
         if NOT .%fb%.==.25. (
             set msg=Monitoring data, per TABLES and application UNITS
-            call :sho "SID=1. Generating report '!msg!'" %sts%
+            call :sho "SID=1. Generating report '!msg!'" %log4all%
             (
               echo.
               echo ######################################################################
@@ -1793,16 +2535,21 @@ if .1.==.0. (
             set t2=!time!
             set tdiff=0
             call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-            echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+            call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
             if .%make_html%.==.1. (
+                
+                call :sho "SID=%sid%. Output to .html file" %log4all%
+
                 set t1=!time!
                 call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
                 set t2=!time!
                 set tdiff=0
                 call :timediff "!t1!" "!t2!" tdiff
-                echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-                call :add_html_text tmp_file htm_file
+                set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+                call :sho "SID=%sid%. !tdmsg!" %log4all%
+                echo !br! !tdmsg! >> !htm_file!
             )
             del %rpt% 2>nul
 
@@ -1812,7 +2559,7 @@ if .1.==.0. (
     ) else if .%mon_unit_perf%.==.2. (
 
         set msg=Monitoring metadata cache size
-        call :sho "SID=1. Generating report '!msg!'" %sts%
+        call :sho "SID=1. Generating report '!msg!'" %log4all%
 
         if .%make_html%.==.1. (
             echo !htm_sect! ^<a name="perfmon4meta"^> !msg!: ^</a^> !htm_secñ! >>%htm_file%
@@ -1870,30 +2617,48 @@ if .1.==.0. (
 
         (
             echo.
-            if .1.==.1. (
-                @rem 22.04.2019: do NOT use spaces alias for 1st column of resultset otherwise routine 'add_html_table' 
-                @rem will not properly define 'fld_first' for this case and table will not have <TR> and </TR> tags!
-                @rem TODO: fix it later.
+
+            echo select
+            echo     substring(measurement_timestamp from 12 for 8^) as "measure time" -- 21.04.2019 do NOT use alias with SPACES for the 1st field of resultset!
+            echo     ,measurement_elapsed_ms as "measurement duration ms"
+            echo     ,page_cache_memo_used as "page cache memo used"
+            echo     ,memo_used_all as "memo used, total"
+            echo     ,memo_allo_all as "memo allocated, total"
+            echo     ,metadata_cache_memo_used as "metadata cache"
+            echo     ,metadata_cache_percent_of_total as "metadata cache percent of total"
+            echo     ,total_attachments_cnt as "total attachments cnt"
+            echo     ,active_attachments_cnt as "active attachments cnt"
+            echo     ,running_statements_cnt as "running statements cnt"
+            echo     ,stalled_statements_cnt as "stalled statements cnt"
+            echo     ,memo_used_by_attachments as "memo used by attachments"
+            echo     ,memo_used_by_transactions as "memo used by transactions"
+            echo     ,memo_used_by_statements as "memo used by statements"
+            echo from report_cache_dynamic d
+            if .1.==.0. (
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                echo UNION ALL
                 echo select
-                echo     measurement_timestamp as "measurement_dts" -- 21.04.2019 do NOT use alias with SPACES for the 1st field of resultset!
-                echo     ,measurement_elapsed_ms as "measurement duration ms"
-                echo     ,page_cache_memo_used as "page cache memo used"
-                echo     ,metadata_cache_memo_used as "metadata cache memo used"
-                echo     ,metadata_cache_percent_of_total as "metadata cache percent of total"
-                echo     ,total_attachments_cnt as "total attachments cnt"
-                echo     ,active_attachments_cnt as "active attachments cnt"
-                echo     ,running_statements_cnt as "running statements cnt"
-                echo     ,stalled_statements_cnt as "stalled statements cnt"
-                echo     ,memo_used_by_attachments as "memo used by attachments"
-                echo     ,memo_used_by_transactions as "memo used by transactions"
-                echo     ,memo_used_by_statements as "memo used by statements"
-                echo from report_cache_dynamic d;
-            ) else (
-                echo select d.*
-                echo from report_cache_dynamic d;
+                echo     substring(dateadd(row_number(^)over(^) minute to cast('19.10.2020 00:00:00' as timestamp^)^) from 12 for 8^)
+                echo     ,cast(10000 + rand(^)*2000 as int^)
+                echo     ,cast(10000 + rand(^)*20000 as int^)
+                echo     ,cast(10000 + rand(^)*20000 as int^)
+                echo     ,cast(10000 + rand(^)*2000 as int^)
+                echo     ,cast(10000 + rand(^)*20000 as int^)
+                echo     ,cast(10000 + rand(^)*200000 as int^)
+                echo     ,cast(10000 + rand(^)*2000 as int^)
+                echo     ,cast(10000 + rand(^)*20000 as int^)
+                echo     ,cast(10000 + rand(^)*200000 as int^)
+                echo     ,cast(10000 + rand(^)*2000 as int^)
+                echo     ,cast(10000 + rand(^)*20000 as int^)
+                echo     ,cast(10000 + rand(^)*200000 as int^)
+                echo     ,cast(10000 + rand(^)*2000 as int^)
+                echo from rdb$types rows 50
+                @rem #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
             )
+            echo ;
             echo commit;
         ) > %rpt%
+
 
         type %rpt% >>%log4all%
         set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
@@ -1905,45 +2670,149 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
+
         if .%make_html%.==.1. (
+    
+            call :sho "SID=%sid%. Output to .html file" %log4all%
+
             set t1=!time!
             call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
             set t2=!time!
             set tdiff=0
             call :timediff "!t1!" "!t2!" tdiff
-            echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-            call :add_html_text tmp_file htm_file
+
+            set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+            call :sho "SID=%sid%. !tdmsg!" %log4all%
+            echo !br! !tdmsg! >> !htm_file!
+
+
+            @rem :::::::::::::::: mon_unit=2, chart 1: total memory consumption for DB level
+
+            call :sho "SID=%sid%. Report '!msg!': draw total memory consumption for DB level" %log4all%
+
+            (
+			    echo draw_func_name=perf_memo_consumption_chart
+			    echo chart_only_show=1
+			    echo href_name=perf_memo_consumption_chart
+			    echo href_title=Memory consumption, total, chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=measure time
+			    echo x_axis_title=timestamp
+			    echo y_fields_list=memo used, total;          memo allocated, total
+			    echo y_colors_list=Aqua;                      Blue
+			    echo y_legends_list=memory used for DB level; memo allocated for DB level
+			    echo y_format_list=pattern:'0';               pattern:'0'
+			    echo y_list_delimiter=;
+			    @rem do NOT y_scale_type=log
+			    echo chart_div_hei=500
+			    echo chart_div_wid=1300
+			    echo point_size=3
+			    echo x_axis_slanted_labels=true
+			    echo chart_area_options={ left:90, top:25 }
+			) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+            @rem :::::::::::::::: mon_unit=2, chart 2: metadata cache size and memory consumed by attachments, transactions and statements
+            @rem NB: we use the same SQL here but show other columns than in previous chart.
+
+            call :sho "SID=%sid%. Report '!msg!': draw metadata cache size and memory consumed by attachments, transactions and statements" %log4all%
+
+            (
+			    echo draw_func_name=perf_metadata_cache_chart
+			    echo chart_only_show=1
+			    echo href_name=perf_metadata_cache_chart
+			    echo href_title=Metadata cache size, chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=measure time
+			    echo x_axis_title=timestamp
+			    echo y_fields_list=metadata cache;  memo used by attachments;  memo used by transactions;  memo used by statements
+			    echo y_colors_list=DarkCyan;        Red;                       Green;                      BlueViolet
+			    echo y_legends_listmetadata cache;  memory for attachments;    memory for transactions;    memory for statements
+			    echo y_format_list=pattern:'0';     pattern:'0';               pattern:'0';                pattern:'0'
+			    echo y_list_delimiter=;
+			    echo y_scale_type=log
+			    echo y_leg_maxlines=2
+			    echo chart_div_hei=500
+			    echo chart_div_wid=1300
+			    echo point_size=3
+			    echo x_axis_slanted_labels=true
+			    echo chart_area_options={ left:90, top:25 }
+			) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
+
+
+            @rem :::::::::::::::: mon_unit=2, chart 3: number of active attachments, running and stalled statements
+            @rem NB: we use the same SQL here but show other columns than in previous chart.
+
+            call :sho "SID=%sid%. Report '!msg!': draw number of active attachments, running and stalled statements" %log4all%
+            
+            (
+			    echo draw_func_name=perf_attachments_activity_chart
+			    echo chart_only_show=1
+			    echo href_name=perf_attachments_activity_chart
+			    echo href_title=Statements activity, chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=measure time
+			    echo x_axis_title=timestamp
+			    echo y_fields_list=total attachments cnt; running statements cnt; stalled statements cnt
+			    echo y_colors_list=Red;                   Green;                  BlueViolet
+			    echo y_legends_list=total attachments count;running statements count;stalled statements count
+			    echo y_list_delimiter=;
+			    echo chart_div_hei=500
+			    echo chart_div_wid=1300
+			    echo point_size=3
+			    echo x_axis_slanted_labels=true
+			    echo chart_area_options={ left:60, top:25 }
+            ) >!tmpcharts!
+
+            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+            @rem                  1    2      3      4     5     6         7
+
         )
         del %rpt% 2>nul
     
     )
     @rem .%mon_unit_perf%.==.1.  or ==.2. or ==.0.
 
-    if not .%mon_unit_perf%.==.1. (
-        set msg=Statistics was not gathered. To get PERFORMANCE FOR UNITS data change config parameter mon_unit_perf to 1.
-        (
-          echo.
-          echo %msg%:
-          echo.
-        ) >> %log4all%
-        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
-    )
-    if not .%mon_unit_perf%.==.2. (
-        set msg=Statistics was not gathered. To get METADATA CACHE dynamics: change 'mon_unit_perf' to 2; ensure that UDF for delay exists, see 'sleep_ddl'.
-        (
-          echo.
-          echo %msg%:
-          echo.
-        ) >> %log4all%
-        if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+    if .%mon_unit_perf%.==.0. (
+        @rem NOP
+    ) else (
+        set prefix_msg=Monitoring statistics related to
+        set suffix_msg=was not gathered, see config parameter 'mon_unit_perf'
+        if not .%mon_unit_perf%.==.1. (
+            set msg= !prefix_msg! performance for units !suffix_msg!.
+            (
+              echo.
+              echo %msg%:
+              echo.
+            ) >> %log4all%
+            if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4unit"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+        )
+        if not .%mon_unit_perf%.==.2. (
+            set msg=!prefix_msg! memory consumption, attachments and statements activity !suffix_msg!.
+            (
+              echo.
+              echo %msg%:
+              echo.
+            ) >> %log4all%
+            if .%make_html%.==.1. echo !htm_repn! ^<a name="perfmon4meta"^> !msg! ^</a^> !htm_repc! >>%htm_file%
+        )
     )
 
+    del !tmpcharts! 2>nul
 
     @rem ------------------------------------------------------------------------------
 
     set msg=Exceptions occured during test work
-    call :sho "SID=1. Generating report '!msg!'" %sts%
+
+    call :sho "SID=1. Generating report '!msg!'" %log4all%
     (
       echo.
       echo #########################################################
@@ -1954,7 +2823,6 @@ if .1.==.0. (
     
     (
       echo.
-      echo set width fb_mnemona 31;
       echo set width unit 40;
       echo select fb_mnemona, cnt, unit, fb_gdscode                                  
       echo from rdb$database
@@ -1971,10 +2839,11 @@ if .1.==.0. (
     set t2=!time!
     set tdiff=0
     call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-    echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
-
+    call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
     if .%make_html%.==.1. (
+        call :sho "SID=%sid%. Output to .html file" %log4all%
+
         echo !htm_repn! ^<a name="exceptions"^> %msg%: ^</a^> !htm_repc! >>%htm_file%
         set t1=!time!
 
@@ -1983,14 +2852,17 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff
-        echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-        call :add_html_text tmp_file htm_file
+
+        set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+        call :sho "SID=%sid%. !tdmsg!" %log4all%
+        echo !br! !tdmsg! >> !htm_file!
     )
+
     del %rpt% 2>nul
 
     @rem ---------------------------------------------------------------------------
 
-    set msg=MON$DATABASE and FB VERSION info
+    set msg=MON$DATABASE data and server version
     (
         echo.
         echo %msg%:
@@ -2012,7 +2884,7 @@ if .1.==.0. (
     if .%make_html%.==.1. (
         echo !htm_sect! ^<a name="fbdbinfo"^> %msg% !htm_secc! ^</a^> >>%htm_file%
 
-        call :add_html_text tmp_file htm_file
+        call :add_html_text tmp_file htm_file 0 null pre
     )
 
     echo show version; > %rpt%
@@ -2021,7 +2893,7 @@ if .1.==.0. (
     %run_repo% 1>%tmp_file% 2>&1
     type %tmp_file% >>%log4all%
     if .%make_html%.==.1. (
-        call :add_html_text tmp_file htm_file
+        call :add_html_text tmp_file htm_file 0 null pre
     )
 
     del %rpt% 2>nul
@@ -2035,10 +2907,12 @@ if .1.==.0. (
 
     @rem ------------------------------------------------------------------------------
 
+:DEBUG_P1
+
     if .%run_db_statistics%.==.1. (
 
         set msg=Database statistics, full
-        call :sho "SID=1. !msg!" %sts%
+        call :sho "SID=1. !msg!" %log4all%
 
         (
            echo.
@@ -2060,17 +2934,29 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%tmp_file%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%tmp_file% 2>&1
-
         type %tmp_file% >>%log4all%
 
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
+
         if .%make_html%.==.1. (
+            call :sho "SID=%sid%. Output to .html file" %log4all%
             echo !htm_sect! ^<a name="dbstatistics"^> !msg! ^</a^> !htm_secc!>>%htm_file%
+            set t1=!time!
+            
             call :add_html_text tmp_file htm_file 1 null monosp
+
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff
+
+            set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+            call :sho "SID=%sid%. !tdmsg!" %log4all%
+            echo !br! !tdmsg! >> !htm_file!
+
         )
 
-        set msg=Analyzing DB stat log: obtaining values of total records and versions
-        call :sho "SID=1. !msg!" %sts%
+        set msg=Record versions statistics
+        call :sho "SID=1. !msg!" %log4all%
 
         copy %tmp_file% %rpt% >nul
 
@@ -2102,64 +2988,65 @@ if .1.==.0. (
                       echo !line! | findstr /c:"total versions:" >nul
                       if not errorlevel 1 (
                         @rem echo !line!
-                        @rem Average version length: 0.00, total versions: 0, max versions: 0
-                        for /f "tokens=7 delims=, " %%a in ("!line!") do (
+
+                        @rem 2.5: Average version length:  9.00, total versions:   33, max versions: 18
+                        @rem 3.0: Average version length: 17.79, total versions: 9057, max versions: 31
+                        @rem      ---------------------------------------------------------------------
+                        @rem        1        2      3       4      5       6      7     8      9     10
+
+                        for /f "tokens=7,10 delims=, " %%a in ("!line!") do (
                           set /a vers=%%a
+                          set /a maxv=%%b
                         )
-                        @rem echo recs=!recs! vers=!vers!
-                        if not .!recs!.==.0. (
-                          set /a vprc=!vers!*100/!recs!
-                          @rem echo vprc=!vprc!
-                          if !vprc! gtr 9 (
-                            set line=!line!. Versions ratio: !vprc!%%
-                            @rem echo !line!
-                          )
-                        )
-                        @rem echo tabn=!tabn! recs=!recs! vers=!vers! vprc=!vprc!%%
-                        @rem echo insert into perf_log(unit, table_name, rec_inserts, rec_updates^) values('!tabn!', !recs!, !vers!^);
-    
-                        echo insert into mon_log_table_stats(id, rowset, table_name, rec_inserts, rec_updates^) 
-                        echo values( -gen_id(g_common,1^), -current_connection, '!tabn!', !recs!, !vers!^); -- NB: 'rowset' is INDEXED field.
+   
+                        @rem 'rowset' is INDEXED field.
+                        echo insert into mon_log_table_stats(id, rowset, table_name, rec_inserts, rec_updates, rec_deletes^) 
+                        echo values( -gen_id(g_common,1^), -current_connection, '!tabn!', !recs!, !vers!, !maxv!^);
                       )
                    )
                 )
             
             )
-            echo set heading off;
-            echo select -current_connection from rdb$database; -- this will be saved into script env. variable 'xrowset', see below
-            echo set heading on;
+            echo set list on;
+            echo select -current_connection as rowset from rdb$database; -- this will be saved into script env. variable 'xrowset', see below
             echo commit;
         ) >%rpt%
 
         set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
         
         %run_repo% 1>%tmp_file% 2>&1
-        
-        for /f %%x in (%tmp_file%) do set xrowset=%%x
+
+        for /f "tokens=2" %%x in ('findstr /i /c:"rowset " %tmp_file%') do (
+            set xrowset=%%x
+        )
 
         (
-          echo commit;
-          echo create or alter view tmp$for$report$only as
-          echo select
-          echo     t.table_name
-          echo     ,t.rec_inserts as total_recs
-          echo     ,t.rec_updates as total_vers
-          echo     ,cast( 100.0000 * t.rec_updates / t.rec_inserts  as numeric(14,4^)^) as vers_percent
-          echo from mon_log_table_stats t
-          echo where 
-          echo    t.rowset=!xrowset!
-          echo    and t.rec_inserts ^> 0
-          echo order by t.table_name;
-          echo commit;
-          echo set width table_name 31;
-          echo select * from tmp$for$report$only; 
-          echo commit;
-        ) > %rpt%
+            echo "commit;"
+            echo "create or alter view tmp$for$report$only as"
+            echo "select"
+            echo "    t.table_name"
+            echo "    ,t.rec_inserts as total_recs"
+            echo "    ,t.rec_updates as total_vers"
+            echo "    ,t.rec_deletes as max_versions"
+            echo "    ,cast( 100.0000 * coalesce( t.rec_updates / nullif(t.rec_inserts,0), 0) as numeric(14,4)) as vers_to_recs_prc"
+            echo "    ,cast( 100.0000 * coalesce( t.rec_deletes / nullif(t.rec_updates,0), 0) as numeric(14,4)) as maxv_to_vers_prc"
+            echo "from mon_log_table_stats t"
+            echo "where "
+            echo "   t.rowset=!xrowset!"
+            echo "   and (t.rec_inserts > 0 or t.rec_updates > 0)"
+            echo "order by t.table_name;"
+            echo "commit;"
+            echo "set width table_name 31;"
+            echo "select * from tmp$for$report$only;"
+            echo "commit;"
+            @rem echo "show view tmp$for$report$only;"
+        ) > !rpt!
+        call :remove_enclosing_quotes !rpt!
 
         set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
 
         %run_repo% 1>%tmp_file% 2>&1
-        
+
         (
           echo.
           echo !msg!
@@ -2168,27 +3055,32 @@ if .1.==.0. (
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%log4all%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%log4all% 2>&1
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %log4all%
 
         type %tmp_file% >>%log4all%
 
         if .%make_html%.==.1. (
-           echo !htm_sect! ^<a name="dbverstotal"^> !msg! ^</a^> !htm_secc! >>%htm_file%
+           
+           call :sho "SID=%sid%. Output to .html file" %log4all%
+
+           echo !htm_sect! ^<a name="dbvers_table"^> !msg!, table ^</a^> !htm_secc! >>%htm_file%
 
            (
-             echo select
-             echo     x.table_name
-             echo    ,x.total_recs
-             echo    ,x.total_vers
-             echo    ,iif(x.vers_percent ^> 500, '$css$error$', iif(x.vers_percent ^> 50, '$css$warning$', ''^)^) ^|^| x.vers_percent as vers_percent
-             echo from tmp$for$report$only x
-             echo ;
-             echo commit;
-             echo delete from mon_log_table_stats t
-             echo where t.rowset=!xrowset!
-             echo ;
+               @rem NB: Add style prefix only to TEXT column. DO NOT add it to numeric values otherwise right-alignment in table cells will be lost.
+               echo "select"
+               @rem echo "     iif(x.vers_to_recs_prc > 500, '$css$' || 'error$', iif(x.vers_to_recs_prc > 50, '$css$' || 'warning$', '')) || table_name as table_name"
+               echo "     iif(x.vers_to_recs_prc > 500, '$css$error$', iif(x.vers_to_recs_prc > 50, '$css$warning$', '')) || table_name as table_name"
+               echo "    ,total_recs"
+               echo "    ,total_vers"
+               echo "    ,max_versions"
+               echo "    ,vers_to_recs_prc"
+               echo "    ,maxv_to_vers_prc"
+               echo "from tmp$for$report$only x"
+               echo ";"
            ) > !rpt!
-           
+
+           call :remove_enclosing_quotes !rpt!
+
            set t1=!time!
 
            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
@@ -2196,25 +3088,116 @@ if .1.==.0. (
            set t2=!time!
            set tdiff=0
            call :timediff "!t1!" "!t2!" tdiff
-           echo Done for !tdiff! ms, from !t1! to !t2!. 1>!tmp_file! 2>&1
-           call :add_html_text tmp_file htm_file
+
+           set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+           call :sho "SID=%sid%. !tdmsg!" %log4all%
+           echo !br! !tdmsg! >> !htm_file!
+
+           call :sho "SID=%sid%. Report '!msg!': draw chart for total records and versions" %log4all%
+
+           echo !htm_sect! ^<a name="dbvers_chart"^> !msg!, chart ^</a^> !htm_secc! >>%htm_file%
+
+           (
+			    echo draw_func_name=dbstat_recs_and_vers
+			    echo chart_only_show=1
+			    echo href_name=dbstat_recs_and_vers_chart
+			    echo href_title=Total records and versions, chart
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=table_name
+			    echo x_axis_title=table_name
+			    echo y_scale_type=log
+			    echo y_fields_list=total_recs; total_vers
+			    echo y_colors_list=Green;      BlueViolet
+			    echo y_legends_list=total records; total versions
+			    echo y_list_delimiter=;
+			    echo chart_div_hei=500
+			    echo chart_div_wid=1300
+			    echo point_size=3
+			    echo x_axis_slanted_labels=true
+			    echo chart_area_options={ left:60, top:25 }
+			    echo chart_type=ColumnChart
+           ) >!tmpcharts!
+
+           call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+           @rem                  1    2      3      4     5     6         7
+
+           call :sho "SID=%sid%. Report '!msg!': draw chart for ratios between max_versions, total_versions and records" %log4all%
+           @rem NB: we use the same SQL here but show other columns than in previous chart.
+
+           (
+			    echo draw_func_name=dbstat_maxvers_vs_total_vers
+			    echo chart_only_show=1
+			    echo href_name=dbstat_maxvers_vs_total_vers
+			    echo href_title=Ratios versions / total_records and max_versions / total_versions
+			    echo axis_color=DarkBlue
+			    echo x_axis_field=table_name
+			    echo x_axis_title=table_name
+			    echo y_scale_type=log
+			    echo y_fields_list=vers_to_recs_prc; maxv_to_vers_prc
+			    echo y_colors_list=Blue;             Red
+			    echo y_legends_list=Ratio versions / total_records, percent; Ratio max_versions / versions, percent
+			    echo y_list_delimiter=;
+			    echo chart_div_hei=500
+			    echo chart_div_wid=1300
+			    echo point_size=3
+			    echo x_axis_slanted_labels=true
+			    echo chart_area_options={ left:60, top:25 }
+			    echo chart_type=ColumnChart
+           ) >!tmpcharts!
+
+           call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file tmpcharts
+           @rem                  1    2      3      4     5     6         7
+
+           (
+               echo delete from mon_log_table_stats t
+               echo where t.rowset=!xrowset!
+               echo ;
+           ) > !rpt!
+           set run_repo=%fbc%\isql %dbconn% -nod -i %rpt% %dbauth% 
+           cmd /c !run_repo!
 
         )
 
-        del %tmp_file% 2>nul
-        del %rpt% 2>nul
+        for /d %%x in (%tmp_file%,%rpt%,!tmpcharts!) do (
+            del %%x 2>nul
+        )
 
     ) else (
 
-       set msg=Database statistics was not gathered, see config parameter 'run_db_statistics'.
+       if .%run_db_statistics%.==.-1. (
+           @rem 31.10.2020
+           set msg=DB statistics must not be gathered in 'backup lock' state. Merge delta with DB first. See CORE-6399.
+       ) else (
+           set msg=Database statistics was not gathered, see config parameter 'run_db_statistics'.
+       )
+
        (
            echo.
            echo !msg!
            echo.
        ) >>%log4all%
+
        if .%make_html%.==.1. (
            echo !htm_sect! ^<a name="dbstatistics"^> !msg! ^</a^> !htm_secc!>>%htm_file%
        )
+
+       if .%run_db_statistics%.==.-1. (
+           (
+               echo ::: ATTENTION :::
+               echo.
+               echo When DB is in 'backup lock' state then statistics will contain only data from the 'main' DB file
+               echo NO data from .delta wll be included, so gathering of this statistics is USELESS. See CORE-6399.
+               echo If this test as launched from oltp-scheduled.bat then check oltp-scheduled_config.win and replace
+               echo its parameter 'BACKUP_LOCK' to 0.
+               echo.
+           ) > %tmp_file%
+           type %tmp_file% >> %log4all%
+           if .%make_html%.==.1. (
+                  call :add_html_text tmp_file htm_file 1 null monosp
+           )
+           del %tmp_file%
+       )
+  
     )
 
     @rem ------------------------------------------------------------------------------
@@ -2222,7 +3205,7 @@ if .1.==.0. (
     if .%run_db_validation%.==.1. (
 
         set msg=Database validation
-        call :sho "SID=1. !msg!" %sts%
+        call :sho "SID=1. !msg!" %log4all%
 
         set skip_val_list=(AGENTS^^^|BUSINESS_OPS^^^|DOC_STATES^^^|FB_ERRORS^^^|EXT_STOPTEST^^^|SETTINGS^^^|OPTYPES^^^|RULES_FOR_%%%%^^^|PHRASES^^^|TMP$%%%%^^^|MON%%%%^^^|WARE%%%%^^^|Z_%%%%^)
         (
@@ -2254,12 +3237,12 @@ if .1.==.0. (
 
         set t1=!time!
 
-        call %tmpdir%\tmp_validation.bat 1>%tmp_file% 2>&1
+        call %tmpdir%\tmp_validation.bat | findstr /i /v /c:"process pointer page" 1>%tmp_file% 2>&1
 
         set t2=!time!
         set tdiff=0
         call :timediff "!t1!" "!t2!" tdiff 2>>%tmp_file%
-        echo Done for !tdiff! ms, from !t1! to !t2!. >>%tmp_file% 2>&1
+        call :sho "SID=%sid%. Done for !tdiff! ms, from !t1! to !t2!" %tmp_file%
 
         type %tmp_file% >>%log4all%
 
@@ -2267,17 +3250,25 @@ if .1.==.0. (
 
             del %rpt% 2>nul
             for /f "tokens=*" %%a in (!tmp_file!) do (
-              set line=%%a
-              if not .!line!.==.. (
-                set line=!line:ERRORS found=!
-                if not !line!==%%a set line=$css$error$%%a
-                echo !line!>>%rpt%
-              ) else (
-                echo.>>%rpt%
-              )
+                set line=%%a
+                if not .!line!.==.. (
+                    set line=!line:ERRORS found=!
+                    if not !line!==%%a set line=$css$error$%%a
+                    echo !line!>>%rpt%
+                ) else (
+                    echo.>>%rpt%
+                )
             )
+            set t1=!time!
             
             call :add_html_text tmp_file htm_file 1 null monosp
+
+            set t2=!time!
+            set tdiff=0
+            call :timediff "!t1!" "!t2!" tdiff 2>>%tmp_file%
+            set tdmsg=Done for !tdiff! ms, from !t1! to !t2!
+            call :sho "SID=%sid%. !tdmsg!" %log4all%
+            echo !br! !tdmsg! >> !htm_file!
 
             del %rpt% 2>nul
 
@@ -2301,49 +3292,10 @@ if .1.==.0. (
     )
 
     set msg=Differences between old and current firebird.log
-    call :sho "SID=1. !msg!" %sts%
-
-    (
-        echo.
-        echo ###################################################################################
-        echo ###  C o m p a r i s o n    o f    o l d   a n d   n e w    f i r e b i r d . l o g
-        echo ###################################################################################
-        echo.
-        echo Gathering firebird.log AFTER test finish.
-        echo ++++++++++++++++++++++++++
-        echo Command: !run_get_fb_log!
-        echo ++++++++++++++++++++++++++
-        echo Result:
-    ) > %tmp_file%
-
-    type %tmp_file% >>%log4all%
+    call :sho "SID=1. !msg!" %log4all%
 
     %run_get_fb_log% 1>%fblog_final% 2>&1
 
-    (
-        echo %time%. Got:
-        for /f "delims=" %%a in ('find /v /c "" %fblog_final%') do echo STDOUT: %%a (number of rows in extracted log^)
-    ) 1>%tmp_file% 2>&1
-
-
-    (
-        echo.
-        echo Obtained firebird.log info:
-        echo Result of DIR command for firebird.log AFTER test finish:
-        dir /-c %fblog_final% | findstr /i /c:"%fblog_endnm%"
-    )>>%tmp_file% 2>&1
-
-    (
-        echo. 
-        echo End of gathering firebird.log AFTER test finish.
-    ) >>%tmp_file%
-
-    type %tmp_file% >>%log4all%
-
-    if .%make_html%.==.1. (
-        echo !htm_sect! !msg! !htm_secc!>>%htm_file%
-        call :add_html_text tmp_file htm_file
-    )
 
     set msg=Comparison of old and new firebird.log (get messages that appeared during test^):
     set run_cmd=fc.exe /n %fblog_start% %fblog_final%
@@ -2366,7 +3318,6 @@ if .1.==.0. (
     
     del %fblog_start% 
     del %fblog_final%
-
 
     if .!fc_result!.==.0. (
         echo result: files match. No new messages appeared in firebird.log during test ran. >>!tmp_file!
@@ -2402,45 +3353,49 @@ if .1.==.0. (
             @rem Convert from OEM to UTF-8 in order to add into HTML report
             @rem -------------------------
             set tmputf8=!tmpdir!\tmputf8.tmp
-            cscript //nologo //e:vbscript !vbs_oem_converter! !tmp_file! !tmputf8! UTF-8
+            %systemroot%\system32\cscript.exe //nologo //e:vbscript !vbs_oem_converter! !tmp_file! !tmputf8! UTF-8
 
-            copy !tmputf8! !tmp_file!
+            copy !tmputf8! !tmp_file! 1>nul
             del !tmputf8! 2>nul
 
         )
 
-        call :add_html_text tmp_file htm_file
+        call :add_html_text tmp_file htm_file 1 null monosp
 
     )
-
-
-    (
-        echo !date! !time! Done.
-        echo.
-        echo +++++++ end of batch %~f0 ++++++++
-        echo.
-    ) >>%sts%
-
     del %vbs_oem_converter% 2>nul
 
 
-    call :sho "SID=1. Removing all ISQL logs according to value of config 'remove_isql_logs' setting" %sts%
+    (
+        echo !date! !time! SID=%sid%.
+        echo.
+        echo +++++++ Reports creation completed. ++++++++
+        echo.
+    ) >>%log4all%
 
-    @rem 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
-    @rem 335544347    not_valid    Validation error for column @1, value "@2".
-    @rem 335544665 unique_key_violation (violation of PRIMARY or UNIQUE KEY constraint "..." on table ...") // if table has unique constraint
-    @rem 335544349 no_dup (attempt to store duplicate value (visible to active transactions) in unique index "***") // if table has only unique index
+    call :sho "SID=%sid%. Final processing ISQL logs in !tmpdir! according to config parameter 'remove_isql_logs'" %log4all%
 
     set log_cnt=0
     set log_ptn=%tmpdir%\oltp%fb%_*.*
     for %%x in (%log_ptn%) do set /a log_cnt+=1
 
-    if /i .%remove_isql_logs%.==.never. (
-        set msg=%log_cnt% logs of every ISQL session are preserved, see config setting 'remove_isql_logs'
-    ) else if /i .%remove_isql_logs%.==.always. (
-        set msg=%log_cnt% logs of every ISQL session are removed, see config setting 'remove_isql_logs'
-    ) else if /i .%remove_isql_logs%.==.if_no_severe_errors. (
-        set msg=Remove %log_cnt% logs of every ISQL session if there were no serious errors.
+  	if .!crash_during_run!.==.1. (
+        set msg=NOTE: FB has crashed during test run. Value of 'remove_isql_logs' is changed to 'never'. 
+        remove_isql_logs=never
+  	) else if .!crash_on_db_shut!.==.1. (
+        set msg=NOTE: FB has crashed during DB shutdown. Value of 'remove_isql_logs' is changed to 'never'.
+        remove_isql_logs=never
+  	) else (
+        if /i .%remove_isql_logs%.==.never. (
+            set msg=Config parameter 'remove_isql_logs' has value 'never'.
+        ) else if /i .!remove_isql_logs!.==.always. (
+            set msg=Config parameter 'remove_isql_logs' has value 'always'. All %log_cnt% logs will be removed.
+        ) else if /i .!remove_isql_logs!.==.if_no_severe_errors. (
+            set msg=Config parameter 'remove_isql_logs' has value 'if_no_severe_errors'. All %log_cnt% logs will be deleted if no severe errors occured.
+        )
+    )
+    if /i .!remove_isql_logs!.==.never. (
+        set msg=!msg! All %log_cnt% logs of every ISQL session are preserved.
     )
     
     echo. > %tmp_file%
@@ -2453,117 +3408,97 @@ if .1.==.0. (
         call :add_html_text tmp_file htm_file
     )
 
-    (
-          echo.
-          echo create or alter view tmp$for$report$only as
-          echo select 
-          echo     x.severe_errors_occured
-          echo    ,iif( x.severe_errors_occured = 1, 'SEVERE_ERRORS_EXIST!', 'NO_SEVERE_ERRORS_FOUND' ^) as errors_checking_result
-          echo from (
-          echo select iif( exists( select *
-          echo                     from perf_log p
-          echo                     where 
-          echo                         -- NOTES.
-          echo                         -- 1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
-          echo                         -- 2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
-          echo                         --    Auto removing of .err files which did contain "string truncation" error was the main reason
-          echo                         --    why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
-          echo                         p.fb_gdscode in ( 0, 335544558, 335544347, 335544665, 335544349, 335544321 ^)
-          echo                         and p.dts_beg ^> (
-          echo                             select x.dts_beg
-          echo                             from perf_log x
-          echo                             where x.unit='perf_watch_interval'
-          echo                             order by x.dts_beg desc
-          echo                             rows 1
-          echo                         ^)
-          echo                  ^)
-          echo              ,1
-          echo              ,0 
-          echo         ^) as severe_errors_occured
-          echo from rdb$database
-          echo ^) x;
-          echo commit;
-          echo -- Checking query:
-          echo set list on;
-          echo select x.errors_checking_result from tmp$for$report$only x;
-          echo commit;
-    ) > %rpt%
-
-
-    if /i .%remove_isql_logs%.==.never. (
-        set msg=Logs of every ISQL session are preserved, pattern: %log_ptn% - see config setting 'remove_isql_logs'
-    ) else if /i .%remove_isql_logs%.==.always. (
-        set msg=Logs of every ISQL session are removed, pattern: %log_ptn% - see config setting 'remove_isql_logs'
+    if /i .!remove_isql_logs!.==.always. (
+        @rem ###############################################
+        @rem ###  d e l e t e    l o g s     a l w a y s ###
+        @rem ###############################################
         del %log_ptn%
-    ) else if /i .%remove_isql_logs%.==.if_no_severe_errors. (
-        set msg=Remove logs of every ISQL session if there were no serious errors, pattern: %log_ptn%
+    ) else if /i .!remove_isql_logs!.==.if_no_severe_errors. (
+
+         (
+               echo -- Check query:
+               echo set list on;
+               echo select
+               echo     x.finished_at,
+               echo     x.errors_checking_result
+               echo from z_severe_gds_occured x;
+               echo commit;
+         ) > %rpt%
+
+        @rem set msg=Remove logs of every ISQL session if there were no serious errors, pattern: %log_ptn%
         type %rpt% >>%log4all%
-        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+        set run_repo=%fbc%\isql %dbconn% -nod -n -pag 9999 -i %rpt% %dbauth% 
+
+        %run_repo% 1>%tmp_file% 2>&1
+
+        type %tmp_file% >> %log4all%
+
+        @rem ERRORS_CHECKING_RESULT ='No severe PSQL-related problems occured'  ==> we can DELETE temp logs.
+        set no_severe_errors=0
+        findstr /i /c:"No severe" %tmp_file% 1>nul
+        if NOT errorlevel 1 (
+            set no_severe_errors=1
+        )
+        if .%make_html%.==.1. (
+              (
+                echo "<p>"
+                echo Following values of gdscode are considered as SEVERE:
+                echo             0 Unidentified error in PSQL code: gdscode=0 within WHEN block when exception raised.
+                echo     335544321 'string truncation'. Attempt to assign too long text into string variable.
+                echo     335544347 'not_valid'. Validation error for column.
+                echo     335544349 'no_dup'. Attempt to store duplicate value visible to active transactions.
+                echo     335544558 'check_constraint'. Operation violates CHECK constraint on view or table.
+                echo     335544665 'unique_key_violation'. Violation of PRIMARY or UNIQUE KEY constraint.
+                echo     335544838 'foreign_key_target_doesnt_exist'. Foreign key reference target does not exist.
+                echo     335544839 'foreign_key_references_present'. Foreign key references are present for the record.
+                echo "<p>"
+              ) >%tmp_file%
+
+              call :remove_enclosing_quotes %tmp_file%
+      
+              call :add_html_text tmp_file htm_file 1 null monosp
+
+              (
+                echo select
+                echo     x.finished_at,
+                echo     trim(iif(x.severe_errors_occured = 1, '$css' ^|^| '$error$', ''^)^) ^|^| x.errors_checking_result as errors_result
+                echo from z_severe_gds_occured x;
+                echo commit;
+              ) > !rpt!
+              @rem echo !htm_repn! %msg%: !htm_repc! >>%htm_file%
+              call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+        )
+
+        del %rpt% 2>nul
+
+        if .!no_severe_errors!.==.1. (
+            @rem ################################################################################
+            @rem ###  d e l e t e    l o g s     i f     n o     s e v e r e     e r r o r s  ###
+            @rem ################################################################################
+
+            set msg=SID=%sid%. Required string about absence of severe errors FOUND. Temporary files with pattern %log_ptn% are DELETED.
+            call :sho "!msg!" %log4all%
+            del %log_ptn%
+        ) else (
+            set msg=At least one severe PSQL error occured. Temporary files with pattern %log_ptn% are PRESERVED.
+            call :sho "!msg!" %log4all%
+        )
+        if .%make_html%.==.1. (
+           (
+               echo !msg!
+               echo ^<p^>
+           ) > %tmp_file%
+
+           call :add_html_text tmp_file htm_file
+        )
+
     )
+    @rem !remove_isql_logs!.==.if_no_severe_errors.
+
     @rem log4all = %tmpdir%\oltp40.report.txt
 
-    if .%remove_isql_logs%.==.if_no_severe_errors. (
-
-      %run_repo% 1>%tmp_file% 2>&1
-      
-      type %tmp_file% >> %log4all%
-      @rem ERRORS_CHECKING_RESULT          NO_SEVERE_ERRORS_FOUND ==> we can DELETE temp logs.
-      if .%make_html%.==.1. (
-            (
-              echo select iif(x.severe_errors_occured = 1, '$css$error$', '$css$success$'^) ^|^| x.errors_checking_result as errors_checking_result
-              echo from tmp$for$report$only x;
-              echo commit;
-              echo drop view tmp$for$report$only;
-              echo commit;
-            ) > !rpt!
-            echo !htm_repn! %msg%: !htm_repc! >>%htm_file%
-            call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
-      )
-
-      del %rpt% 2>nul
-
-      findstr "NO_SEVERE_ERRORS_FOUND" %tmp_file% >nul
-      if not errorlevel 1 (
-          echo ISQL logs are removed because no severe errors occured during test. > %tmp_file%
-          type %tmp_file% >> %log4all%
-          if .%make_html%.==.1. (
-              call :add_html_text tmp_file htm_file
-          )
-          if exist %log_ptn% (
-              (
-                  echo Following temporary files are to be DELETED:
-                  @rem dir /-c %log_ptn%
-                  dir /b %log_ptn%
-              )>>%log4all%
-    
-              @rem log_ptn = e:\temp\logs.oltp40\oltp40_*.*
-              @rem #######################################################
-              @rem ###     D E L E T I N G    T E M P.    F I L E S    ###
-              @rem #######################################################
-              del %log_ptn% 2>&1 1>>%log4all%
-          )
-
-          (
-              echo.
-              if exist %log_ptn% (
-                  echo Some files with pattern %log_ptn% COULD NOT be deleted.
-                  dir /-c %log_ptn%
-              ) else (
-                  echo All files with pattern %log_ptn% have beed DELETED.
-              )
-              echo.
-          ) >>%log4all%
-
-      ) else (
-        (
-            echo Required string was not found in file %tmp_file%, 
-            echo temp. files with pattern %log_ptn% are PRESERVED.
-        )>>%log4all%
-      )
-    )
 
     del %tmpdir%\1run_oltp_emul.err 2>nul
-    del %tmpdir%\getFileTimeStamp.* 2>nul
     del %tmpdir%\tmp_longsleep.* 2>nul
 
     (
@@ -2581,23 +3516,43 @@ if .1.==.0. (
     @rem log4all = %tmpdir%\oltp40.report.txt
 
     if .%make_html%.==.1. (
-      call :add_html_text tmp_file htm_file
- 
-      (
-        echo ^</body^>
-        echo ^</html^>
-      ) > !tmp_file!
-
-      call :add_html_text tmp_file htm_file 0
-
+        call :add_html_text tmp_file htm_file
     )
 
     @rem Define name of final report file, see 'set name_for_saving=...' below:
     @rem ######################################################################
+
+    @rem %fname% = value of optional config parameter 'file_name_with_test_params' = regular | benchmark, by default it is undefined.
+    @rem When this value is not empty then we have to rename final report (text and html) to the file which will have maximum info
+    @rem about FB build, database FW, test settings and performance result in its name.
+    @rem Sample of report name when this parameter is:
+    @rem 1. 'regular':   
+    @rem    20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on_<host_info>.txt
+    @rem 2. 'benchmark': 
+    @rem    ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448_<host_info>.txt
+    @rem -- where <host_info> = content of config parameter %file_name_this_host_info% // 09-mar-2016
+
     (
-        echo set heading off; 
-        echo select report_file from srv_get_report_name('%fname%', '%build%', %winq%^);
-        echo set heading on; 
+        @rem echo set heading off; 
+        @rem echo select report_file from srv_get_report_name('%fname%', '%build%', %winq%^);
+        @rem echo set heading on;
+
+        echo "set list on;"
+        echo "select"
+        echo "    report_file"
+        echo "    ,overall_perf"
+        echo "    ,fb_arch"
+        echo "    ,html_doc_title -- 10.05.2020: string for top.document.title = '...'"
+        echo "from srv_get_report_name('%fname%', '%build%', %winq%);"
+
+        echo "select"
+        echo "    coalesce(p.exc_info,'UNKNOWN') as test_finish_state"
+        echo "    ,coalesce(p.fb_gdscode, 0) as test_abend_gdscode -- when finish_state is normal then this value will be -1"
+        echo "from rdb$database r"
+        echo "left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)"
+        echo "order by p.dts_beg desc"
+        echo "rows 1;"
+
     ) > %rpt%
 
     if !conn_pool_support! EQU 1 (
@@ -2612,210 +3567,323 @@ if .1.==.0. (
             echo commit;
         ) >>%rpt%
     )
-
+    call :remove_enclosing_quotes %rpt%
 
     set run_repo=%fbc%\isql %dbconn% -i %rpt% %dbauth%
-    %run_repo% 1>%tmp_file% 2>&1
+    
+    cmd /c %run_repo% 1>%tmp_file% 2>!err!
 
-    @rem result: tmpfile contains SINGLE string with name of report, e.g.:
-    @rem 20181114_1242_score_00000_bld_27117_sc25__0h03m___5_att_fw_off_sepw_1_repl_1
+    @rem Example of result:
+    @rem REPORT_FILE                     20201020_1104_score_00000_bld_33372_ss30__0h01m___1_att_fw_off_repl_0
+    @rem OVERALL_PERF                    score_09876
+    @rem FB_ARCH                         ss30
+    @rem HTML_DOC_TITLE                  09876 b.33372/ss30 fw off
+
+    @rem TEST_FINISH_STATE               NORMAL: TEST_TIME EXPIRED AT 2020-10-20 11:05:00
+    @rem TEST_ABEND_GDSCODE              -1
 
 
-    @rem %fname% = value of optional config parameter 'file_name_with_test_params' = regular | benchmark, by default it is undefined.
-    @rem When this value is not empty then we have to rename final report (text and html) to the file which will have maximum info
-    @rem about FB build, database FW, test settings and performance result in its name.
-    @rem Sample of report name when this parameter is:
-    @rem 1. 'regular':   
-    @rem    20151102_1448_score_06543_build_31236_ss30__3h00m_100_att_fw__on_<host_info>.txt
-    @rem 2. 'benchmark': 
-    @rem    ss30_fw_off_split_most__sel_1st_one_index_score_06543_build_31236__3h00m_100_att_20151102_1448_<host_info>.txt
-    @rem -- where <host_info> = content of config parameter %file_name_this_host_info% // 09-mar-2016
+    @rem runcmd=!%1!
+    @rem err_file=%2
+    @rem sql_file=%3
+    @rem add_label=%4
+    @rem do_abend=%5
 
+    call :catch_err  run_repo  !err!  %rpt%  n/a   0
+    @rem -------------------------------------------
+    @rem                 1       2      3     4    5
     del %rpt% 2>nul
-    if not .%fname%.==.. (
-        
-        @rem ######################################################################################
-        @rem ### c r e a t i n g       O L T P _ E M U  L _ U P L O A D _ R E S U L T S . L O G ###
-        @rem ######################################################################################
-        set upload_log=!tmpdir!\oltp_emul_upload_results.log
-        del !upload_log! 2>nul
 
-        for /f %%a in (!tmp_file!) do (
-            set name_for_saving=!tmpdir!\%%a
-            set final_txt=!name_for_saving!
-            if not .%file_name_this_host_info%.==.. (
-                set final_txt=!final_txt!_%file_name_this_host_info%
+    findstr /m /i /c:"SQLSTATE =" !err! >nul
+    if NOT errorlevel 1 (
+        @rem Name of file with final report REMAINS THE SAME because we could not define it via SP srv_get_report_name.
+        @rem UNSET value of 'fname':
+        @rem ~~~~~
+        set fname=
+    )
+
+    for /f "tokens=2" %%a in ('findstr /i /c:"REPORT_FILE " !tmp_file!') do (
+        set name_for_saving=!tmpdir!\%%a
+         if not .%file_name_this_host_info%.==.. (
+             @rem from config: mnemona for host/cpu/ram etc:
+             set name_for_saving=!name_for_saving!_%file_name_this_host_info%
+         )
+
+    )
+
+    if .%make_html%.==.1. (
+        if not .!fname!.==.. (
+            for /f "tokens=*" %%a in ('findstr /i /c:"HTML_DOC_TITLE " !tmp_file!') do (
+                set line=%%a
+                set html_doc_title=!line:HTML_DOC_TITLE=!
+                call :trim html_doc_title !html_doc_title!
             )
-            set final_txt=!final_txt!.txt
-            call :repl_with_bound_quotes !final_txt! final_txt
-
-            copy %log4all% !final_txt!
-
-            @rem ###########################################
-            @rem DELETE log4all = %tmpdir%\oltp40.report.txt
-            @rem ###########################################
-            if exist !final_txt! del %log4all%
-
-            if .%make_html%.==.1. (
-                set final_htm=!name_for_saving!
-                if not .%file_name_this_host_info%.==.. (
-                    set final_htm=!final_htm!_%file_name_this_host_info%
-                )
-                set final_htm=!final_htm!.html
-                call :repl_with_bound_quotes !final_htm! final_htm
-
-                for %%i in ("!final_htm!") do set report_name=%%~ni
-                del !final_htm! 2>nul
-
-                @rem HTML report: add DOCTYPE as 1st line and <title>...</title? tag for conveniency:
-
-                set /a k=1
-                for /f "delims=" %%a in (!htm_file!) do (
-                    if .!k!.==.1. (
-                         echo ^<^^!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"^> >>!final_htm!
-                    ) 
-                    set "line=%%a"
-                    echo !line!>>!final_htm!
-                    if .!line!.==.^<head^>. (
-                        echo ^<title^>!report_name!^</title^> >>!final_htm!
-                    )
-                    set /a k=!k!+1
-                )
-
-                if exist !final_htm! (
-                    del %htm_file% 2>nul
-                    @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
-                    @rem When this parameter = 1 then we have to upload report and remove it from
-                    @rem local drive if upload finished OK.
-                    if .%upload_report%.==.1. (
-                        echo !date! !time!. Upload results in HTML format...
-                        for %%n in ("!final_htm!") do set report_name=%%~nxn
-
-                        (
-                            echo !date! !time!. This log was created by %~dp0%~nx0
-                            echo Command: call ..\util\upload.bat ^<arg1^> ^<arg2^>
-                            echo where:
-                            echo    arg1 = !report_name! 
-                            echo    arg2 = !final_htm!
-                            echo.
-                        ) >>!upload_log!
-
-                        call ..\util\upload.bat !report_name! !final_htm! 1>!tmp_file! 2>&1
-
-                        (
-                            echo !date! !time!. Done, check log !tmp_file!:
-                            type !tmp_file! 
-                        ) >>!upload_log!
-
-                        @rem DOES NOT WORK: findstr /b /r /i /c:"100.*success" !upload_log!
-                        @rem Switch /B will NOT show line if it starts from char_13 only
-                        @rem rather than char_13 + char_10 // 05.02.2017
-
-                        findstr /i /c:success !upload_log! | findstr /c:100 >nul
-                        if not errorlevel 1 (
-                            (
-                                echo Found message about SUCCESSFUL result of uploading HTML report. Files:
-                                echo !name_for_saving!*
-                                if /i .%remove_isql_logs%.==.never. (
-                                    echo|set /p=-- are PRESERVED on disk, 
-                                ) else (
-                                    echo|set /p=-- are DETELED from disk, 
-                                    del !final_htm!
-                                    del !final_txt!
-                                )
-                                echo see config parameter 'remove_isql_logs' = %remove_isql_logs%
-
-                            ) > !tmp_file!
-                        ) else (
-                            (
-                                echo Upload of HTML report FAILED. Reports are preserved on disk. 
-                            ) > !tmp_file!
-                        )
-                        type !tmp_file!
-                        type !tmp_file! >>!upload_log!
-                        del !tmp_file!
-                    )
-                    @rem if .%upload_report%.==.1.
-                )
-                @rem if exist !final_htm! 
-               
-
-            ) else (
-                @rem .%make_html% ==> 0
-
-                @rem 'upload_report' - optional config parameter, by default it is UNDEFINED.
-                @rem When this parameter = 1 then we have to upload report and remove it from
-                @rem local drive if upload finished OK.
-                if .%upload_report%.==.1. (
-
-                    echo !date! !time!. Upload results in TEXT format...
-
-                    for %%n in ("!final_txt!") do set report_name=%%~nxn
-                    call ..\util\upload.bat !report_name! !final_txt! 1>!upload_log! 2>&1
-                   
-                    @rem did not work: findstr /b /r /i /c:"100.*success" !upload_log!
-                    @rem Switch /B will NOT show line if it starts from char_13 only
-                    @rem rather than char_13 + char_10 // 05.02.2017
-
-                    findstr /i /c:success !upload_log! | findstr /c:100 >nul
-                    if not errorlevel 1 (
-                        (
-                            echo Found message about SUCCESSFUL result of uploading TEXT report.
-                            if /i .%remove_isql_logs%.==.never. (
-                                echo Report is preserved on disk, see config parameter 'remove_isql_logs' = %remove_isql_logs%
-                            ) else (
-                                echo Reports are DETELED from disk because config parameter 'remove_isql_logs' = %remove_isql_logs%
-                                del !final_htm!
-                                del !final_txt!
-                            )
-                        ) > !tmp_file!
-                    ) else (
-                        (
-                            echo Upload of TEXT report FAILED. Report are preserved on disk. 
-                        ) > !tmp_file!
-                    )
-                    type !tmp_file!
-                    type !tmp_file! >>!upload_log!
-                    del !tmp_file!
-
-                )
-                @rem if .%upload_report%.==.1.
+            if not .!html_doc_title!.==.. (
+                (
+                    echo ^<script^>
+                    echo     // extract main data from full report name for display in the browser tab:
+                    echo     top.document.title = '!html_doc_title!';
+                    echo ^</script^>
+                ) >> !htm_file!
             )
-            @rem .%make_html%.==.1 .xor .0.
         )
-        @rem for /f %%a in (!tmp_file!) do ...
+
+        (
+            echo ^</body^>
+            echo ^</html^>
+        ) >> !htm_file!
+
+    )
+    del !err!
+    del !tmp_file!
+
+    if not .!fname!.==.. (
+         set final_txt=!name_for_saving!.txt
+         call :repl_with_bound_quotes !final_txt! final_txt
+
+         @rem ###################################################################################
+         @rem ###  C R E A T E    T E X T    R E P O R T     W I T H     F I N A L    N A M E ###
+         @rem ###################################################################################
+         @rem NB: here we rename log4all = %tmpdir%\oltp40.report.txt to the final report name
+         move %log4all% !final_txt!
+
+         if .%make_html%.==.1. (
+             set final_htm=!name_for_saving!.html
+             call :repl_with_bound_quotes !final_htm! final_htm
+
+             @rem ###################################################################################
+             @rem ###  C R E A T E    .H T M L - R E P O R T     W I T H     F I N A L    N A M E ###
+             @rem ###################################################################################
+             move !htm_file! !final_htm!
+          )
+          @rem .%make_html%.==.1.
+
+          if exist !results_storage_fbk! (
+
+              call :sho "SID=%sid%. Saving data of just completed test to database." !final_txt!
+
+              @rem 27.04.2020: obtain values from SETTINGS and write into special DB for storing overall results:
+              @rem oltp_results.fdb, table results_overall
+              for /f %%a in ("!results_storage_fbk!") do (
+                  set results_fdb=%%~dpna.fdb.tmp
+              )
+              del !results_fdb! 2>nul
+
+              set run_cmd="%fbc%\gbak -c -v -user !usr! -pas !pwd! !results_storage_fbk! !host!/!port!:!results_fdb!"
+              cmd /c !run_cmd! 1>!tmp_file! 2>!err!
+
+              @rem runcmd=!%1!
+              @rem err_file=%2
+              @rem sql_file=%3
+              @rem add_label=%4
+              @rem do_abend=%5
+
+              call :catch_err  run_cmd   !err!   n/a   n/a   0
+              @rem -------------------------------------------
+              @rem                 1       2      3     4    5
+
+              findstr /m /i /c:"gbak: ERROR:"  !err! >nul
+              if errorlevel 1 (
+                  call :sho "SID=%sid%. Restore from !results_storage_fbk! to temporary FDB completed OK." !final_txt!
+                  (
+                      echo set bail on;
+                      echo connect '!host!/!port!:!results_fdb!' user '!usr!' password '!pwd!';
+                      echo -- defined in oltp_results_storage_DDL.sql:
+                      echo execute procedure eds_obtain_last_test_results(
+                      echo    '!host!/!port!:!dbnm!' -- oltp_data_db
+                      echo    ,'!usr!' -- eds_usr
+                      echo    ,'!pwd!' -- eds_pwd
+                      echo    ,!mon_unit_perf! -- smallint
+                      echo ^);
+                      echo commit;
+                      echo set list on;
+                      echo set echo on;
+                      echo select * from results_overall order by run_id desc rows 1;
+                  ) > %rpt%
+                  set run_repo=%fbc%\isql -q -nod -i %rpt%
+
+                  call :sho "SID=%sid%. Saving test settings and last run results in !results_fdb!. Command:" !final_txt!
+                  call :sho "!run_repo!" !final_txt!
+                  cmd /c !run_repo! 1>%tmp_file% 2>!err!
+                  
+                  type !err! >> !final_txt!
+
+                  @rem runcmd=!%1!
+                  @rem err_file=%2
+                  @rem sql_file=%3
+                  @rem add_label=%4
+                  @rem do_abend=%5
+
+                  call :catch_err  run_repo  !err!  %rpt%  n/a
+                  @rem ---------------------------------------
+                  @rem                 1       2      3     4 
+
+                  if .%make_html%.==.1. if exist !final_htm! (
+
+                      @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                      @rem @@@  c o m p r e s s    H T M L,   c o n v e r t    t o    b a s e - 6 4    a n d    s a v e    t o    r e s u l t s _ f b k  @@@
+                      @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                      for /f "tokens=2" %%a in ('findstr /i /c:"run_id " !tmp_file!') do (
+                          set v_run_id=%%a
+                      )
+                      if not .!v_run_id!.==.. (
+                          if not .!report_compress_cmd!.==.. (
+                              @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
+                              echo !report_compress_cmd!| findstr /e /i /c:"\7za.exe" /c:"\7za" /c:"\7z.exe" /c:"\7z"
+                              if NOT errorlevel 1 set compress_format=7z
+
+                              @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
+                              echo !report_compress_cmd!| findstr /e /i /c:"\zstd.exe" /c:"\zstd"
+                              if NOT errorlevel 1 set compress_format=zstd
+
+                          )
+                          
+                          if .!compress_format!.==.. set compress_format=zip
+                          set tmpvbs=!tmpdir!\compress_report_to_zip.vbs.tmp
+
+                          if /i .!compress_format!.==.7z. (
+                              set compressed_name=!final_htm!.tmp.7z
+                              set zip_cmd="!report_compress_cmd! u -mx9 -mfb273 !compressed_name! !final_htm!"
+                              cmd /c !zip_cmd! 2>>!final_txt!
+                              dir /-c !compressed_name! | findstr /i /c:".7z" 1>>!final_txt! 2>&1
+
+                          ) else if /i .!compress_format!.==.zstd. (
+                              set compressed_name=!final_htm!.tmp.zst
+                              set zip_cmd="!report_compress_cmd! -19 !final_htm! -o !compressed_name!"
+                              cmd /c !zip_cmd! 2>>!final_txt!
+                              dir /-c !compressed_name! | findstr /i /c:".zst" 1>>!final_txt! 2>&1
+
+                          ) else if /i .!compress_format!.==.zip. (
+                              @rem Generate .vbs for compressing text file
+                              set compressed_name=!final_htm!.tmp.zip
+                              (
+                                  echo "' Generated auto by %~f0, !date! !time!"
+                                  echo "' Source idea: https://www.tek-tips.com/viewthread.cfm?qid=1231429"
+                                  echo "' This script is used for compressing html report to ZIP format when"
+                                  echo "' OLTP-EMUL config parameter 'report_compress_cmd' is UNDEFINED."
+                                  echo "' Required input arguments:"
+                                  echo "' N1 = path+name of .zip to be created;"
+                                  echo "' N2 = path+name of text file to be compressed."
+                                  echo "' NOTE: file defined by arg N1 must have extension .zip"
+                                  echo "option explicit"
+                                  echo "dim zipfile, srcfile, fso,ts, x,blankZip,objShell,WshShell, zipObj"
+                                  echo "zipfile=WScript.Arguments.Item(0)"
+                                  echo "srcfile=WScript.Arguments.Item(1)"
+                                  echo "set fso = CreateObject("Scripting.FileSystemObject")"
+                                  echo "set ts = fso.OpenTextFile(zipfile, 8, vbtrue)"
+                                  echo "blankZip = "PK" & Chr(5) & Chr(6)"
+                                  echo "for x = 0 to 17"
+                                  echo "    blankZip = blankZip & Chr(0)"
+                                  echo "next"
+                                  echo "ts.write blankZip"
+                                  echo "set fso = nothing"
+                                  echo "set ts = nothing"
+                                  echo "' This creates an empty zip file in the directory c:\test1"
+                                  echo "' After this you fill the zipfile. I'm still searching for the best wait command but"
+                                  echo "' you might want to let the script sleep for half a second to allow it to create the zip"
+                                  echo "' file before progressing."
+                                  echo "set objShell = CreateObject("Shell.Application")"
+                                  echo "set WshShell = WScript.CreateObject("WScript.Shell")"
+                                  echo "set zipObj = objShell.NameSpace(zipfile)"
+                                  echo "zipObj.copyHere(srcfile)"
+                                  echo "WScript.Sleep( 500 )"
+                              ) > !tmpvbs!
+
+                              call :remove_enclosing_quotes !tmpvbs!
+                              set zip_cmd="%systemroot%\system32\cscript.exe //nologo //e:vbscript !tmpvbs! !compressed_name! !final_htm!"
+
+                              @rem ################################################
+                              @rem ###  compress file to .ZIP format using .VBS ###
+                              @rem ################################################
+
+                              cmd /c !zip_cmd! 2>>!final_txt!
+                              dir /-c !compressed_name! | findstr /i /c:".zip" 1>>!final_txt! 2>&1
+
+                          )
+                          @rem !compress_format! == 7z / zstd /  zip
+
+                          set b64_cmd="certutil -encode !compressed_name! !final_htm!.b64.tmp"
+                          cmd /c !b64_cmd! 2>>!final_txt!
+                          dir /-c !final_htm!.b64.tmp | findstr /i /c:".b64.tmp" 1>>!final_txt! 2>&1
+
+                          @rem cut-off first and last rows from base64 that was created by certutil:
+                          findstr /i /v /r /c:"begin[ ]*cert" /c:"end[ ]*cert" !final_htm!.b64.tmp > !final_htm!.compressed.b64
+                          
+                          for /d %%x in (!compressed_name!,!tmpvbs!, !final_htm!.b64.tmp) do (
+                              if exist %%x del %%x
+                          )
+
+                          @rem result: compressed file was converted to base64 format and is stored as !final_htm!.7z.b64
+
+                          @rem Now we generate temporary .sql for storing content of b64-file into results database:
+                          del %rpt% 2>nul
+                          (
+                              echo set bail on;
+                              echo set echo on;
+                              echo connect '!host!/!port!:!results_fdb!' user '!usr!' password '!pwd!';
+                              for /f %%a in (!final_htm!.compressed.b64) do (
+                                  echo insert into results_reports(run_id, zip2b64^) values(!v_run_id!, '%%a'^);
+                              )
+                              if /i .!compress_format!.==.zip. (
+                                  echo update results_overall o set o.report_compress_cmd=right('cscript ^<VBS^> ^<zip^> ^<report^>',255^) where o.run_id=!v_run_id!;
+                              ) else (
+                                  echo update results_overall o set o.report_compress_cmd=right('!report_compress_cmd!',255^) where o.run_id=!v_run_id!;
+                              )
+                              echo commit;
+                              echo set echo off;
+                              echo set list on;
+                              echo select 'HTML-report has been compressed, converted to base64 and successfully saved in !results_fdb!.' as result_msg from rdb$database;
+					      ) > %rpt%
+					      del !final_htm!.compressed.b64
+
+                          set run_repo=%fbc%\isql -q -nod -i %rpt%
+                          call :sho "SID=%sid%. Saving HTML report in !results_fdb!, run_id=!v_run_id!. Command:" !final_txt!
+                          call :sho "!run_repo!" !final_txt!
+
+                          cmd /c !run_repo! 1>%tmp_file% 2>!err!
+                          type !err! >> !final_txt!
+
+                          call :catch_err  run_repo  !err!   n/a   n/a
+                          @rem ---------------------------------------
+                          @rem                 1       2      3     4
+
+                          
+                          findstr /i /c:"result_msg " !tmp_file! >> !final_txt!
+
+                      )
+                      @rem if not .!v_run_id!.==..
+
+                  )
+                  @rem .%make_html%.==.1. if exist !final_htm!
+
+                  set run_cmd="%fbc%\gbak -b -user !usr! -pas !pwd! !host!/!port!:!results_fdb! !results_storage_fbk!"
+                  call :sho "SID=%sid%. Make backup of new results to !results_storage_fbk!" !final_txt!
+                  cmd /c !run_cmd! 1>!tmp_file! 2>!err!
+                  type !err! >> !final_txt!
+
+                  call :catch_err  run_cmd   !err!   n/a   n/a   0
+                  @rem -------------------------------------------
+                  @rem                 1       2      3     4    5
+
+                  call :sho "SID=%sid%. Backup results to !results_storage_fbk! completed Ok." !final_txt!
+                  for /d %%x in (!tmp_file!,!err!,!rpt!,!results_fdb!) do (
+                      if exist %%x del %%x
+                  )
+
+
+              ) else (
+                  call :sho "SID=%sid%. Restore from !results_storage_fbk! FAILED. Report data will not be saved." !final_txt!
+              )
+              @rem errlevel=0 when restore
+
+          )
 
     ) else (
         @rem  .%fname%.==..
         set name_for_saving=%log4all%
     )
     @rem if .%fname% is-defined xor not-defined
-
-    if not .!postie_send_args!.==.. (
-          set mail_sending_log=!tmpdir!\oltp_emul_mail_send.log
-          call :repl_with_bound_quotes !mail_sending_log! mail_sending_log
-          del !mail_sending_log! 2>nul
-          set msg=!date! !time!. Sending report to e-mail
-
-          for /f %%i in ("!name_for_saving!") do (
-              echo !msg!...
-              set name4subj=%%~ni
-              set run_cmd=postie.exe !postie_send_args! ^
-                 -s:"OLTP-EMUL REPORT: !name4subj!" ^
-                 -msg:"See attached file" ^
-                 -a:!name_for_saving! 
-
-              (
-                  echo !msg!
-                  echo Command: !run_cmd!
-              ) >> !mail_sending_log!
-
-              !run_cmd! 1>>!mail_sending_log! 2>&1
-          )
-    )
-
-    @rem -- echo %date% %time% Done. >>%sts%
-    del %tmp_file% 2>nul
 
     set batch4stop=%tmpdir%\1stoptest.tmp.bat
     call :repl_with_bound_quotes !batch4stop! batch4stop
@@ -2830,100 +3898,6 @@ if .1.==.0. (
   @rem ###                                                                     ###
   @rem ###########################################################################
   goto fin
-
-:wait4all
-    setlocal
-    
-    
-    set logname=%tmpdir%\tmp_wait_for_all_stop
-    set tmpchk=!logname!.sql
-    set tmpclg=!logname!.clg
-    set tmperr=!logname!.err
-    set tmplog=!logname!.tmp
-    
-    
-    set tmpchk=!tmpchk:"=!
-    set tmpchk="!tmpchk!"
-    
-    set tmpclg=!tmpclg:"=!
-    set tmpclg="!tmpclg!"
-    
-    set tmperr=!tmperr:"=!
-    set tmperr="!tmperr!"
-    
-    set tmplog=!tmplog:"=!
-    set tmplog="!tmplog!"
-    
-    del %tmpchk% 2>nul
-    del %tmpclg% 2>nul
-    del %tmperr% 2>nul
-    del %tmplog% 2>nul
-    
-    (
-        echo set list on; 
-        echo commit;
-        echo select count(*^) as "active_att=" 
-        echo from mon$attachments a 
-        echo where a.mon$attachment_id ^<^> current_connection 
-        echo       and a.mon$remote_address is not null 
-        echo       and a.mon$remote_process containing 'isql'; 
-        @rem -- do NOT add "a.mon$system_flag is distinct from 1", avail only in 3.0
-    )>%tmpchk%
-    
-    set active_att=1
-    set attempt_no=1
-    set max_retries=30
- 
-    :m1
-
-        if .%attempt_no%.==.%max_retries%. (
-            @rem Something wrong with database or one of hanged attaches. Go on with report.
-            set msg=Limit for waiting exceeded, begin report creation.
-            echo !msg!
-            echo !msg!>>%tmplog%
-            goto:eof
-        )
-        
-        set run_isql=%fbc%\isql %dbconn% -nod -n -i %tmpchk% %dbauth% 
-        
-        set msg=%time%: check for other active ISQL attachments, attempt %attempt_no% of %max_retries%
-        echo %msg%
-        echo %msg%>>%tmplog%
-        
-        echo %run_isql%
-        echo %run_isql%>>%tmplog%
-        
-        %run_isql% 1>%tmpclg% 2>%tmperr%
-        
-        for /F "tokens=*" %%a in ('findstr /r /i /c:"^[^#]" %tmpclg%') do (
-            set /a %%a
-        )
-        @rem result: env var 'active_att' if DEFINED now and equal to number of ISQL sessions
-        
-        if .%active_att%.==.0. (
-            set msg=All ISQL attachments were FINISHED, now we can build final report.
-        ) else (
-            set msg=There are still .%active_att%. active ISQL attachments, we must WAIT. . .
-        )
-        echo %msg%
-        echo %msg%>>%tmplog%
-        
-        if .%active_att%.==.0. (
-            del %tmpchk% 2>nul
-            del %tmpclg% 2>nul
-            del %tmperr% 2>nul
-            del %tmplog% 2>nul
-        ) else (
-            set /a attempt_no=%attempt_no%+1
-            ping -n 11 127.0.0.1>nul
-            @rem ....................  l o o p    c o u n t    a t t a c h e s  .............
-
-            goto m1
-        )
-
-    endlocal
-
-goto:eof
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
@@ -3024,7 +3998,11 @@ goto:eof
 
     (
         if not .%use_style%.==.. (
-          echo ^<div class="%use_style%"^>
+          if .%use_style%.==.pre. (
+              echo ^<pre^>
+          ) else (
+              echo ^<div class="%use_style%"^>
+          )
         )
 
         for /f "tokens=*" %%a in ('type %tmp_file%') do (
@@ -3053,7 +4031,11 @@ goto:eof
         )
 
         if not .%use_style%.==.. (
-          echo ^</div^>
+          if .%use_style%.==.pre. (
+              echo ^</pre^>
+          ) else (
+              echo ^</div^>
+          )
         )
 
     ) >> %htm_file%
@@ -3063,9 +4045,215 @@ goto:eof
 @rem ^
 @rem end of 'add_html_text' subroutine
 
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+
+:split_key_value_pair
+
+    setlocal
+
+    set key_values_list=%1
+    set delimiter_char=%2
+    if .!delimiter_char!.==.. (
+        echo Subroutine 'split_key_value_pair':
+        echo MISSED MANDATORY ARG #2: 'delimiter_char'
+        exit
+    )
+    @rem NOTE: arguments NN 3 and 4 are used for OUTPUT.
+
+    call :dequote_string !key_values_list! key_values_list
+    call :dequote_string !delimiter_char! delimiter_char
+
+    @rem 23.10.2020 ### MANDATORY ###
+    @rem Such names can be used in caller code!
+    @rem ######################################
+    set chart_attr_key=
+    set chart_attr_val=
+
+    set /a k=1
+:loop_split
+    for /f "tokens=1* delims=%delimiter_char%" %%a in ("!key_values_list!") do (
+       if !k! EQU 1 (
+           set chart_attr_key=%%a
+       ) else (
+           @rem For 2nd and further tokens - make concatenation:
+           @rem 23.10.2020: it is crusial that 'chart_attr_val' must be UNSET before this loop!
+           set chart_attr_val=!chart_attr_val!%%a
+       )
+       set key_values_list=%%b
+       set /a k=!k!+1
+       goto :loop_split
+    )
+
+endlocal & set "%~3=%chart_attr_key%" & set "%~4=%chart_attr_val%"
+goto:eof
+@rem ^
+@rem end of 'split_key_value_pair' subroitine
+
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-:add_html_table    
+:split_by_delimiter
+
+    setlocal
+
+    set src_list=%1 &:: Example: "Average reads; Average fetches"
+    set src_delimiter_char=%2 &:: delimiter that must be used for split. Usually semicolon.
+
+    set out_delimiter_char=%3 &:: Delimiter that must be used in output list. Usually comma.
+    set out_enclosing_char=%4 &:: Character that must be used for enclosing each token in output list. Usually single quote - apostroph
+
+    @rem Arguments NN 5 and 6 are used for OUTPUT result:
+
+    @rem out, resulting list:
+    set out_tokens_list=
+
+    @rem out, number of tokens:
+    set /a out_tokens_count=0
+
+    call :dequote_string !src_list! src_list
+    call :dequote_string !src_delimiter_char! src_delimiter_char
+    call :dequote_string !out_delimiter_char! out_delimiter_char
+    call :dequote_string !out_enclosing_char! out_enclosing_char
+
+if .1.==.0. (
+    echo after dequote:
+    echo src_list=.!src_list!.
+    echo exclam: src_delimiter_char=!src_delimiter_char!
+    echo percen: src_delimiter_char=%src_delimiter_char%
+    echo.
+    echo exclam: out_delimiter_char=.!out_delimiter_char!.
+    echo percen: out_delimiter_char=.%out_delimiter_char%.
+    echo.
+    echo exclam: out_enclosing_char=!out_enclosing_char!
+    echo percen: out_enclosing_char=%out_enclosing_char%
+    set>set2.txt
+    pause
+)
+
+:loop_src_list
+    @rem ::: NOTE :::
+    @rem DO NOT USE EXCLAMATION SIGN FOR src_delimiter_char HERE:
+    for /f "tokens=1* delims=%src_delimiter_char%" %%x in ("!src_list!") do (
+        set /a out_tokens_count=!out_tokens_count!+1
+        set val=%%x
+
+        call :trim val !val!
+
+        if .!out_tokens_list!.==.. (
+            set out_tokens_list=!out_enclosing_char!!val!!out_enclosing_char!
+        ) else (
+            set out_tokens_list=!out_tokens_list!!out_delimiter_char!!out_enclosing_char!!val!!out_enclosing_char!
+        )
+
+        if .1.==.0. (
+            echo.
+            echo routine split_by_delimiter: val=.!val!.
+            echo src_delimiter_char=.!src_delimiter_char!.
+            echo out_tokens_list=.!out_tokens_list!.
+            pause
+        )
+        
+        set src_list=%%y
+
+        if .1.==.0. (
+            echo routine split_by_delimiter: new out_tokens_list=.!out_tokens_list!.
+            echo new src_list=.!src_list!.
+            pause
+        )
+
+        goto :loop_src_list
+    )
+
+if .1.==.0. (
+    echo leaving split_by_delimiter:
+    echo out_tokens_list=.!out_tokens_list!.
+    echo out_tokens_count=!out_tokens_count!
+    set >set2.txt
+    exit
+)
+
+
+endlocal & set "%~5=%out_tokens_list%" & set "%6=%out_tokens_count%"
+goto:eof
+@rem ^
+@rem end of 'split_by_delimiter' subroitine
+
+@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+:get_sqlda_fld_name
+    setlocal
+    set fb=%1
+
+    @rem must be passed here enclosed into double quotes:
+    set sqlda_name=%2
+
+    @rem NOTE: argument N3 will be used for OUTPUT value.
+
+    set fld_name=!sqlda_name!
+
+    if .%fb%.==.25. (
+       call :split_key_value_pair !sqlda_name! ")" dummy_key fld_name
+    ) else (
+       call :dequote_string !fld_name! fld_name
+    )
+
+    @rem ?!?!?!? FOR WHAT >>>> ???? >>>> set fld_name=!fld_name: =!
+   
+    endlocal & set "%~3=%fld_name%"
+goto:eof
+@rem ^
+@rem end of get_sqlda_fld_name
+
+@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+:is_num_type
+
+    setlocal
+
+    set fld_num=%1
+    set tmp_file=%2
+    set out_params_1st_line=%3
+
+    set /a k=1000+%fld_num%
+    set k=!k:~2,2!
+    set result=0
+    set num_types=SHORT LONG INT64 DOUBLE LONG FLOAT DECFLOAT INT128
+
+    @rem Sample for lines in tmp_file = %tmpdir%\make_html_table.tmp.sqd (result of output SQLDA): with OUPUT parameters:
+    @rem 2.5: 04: sqltype: 497 LONG	  Nullable sqlscale: 0 sqlsubtype: 0 sqllen: 4 -- TAB between "LONG" and NUllable
+    @rem 3.0: 04: sqltype: 496 LONG Nullable scale: 0 subtype: 0 len: 4
+
+    for /f "tokens=1-7 delims=: " %%a in ('findstr /n /c:"!k!: sqltype:" %tmp_file%') do (
+      
+      if %%a gtr %out_params_1st_line% (
+         
+         set fld_type=%%e
+
+         @rem ::: NB ::: Token for 2.5 can contain TAB as trailing character, so we have to TRIM it
+         @rem otherwise search for numeric-type columns for this resultset will NOT found any field!
+
+         if not !fld_type!==.. call :trim fld_type !fld_type!
+         @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+         
+         @rem echo rowN=%%a b=1st_token=%%b c=%%c d=%%d fld_type=^|!fld_type!^| f=%%f g=%%g &pause
+
+         for /d %%s in ( %num_types% ) do (
+            if .!fld_type!.==.%%s. (
+               set result=1
+               @rem echo found NUMERIC type, field: %fld_num% &pause
+            )
+         )
+      )
+    )
+
+    endlocal & set "%~4=%result%"
+goto:eof
+@rem ^
+@rem end of is_num_type
+
+@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+@rem ###                 a d d _ h t m l _ t a b l e                      ###
+@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+:add_html_table
 
     setlocal
 
@@ -3075,6 +4263,9 @@ goto:eof
     set dbauth=!%4!
     set sql_in=!%5!
     set htm_file=!%6!
+
+    @rem 16.10.2020
+    set chart_settings=!%7!
 
     set dbg=0
 
@@ -3095,6 +4286,211 @@ goto:eof
     call :repl_with_bound_quotes %tmp_html% tmp_html
 
 
+    set tmp_chart_data=%tmpdir%\make_html_chart_data.tmp
+    set tmp_chart_html=%tmpdir%\make_html_chart_data.html
+    call :repl_with_bound_quotes %tmp_chart_data% tmp_chart_data
+    call :repl_with_bound_quotes %tmp_chart_html% tmp_chart_html
+
+    for /d %%f in (!sql_temp!,!sql_log!,!sql_err!,!tmp_sqlda!,!tmp_nums!,!tmp_html!,!tmp_chart_html!,!tmp_chart_data!) do (
+        if exist %%f del %%f
+    )
+
+    if exist !chart_settings! (
+
+        for /f "tokens=*" %%a in (!chart_settings!) do (
+            set tmp_list=%%a
+
+            set chart_attr_key=
+            set chart_attr_val=
+
+            call :split_key_value_pair "!tmp_list!" "=" chart_attr_key chart_attr_val
+
+            if /i .!chart_attr_key!.==.draw_func_name. (
+                set draw_func_name=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.x_axis_field. (
+                set x_axis_field=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.x_axis_title. (
+                set x_axis_title=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_fields_list. (
+                set y_fields_list=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_format_list. (
+                @rem https://developers.google.com/chart/interactive/docs/reference#numberformatter
+                @rem List of formats (optional but all columns must be involved if specified):
+                @rem pattern: '0';   pattern: '0.00',negativeColor: 'red';   fractionDigits: 4;   etc
+                set y_format_list=!chart_attr_val!
+                
+                @rem remove all inner spaces because below we will iterato though this valirabel using "FOR /D" loop:
+                set y_format_list=!y_format_list: =!
+
+            ) else if /i .!chart_attr_key!.==.y_scale_type. (
+                @rem Optional: 'log' --> show chart with logarithmic scale in Y-axis:
+                set y_scale_type=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_legends_list. (
+                set y_legends_list=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_leg_maxlines. (
+                set y_leg_maxlines=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_colors_list. (
+                set y_colors_list=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.y_list_delimiter. (
+                set y_list_delimiter=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_libs_reload. (
+                @rem chart_libs_reload -- whether we have to load basic google charts libraries HERE rather than suppose
+                @rem they are loaded in the whole web page <head> section (i.e. in ONE place, ONE time for the page) ?
+                @rem https://developers.google.com/chart/interactive/docs/basic_load_libs
+                @rem default 0; if 1 then initializing of google chart will be HERE
+                @rem ::: NB ::: Passing 1 here NOT recommended! runtime error can occur after drawing 6-7 charts in one page:
+                @rem too much recursion (Firefox) or "Maximum Call Stack Size Exceeded" (Chrome).
+                @rem See discussion here: https://groups.google.com/forum/#!topic/Google-Visualization-Api/iigCT7a-MFk
+                set chart_libs_reload=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_only_show. (
+                set chart_only_show=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_title. (
+                set chart_title=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_inline_block. (
+                @rem add 'display: inline-block;' to DIV as part of its STYLE properties
+                @rem in order to show it in ONE LINE after previous div (if it is possible).
+                @rem Trivial example: http://interestingwebs.blogspot.com/2012/10/div-side-by-side-in-one-line.html
+                @rem Example of result: <div id="mon_reads_fetches_chart_div" style="width: 550px; height: 350px;display: inline-block;"></div>
+                set chart_inline_block=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_area_options. (
+                @rem Example: { left:60, right:5, width:"100%", } -- values for 'chartArea:'; useful to reduce margins around chart
+                set chart_area_options=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_type. (
+                set chart_type=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_div_wid. (
+                set chart_div_wid=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.chart_div_hei. (
+                set chart_div_hei=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.href_name. (
+                @rem Name of HTML-anchor to quick-jump by click on inner URL
+                set href_name=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.href_title. (
+                @rem Name of inner URL for user
+                set href_title=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.axis_color. (
+                set axis_color=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.x_axis_slanted_labels. (
+                @rem must be STRING with value: 'true' or 'false'
+                set x_axis_slanted_labels=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.x_values_skip_pattern. (
+                @rem Additional filter for records to be shown in chart (actual for perf per minute: we have to skip from there WARM_TIME phase).
+                set x_values_skip_pattern=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.curve_type. (
+                set curve_type=!chart_attr_val!
+            ) else if /i .!chart_attr_key!.==.point_size. (
+                set point_size=!chart_attr_val!
+            )
+
+        )
+        if .!chart_libs_reload!.==.. (
+            @rem default: we suppose that basic libaries already loaded in the <HEAD> section of web page.
+            set chart_libs_reload=0
+        )
+
+        if .!chart_only_show!.==.. (
+            @rem do we show only chart, without table ? Usually this is NO.
+            set chart_only_show=0
+        )
+
+        if .!chart_div_wid!.==.. (
+            set chart_div_wid=1200
+        )
+        if .!chart_div_hei!.==.. (
+            set chart_div_hei=350
+        )
+
+        if .!y_list_delimiter!.==.. (
+            set y_list_delimiter=;
+        )
+
+        if .!y_leg_maxlines!.==.. (
+            set y_leg_maxlines=3
+        )
+
+        if .!chart_inline_block!.==.1. (
+            @rem do NOT enclose into double quotes! This is INNER element of STYLE properties list:
+            set div_inline_expr=display: inline-block;
+        )
+        if .!axis_color!.==.. (
+            set axis_color=DarkOliveGreen
+        )
+        if .!chart_type!.==.. (
+            set chart_type=ScatterChart
+        )
+        if .!x_values_skip_pattern!.==.. (
+            @rem forcedly assign non-empty value to this var in order to apply findstr, see below:
+            set x_values_skip_pattern=NOTHING_TO_SKIP
+        )
+
+
+        @rem ...............................
+
+        set cols_for_data=
+        for /d  %%x in (!y_fields_list!) do (
+            set cols_for_data=!cols_for_data!,'%%x'
+        )
+
+        call :split_by_delimiter "!y_fields_list!"  ";"  ","  "'"  cols_for_data  dummy_var
+        @rem                             1           2    3    4        5             6
+     
+        @rem Example:
+        @rem y_fields_list = .reads / fetches;           writes / marks.
+        @rem cols_for_data = .'reads / fetches','writes / marks'.
+
+        @rem ...............................
+        set color_expr=colors: [
+        for /d  %%x in (!y_colors_list!) do (
+            set color_expr=!color_expr!'%%x',
+        )
+        set color_expr=!color_expr! ]
+        @rem Example: color_expr=colors: ['DarkCyan','Red','Green','Brown',],
+        @rem ...............................
+        if .!y_legends_list!.==.. (
+            set tmp_list=!y_fields_list!
+        ) else (
+            set tmp_list=!y_legends_list!
+        )
+
+        call :split_by_delimiter "!tmp_list!"  ";"  ","  "'"  legend_expr  y_charts_count
+        @rem                          1         2    3    4        5             6
+
+        @rem Example-1:
+        @rem     tmp_list=.field_name_01; field_name_02; field_name_03.
+        @rem Result:
+        @rem     legend_expr=.'field_name_01','field_name_02','field_name_03'.
+        @rem     y_charts_count=3
+
+        @rem Example-2:
+        @rem     tmp_list=.Average reads; Average fetches.
+        @rem Result:
+        @rem     legend_expr=.'Average reads','Average fetches'.
+        @rem     y_charts_count=2
+
+        set legend_expr=[ '', !legend_expr! ]
+
+        @rem ...............................
+
+        set legpos_expr=legend:{ position:'top', maxLines: !y_leg_maxlines! }
+
+	    (
+    	    echo "    var data = google.visualization.arrayToDataTable(["
+    	    echo "        !legend_expr!"
+	    ) >!tmp_chart_data!
+
+if .1.==.0. (
+set>set.txt
+echo chart_settings=!chart_settings!
+echo tmp_list=!tmp_list!
+echo legend_expr=!legend_expr!
+echo KKKKKKKKKKKKKKKKKK
+pause
+)
+
+
+    )
+    @rem if exist !chart_settings!
+
+
     (
         echo set sqlda_display on;
         echo set planonly;
@@ -3103,11 +4499,21 @@ goto:eof
 
     %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%tmp_sqlda% 2>%sql_err%
 
+    set sql_abend=0
     for %%a in (%sql_err%) do if not %%~za lss 1 (
-        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%tmp_html%
+        echo !htm_repn! PREPARE FAILED: !htm_repc! >>%tmp_html%
         call :add_html_text sql_temp tmp_html
         call :add_html_text sql_err tmp_html 1 $css$fault$
+        set sql_abend=1
     )
+
+    if .!sql_abend!.==.1. (
+        @rem ###############
+        @rem ###  ABEND  ###
+        @rem ###############
+        goto :add_html_final
+    )
+
 
     @rem 2.5: OUTPUT SQLDA version: 1 sqln: 20 sqld: 1
     @rem 3.0: OUTPUT message field count
@@ -3140,21 +4546,30 @@ goto:eof
 
     for /f "tokens=1-5 delims=:" %%a in ('type !sql_log!') do (
         
-        @rem 2.5: " (7)SETTING"
-        @rem 3.0: " SETTING"
+        @rem Example for 2.5:
+        @rem    :  name: (8)CONSTANT  alias: (11)foo rio bar
+        @rem |a|  |-b-| |------- c -------| |------ d------|
+        @rem %%d is: |(11)foo rio bar| ==> we have to split this string using delimiter ")"
 
-        call :get_sqlda_fld_name %fb% %%d fld_name
+        @rem Example for 3.0:
+        @rem    :  name: CONSTANT  alias: mio meo mau
+        @rem |a| |--b-| |------ c -----| |---- d ---|
+        @rem %%d is: |foo rio bar| ==> we have to take this string 'as is', w/o any action.
 
-        @rem echo a=%%a b=%%b c=%%c d=%%d e=%%e fld_name=%fld_name%=!fld_name!  &pause
+        set fld_name=%%d
+
+        call :trim fld_name !fld_name!
+
+        call :get_sqlda_fld_name %fb% "!fld_name!" fld_name
 
         set is_num=2
         call :is_num_type !k! %tmp_sqlda% %out_line% is_num
 
-        @rem echo fld_name=!fld_name! is_num=!is_num! &pause
-
         if .!is_num!.==.1. set num_list=!num_list!,!k!
         set /a k=!k!+1
     )
+    @rem echo after loop for /f "tokens=1-5 delims=:" %%a in 'type !sql_log!'
+
     set num_list=!num_list!,
     echo !num_list!>%tmp_nums%
 
@@ -3162,27 +4577,22 @@ goto:eof
 
     @rem result: num_list = list of POSITION INDICES which relates to numeric fields.
 
-    echo ^<table border="1" cellpadding="3"^> >>%tmp_html%
+    echo "<table class="t_table" border="1" cellpadding="3">">> %tmp_html%
 
-    set tho="<th>"
-    set tho=!tho:"=!
-    set thc="</th>"
-    set thc=!thc:"=!
 
-    set tro="<tr>"
-    set tro=!tro:"=!
-    set trc="</tr>"
-    set trc=!trc:"=!
+    @rem -------- tags for open and close table header, row and cell -----------
+    set tho="<th>"& set tho=!tho:"=!
+    set thc="</th>"& set thc=!thc:"=!
 
-    set tdo="<td>"
-    set tdo=!tdo:"=!
-    set tdc="</td>"
-    set tdc=!tdc:"=!
+    set tro="<tr>"& set tro=!tro:"=!
+    set trc="</tr>"& set trc=!trc:"=!
 
-    set tdno="<td align=right>"
-    set tdno=!tdno:"=!
-    set tdnc="</td>"
-    set tdnc=!tdnc:"=!
+    set tdo="<td>"& set tdo=!tdo:"=!
+    set tdc="</td>"& set tdc=!tdc:"=!
+
+    set tdno="<td align=Right>"& set tdno=!tdno:"=!
+    set tdnc="</td>"& set tdnc=!tdnc:"=!
+    @rem -----------------------------------------------------------------------
 
 
     @rem Output HEADER of table
@@ -3190,28 +4600,30 @@ goto:eof
     set i=1
     (
         for /f "tokens=1-5 delims=:" %%a in ('type %sql_log%') do (
-            if .!i!.==.1. (
-                call :get_sqlda_fld_name %fb% %%d fld_first
-            )
 
             set fld_name=%%d
-            call :get_sqlda_fld_name %fb% %%d fld_name
+
+            call :trim fld_name !fld_name!
+
+            if .!i!.==.1. (
+                call :get_sqlda_fld_name %fb% "!fld_name!" fld_first
+            )
+
+            call :get_sqlda_fld_name %fb% "!fld_name!" fld_name
 
             if not .%%d.==.. (
-                echo !tho! !fld_name! !thc!
-                @rem echo !tho! !fld_name:_= ! !thc!
+                echo "<th>!fld_name!</th>"
             ) else (
-                echo !tho! " " !thc!
+                echo "<th>&nbsp;</th>"
             )
-            set fld_last=%%d
-            call :get_sqlda_fld_name %fb% %%d fld_last
+            set fld_last=!fld_name!
 
             set /a i=!i!+1
         )
     ) >> %tmp_html%
 
-    set fld_first=!fld_first: =!
-    set fld_last=!fld_last: =!
+    @rem --- dis 19.10.2020 set fld_first=!fld_first: =!
+    @rem --- dis 19.10.2020 set fld_last=!fld_last: =!
 
     if .1.==.0. (
         @rem 22.04.2019. USE THIS ONLY FOR DEBUG! REMOVE AFTER BUG WILL BE FIXED!
@@ -3221,7 +4633,7 @@ goto:eof
         @rem We have to output HTML-comment OUTSIDE from grouped-echo commands block!
         echo ^<^^!-- >> %tmp_html%
         (
-            @rem NOTE: exclamation sign can not be writtenm into file from HERE.
+            @rem NOTE: exclamation sign can not be written into file from HERE.
             @rem does not work: echo ^<^^!--
             @rem does not work: echo ^<^!--
             echo     Completed parsing file '%sql_log%':
@@ -3239,7 +4651,6 @@ goto:eof
         ) >> %tmp_html%
     )
 
-    @rem echo after loop for /f "tokens=1-5 delims=:" %%a in 'type %sql_log%'
 
     @rem echo fld_first=.!fld_first!. fld_last=.!fld_last!. - check header of table in %tmp_html%  &pause
 
@@ -3248,7 +4659,7 @@ goto:eof
         @rem NOTE: adding 'eol=' is mandatory because by default ';' is considered as comment and skipped by for /f.
         for /f "tokens=* eol=" %%a in ('type %sql_in%') do (
             if /i "%%a"=="set list off;" (
-                echo --%%a
+                echo -- disabled by %~f0, routine 'add_html_table' -- %%a
             ) else (
                 echo %%a
             )
@@ -3258,86 +4669,379 @@ goto:eof
 
     @rem echo cc1: check input file %sql_temp% &pause
 
+    @rem ######################################
+    @rem ### call isql for show report data ###
+    @rem ######################################
     %fbc%\isql %dbconn% %dbauth% -i %sql_temp% 1>%sql_log% 2>%sql_err%
 
     for %%a in (%sql_err%) do if not %%~za lss 1 (
-        echo !htm_repn! RUNTIME FAULT: !htm_repc! >>%tmp_html%
+        echo !htm_repn! DATA PROCESSING FAULT: !htm_repc! >>%tmp_html%
         call :add_html_text sql_temp tmp_html
         call :add_html_text sql_err tmp_html 1 $css$fault$
+        set sql_abend=1
+    )
+
+
+    if .!sql_abend!.==.1. (
+        @rem ###############
+        @rem ###  ABEND  ###
+        @rem ###############
+        goto :add_html_final
     )
 
     @rem Output DATA of report:
     @rem ######################
     (
       set fld_num=1
+      set chart_record_elem_count=0
       for /f "tokens=*" %%a in ('type %sql_log%') do (
           set line=%%a
           set fld_name=!line:~0,31!
           call :trim fld_name !fld_name!
           if .!fld_name!.==.!fld_first!. (
-              echo !tro!
+              echo "<tr>"
               set fld_num=1
           )
 
-          @rem echo ci1: fld_name=!fld_name! pause
+          @rem Get SUBSTRING, starting from 32nd character: this is VALUE of cell
+          @rem See above: ISQL worked in 'SET LIST ON;' mode.
 
           set cell=!line:~32!
 
-          @rem NOTE: we need to replace html-specific characters (GT, LT, AMP) immediatelly,
+          @rem NOTE: we need to replace html-specific characters: GT, LT, AMP - immediatelly,
           @rem BEFORE call trim subroutine:
 
           if not .!cell!.==.. (
-              set cell=!cell:^&=^&amp;!
-              set cell=!cell:^<=^&lt;!
-              set cell=!cell:^>=^&gt;!
-              @rem $css$success$','$css$error$
 
-              call :trim cell !cell!
+              @rem When cell contains special html-entities like "&", "<" or ">" then it will be changed:
+              @rem for proper displaying in html page: <null> becomes &lt;null&gt; etc.
+              @rem But this value must be preserved when we add it to chart data array, i.e.
+              @rem when we write such cell into %mp_chart_data%:
+              set cbak=!cell!
+
+              @rem set left_char=!cell:~0,1!
+              set righ_char=!cell:~-1!
+              @rem if "!left_char!"==" " set cutspaces=1
+              @rem if "!left_char!"=="	" set cutspaces=1
+              if "!righ_char!"==" " set cutspaces=1
+              if "!righ_char!"=="	" set cutspaces=1
+              if .!cutspaces!.==.1. (
+                  set cell=!cell:^|=$PIPE$OPERATOR$!
+                  set cell=!cell:%%=$PERCENT$SIGN$!
+                  set cell=!cell:^&=$AMPERSAND$!
+                  set cell=!cell:^>=$GREATER$THEN$!
+                  set cell=!cell:^<=$LESS$THEN$!
+
+                  @rem set cell=!cell:^&=^&amp;!
+                  @rem set cell=!cell:^<=^&lt;!
+                  @rem set cell=!cell:^>=^&gt;!
+
+                  call :trim cell !cell!
+
+                  set cell=!cell:$PIPE$OPERATOR$=^|!
+                  set cell=!cell:$PERCENT$SIGN$=%%!
+                  set cell=!cell:^&=$AMPERSAND$!
+                  set cell=!cell:$GREATER$THEN$=^>!
+                  set cell=!cell:$LESS$THEN$=^<!
+              )
+
 
               set ccss=!cell:$css$error$=!
+
               if not !ccss!==!cell! (
-                set cell=^<span class="error"^>!ccss!^</span^>
+                  @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                  @rem Otherwise handling of such rows in :remove_enclosing_quotes -> :trim
+                  @rem will produce line without part of text.
+                  @rem TODO: check and try to fix this later.
+                  set cell=^<span class="error"^>!ccss!^</span^>
               ) else (
-                set ccss=!cell:$css$warning$=!
-                if not !ccss!==!cell! (
-                  set cell=^<span class="warning"^>!ccss!^</span^>
-                ) else (
-                  set ccss=!cell:$css$success$=!
-                  if not !ccss!==!cell! set cell=^<span class="success"^>!ccss!^</span^>
-                )
+                  set ccss=!cell:$css$warning$=!
+                  if not !ccss!==!cell! (
+                      @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                      set cell=^<span class="warning"^>!ccss!^</span^>
+                  ) else (
+                      set ccss=!cell:$css$success$=!
+                      @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                      if not !ccss!==!cell! set cell=^<span class="success"^>!ccss!^</span^>
+                  )
               )
+
+
+
           ) 
+
           set is_num=1
           call :chk4num fld_num num_list is_num
 
-          @rem Seem that: `findstr ,!fld_num!, %tmp_nums% 1>nul & if not errorlevel 1 (...` - is SLOWER more than 2x!
+          @rem Seems that: `findstr ,!fld_num!, %tmp_nums% 1>nul & if not errorlevel 1 (...` - is SLOWER more than 2x!
+
           if .!is_num!.==.1. (
-              echo !tdno! !cell! !tdnc!
+              echo "<td Align=right>!cell!</td>"
           ) else (
-              echo !tdo! !cell! !tdc!
+              echo "<td>!cell!</td>"
           )
 
-          if .!fld_name!.==.!fld_last!. echo !trc!
+          if .!fld_name!.==.!fld_last!. (
+              @rem Completed output for all columns of row, put closing tag:
+              echo "</tr>"
+              echo.
+          )
+
+
+          if exist !chart_settings! (
+              set cbak=!cbak:$css$error$=!
+              set cbak=!cbak:$css$warning$=!
+              set cbak=!cbak:$css$success$=!
+              set cbak=!cbak:$css$fault$=!
+
+@rem echo fld_name=.!fld_name!.
+@rem echo x_axis_field=.!x_axis_field!.
+@rem echo cols_for_data=.!cols_for_data!.
+@rem pause
+
+              if /i .!fld_name!.==.!x_axis_field!. (
+
+                  if /i "!cbak!"=="<null>" (
+                      set chart_point_x_value=null
+                  ) else if .!is_num!.==.1. (
+                      @rem this column belongs to NUMERIC DATATYPE family.
+                      @rem We have to write ts value 'as is', without any additions:
+                      set chart_point_x_value=!cbak!
+                  ) else (
+                      @rem This field datatype is NOT numeric (most of all this is timestamp).
+                      @rem We have to enclose its value into single quotes:
+                      set chart_point_x_value='!cbak!'
+                  )
+                  set /a chart_record_elem_count=!chart_record_elem_count!+1
+                  set chart_record_data_array=,[ !chart_point_x_value!
+
+                  @rem echo X-axis field fld_name=!fld_name!: chart_record_data_array=!chart_record_data_array!
+                  @rem echo new chart_record_elem_count=!chart_record_elem_count!
+
+              )
+              @rem result: defined X-coord of point to be shown.
+
+              @rem DO NOT: XXX set tmpstr=!cols_for_data:'%fld_name%'=! XXX -- we have to compare strings IGNORING CASE!
+
+              @rem Make case-INSENSITIVE search for occurence of !fld_name! in !cols_for_data!:
+              @rem ~~~~~~~~~~~~~~~~~~~~~
+
+              echo !cols_for_data! | findstr /i /c:"'!fld_name!'" >nul
+              if NOT errorlevel 1 (
+                  @rem List !cols_for_data! *contains* element '!fldname!'
+                  @rem Example of cols_for_data: .'metadata cache memo used','memo used by attachments','memo used by transactions','memo used by statements'.
+                  set /a chart_record_elem_count=!chart_record_elem_count!+1
+
+                  if /i "!cbak!"=="<null>" (
+                      set chart_point_y_value=null
+                      @rem old: set chart_point_y_value=0
+                  ) else (
+                      set chart_point_y_value=!cbak!
+                      @rem do not !cell!: it may contain html-entities for proper display in html page, e.g.: &lt;null&gt;
+                  )
+
+                  set chart_record_data_array=!chart_record_data_array!,!chart_point_y_value!
+                  
+                  @rem echo cols_for_data=!cols_for_data!, fld_name=!fld_name!
+                  @rem echo new chart_record_data_array: !chart_record_data_array!
+                  @rem echo new chart_record_elem_count=!chart_record_elem_count!
+
+              ) else (
+                  @rem echo field !fld_name! NOT from list cols_for_data=!cols_for_data!
+              )
+
+              if !chart_record_elem_count! GTR !y_charts_count! (
+                  @rem .sh: $chart_record_elem_count -eq $(( y_charts_count+1 ))
+
+                  @rem Example:
+                  @rem chart_point_x_value='invoice (draft): removal'
+                  @rem x_values_skip_pattern=OVERALL
+
+                  @rem DO NOT XXX set tmpstr=!chart_point_x_value:%x_values_skip_pattern%:=! XXX -- we have to compare case INSENSITIVE
+
+                  @rem Make case-INSENSITIVE search for occurence of !x_values_skip_pattern! in !chart_point_x_value!:
+                  @rem ~~~~~~~~~~~~~~~~~~~~~
+                  @rem NOTE-1: x_values_skip_pattern is always NON-empty. Default: NOTHING_TO_SKIP
+                  @rem NOTE-2: we have to enclose !chart_point_x_value! into double quotes because
+                  @rem it can have value 'null' and in this case "system cannot find the file specified"
+                  @rem will raise when try following command:
+
+                  echo "!chart_point_x_value!" | findstr /i /c:"!x_values_skip_pattern!" > nul
+
+                  if not errorlevel 1 (
+                     @rem === DO NOTHING === This value leads the record to be skipped from output.
+                  ) else (
+                     echo "        !chart_record_data_array! ]" >>!tmp_chart_data!
+                  )
+
+                  set /a chart_record_elem_count=0
+                  set chart_record_data_array=
+              )
+
+          )
+          @rem if exist !chart_settings!
+
           set /a fld_num=!fld_num!+1
       )
-    ) >> %tmp_html%
 
-    echo ^</table^> >>%tmp_html%
+      echo "</table>"
 
+    ) >>%tmp_html%
+
+    @rem copy %tmp_html% %tmp_html%.check
+
+    call :remove_enclosing_quotes %tmp_html%
+
+
+    if exist !chart_settings! (
+
+        @rem End of data table:
+        echo "    ]);" >> !tmp_chart_data!
+
+if .1.==.0. (
+echo ooooooooooooooooooooooooooooosssssssssssssssssssssssssssssss
+echo check %tmp_html%
+echo check !tmp_chart_data!
+echo ooooooooooooooooooooooooooooosssssssssssssssssssssssssssssss
+pause
+)
+        
+        @rem #################################
+        @rem Start writing to !tmp_chart_html!
+        @rem #################################
+
+        (
+            if not .!href_title!.==.. (
+                echo "<h3><a name=!href_name!> !href_title! </a></h3>"
+            )
+            echo "<div id="!draw_func_name!_div" style="width: !chart_div_wid!px; height: !chart_div_hei!px;!div_inline_expr!"></div>"
+            if .!chart_libs_reload!.==.1. (
+                echo "<script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>"
+            )
+            echo "<script type="text/javascript">"
+            if .!chart_libs_reload!.==.1. (
+                echo "  google.charts.load('current', {'packages':['corechart']});"
+            )
+            echo "    // see settings here: https://developers.google.com/chart/interactive/docs/"
+            echo "    google.charts.setOnLoadCallback(!draw_func_name!);"
+            echo "    function !draw_func_name!() {"
+            echo "        // Add data to temp html for drawing chart:"
+            echo "        // ----------------------------------------"
+    
+            type !tmp_chart_data!
+
+        ) >> !tmp_chart_html!
+
+
+        (
+            if not .!y_format_list!.==.. (
+                @rem add formatting to number values
+                @rem pattern: '0';   pattern: '0.00',negativeColor: 'red';   fractionDigits: 4;   etc
+                set /a col_indx=1
+                for /d %%f in (!y_format_list!) do (
+                    @rem example: new google.visualization.NumberFormat({ pattern: '0.000' }).format(data, 1); -- format SECOND column of data array
+
+                    echo "    new google.visualization.NumberFormat({ %%f }).format(data, !col_indx!);"
+                    
+                    set /a col_indx=!col_indx!+1
+                )
+            )
+        ) >> !tmp_chart_html!
+
+
+        (
+            if /i .!chart_type!.==.PieChart. (
+    	        echo "    var options = {"
+                echo "           title: '!chart_title!',"
+                @rem -- ?! -- not sure about PieChart !! -- echo "           interpolateNulls: true"
+                echo "        };"
+            ) else (
+    	        echo "    var options = {"
+                echo "        title: '!chart_title!',"
+                echo "        interpolateNulls: true,"
+
+                if not .!curve_type!.==.. (
+                    echo "        curveType: '!curve_type!',"
+                )
+                if not .!point_size!.==.. (
+                    echo "        pointSize: !point_size!,"
+                )
+                if not .!legpos_expr!.==.. (
+                    echo "        !legpos_expr!,"
+                )
+                if not .!color_expr!.==.. (
+                    echo "        !color_expr!,"
+                )
+                if not .!chart_area_options!.==.. (
+                    echo "        chartArea:!chart_area_options!,"
+                )
+                echo "        hAxis: {"
+                echo "            title: '!x_axis_title!',"
+                echo "            format: '0',"
+                echo "            textStyle: {"
+                echo "                color: '!axis_color!',"
+                echo "                bold: false,"
+                echo "                italic: false,"
+                echo "                fontSize: 10"
+                echo "            },"
+                if not .!x_axis_slanted_labels!.==.. (
+                    echo "            slantedText: !x_axis_slanted_labels!"
+                )
+                echo "        },"
+                echo "        vAxis: {"
+                echo "            title: '!y_axis_title!',"
+                echo "            minValue: 0,"
+                if not .!y_scale_type!.==.. (
+                    echo "            scaleType: '!y_scale_type!',"
+                )
+                echo "            textStyle: {"
+                echo "                color: '!axis_color!',"
+                echo "                bold: false,"
+                echo "               italic: false,"
+                echo "               fontSize: 10"
+                echo "            }"
+                echo "        }"
+    	        echo "    }"
+            )
+            @rem chart_type == PieChart --> true /  false
+
+            echo "        var chart = new google.visualization.!chart_type!(document.getElementById('!draw_func_name!_div'));"
+            echo "        chart.draw(data, options);"
+            echo "    }"
+            echo "</script>"
+        ) >> !tmp_chart_html!
+
+
+        call :remove_enclosing_quotes !tmp_chart_html!
+
+        if .!chart_only_show!.==.1. (
+            @rem SKIP from showing html table, only chart is interested here:
+            move !tmp_chart_html! !tmp_html! 1>nul
+        ) else (
+            @rem Show both the table and chart
+            type !tmp_chart_html! >> !tmp_html!
+        )
+
+    )
+    @rem if exist !chart_settings!
+
+:add_html_final
+    @rem this label is used for interruption of any further parsing/output when SQL-prepare/runtime error occurs
+
+
+    @rem ########################
     type %tmp_html% >> %htm_file%
+    @rem ########################
 
-    del %sql_temp% 2>nul
-    del %sql_log% 2>nul
-    del %sql_err% 2>nul
-    del %tmp_sqlda% 2>nul
-    del %tmp_nums% 2>nul
-    del %tmp_html% 2>nul
+    for /d %%f in (!sql_temp!,!sql_log!,!sql_err!,!tmp_sqlda!,!tmp_nums!,!tmp_html!,!tmp_chart_html!,!tmp_chart_data!) do (
+        if exist %%f del %%f
+    )
 
     endlocal
 
 goto:eof
 @rem ^
-@rem end of 'add_html_table' subroutine
+@rem end of ':add_html_table' subroutine
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
@@ -3480,7 +5184,7 @@ if exist %vbs_oem_converter% (
 
     @rem Convert from OEM to Windows code page in order to add into %log4all%:
     @rem -------------------------------------
-    cscript //nologo //e:vbscript !vbs_oem_converter! !rpt! !tmp1! !wincp!
+    %systemroot%\system32\cscript.exe //nologo //e:vbscript !vbs_oem_converter! !rpt! !tmp1! !wincp!
 
 ) else (
 
@@ -3514,7 +5218,7 @@ if exist %vbs_oem_converter% (
 
     @rem Convert from OEM to UTF-8 in order to add into HTML report
     @rem -------------------------
-    cscript //nologo //e:vbscript !vbs_oem_converter! !rpt! !rpu! UTF-8
+    %systemroot%\system32\cscript.exe //nologo //e:vbscript !vbs_oem_converter! !rpt! !rpu! UTF-8
 
 ) else (
     call :sho "ATTENTION. VBS-converter from OEM codepage does not exist." %log4all%
@@ -3559,7 +5263,7 @@ if .%outer_htm%.==.0. (
         echo ^<table^>
     ) >> !rph!
 ) else (
-    echo ^<table^>  >> !rph!
+    echo ^<table class="t_table"^>  >> !rph!
 )
 
 set wmic_clbak=UNKNOWN
@@ -3599,11 +5303,18 @@ if .%outer_htm%.==.0. (
     
     type !rph! >> !htm_file!
 
-    del !rph!
-    del !rpu!
 )
 
-del !rpt!
+set lst=%tmpdir%\hwinfo.lst
+set rpt=%tmpdir%\hwinfo.oem.txt
+set rpu=%tmpdir%\hwinfo.utf8.txt
+set rph=%tmpdir%\hwinfo.utf8.html
+set tmp1=%tmpdir%\hwinfo.1.tmp
+set tmp2=%tmpdir%\hwinfo.2.tmp
+
+for /d %%x in (!lst!,!rpt!,!rpu!,!rph!,!tmp1!,!tmp2!) do (
+    if exist %%x del %%x
+)
 
 endlocal
 goto:eof
@@ -3674,8 +5385,8 @@ if !errsize! EQU 0 (
 
     echo ' http://forum.script-coding.com/viewtopic.php?id=997
     echo ' https://stackoverflow.com/questions/31435662/vba-save-a-file-with-utf-8-without-bom/31436631#31436631
-    echo ' Usage: cscript //nologo //e:vbscript !oem_vbs_converter! ^<input-file-in-OEM-codepage^> ^<output-file^> ^<codepage-for-output-file^>
-    echo ' Samples:
+    echo ' Usage: %systemroot%\system32\cscript.exe //nologo //e:vbscript !oem_vbs_converter! ^<input-file-in-OEM-codepage^> ^<output-file^> ^<codepage-for-output-file^>
+    echo ' Examples:
     echo '     cscript //nologo //e:vbscript !oem_vbs_converter! hwinfo.oem.txt tmp.utf8.tmp utf-8
     echo '     cscript //nologo //e:vbscript !oem_vbs_converter! hwinfo.oem.txt tmp.1251.tmp windows-1251
     echo ' To obtain id of OEM and Windows codepage one can use:
@@ -3735,11 +5446,108 @@ goto:eof
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
+:dequote_string
+
+    setlocal
+
+    set src_list=%1
+
+    set left_char=!src_list:~0,1!
+    set righ_char=!src_list:~-1!
+
+    set result=src_list
+    @rem Remove enclosing double quotes from !src_list!:
+    set chksym=!left_char:"=!
+    if .!chksym!.==.. (
+       set chksym=!righ_char:"=!
+       if .!chksym!.==.. (
+          set result=!src_list:~1,-1!
+       )
+    )
+    endlocal & set "%~2=%result%"
+
+goto:eof
+
+@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 :trim
     setLocal
-    set Params=%*
+
+    @rem 22.10.2020: we have to enclose assignment of Params into double quotes.
+    @rem Otherwise caret will be duplicated here, i.e.
+    @rem when call this routine with string like: "set term ^;"
+    @rem then output will be: "set term ^^;"
+    set "Params=%*"
+
     for /f "tokens=1*" %%a in ("!Params!") do endLocal & set %1=%%b
+goto:eof
+
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
+
+:remove_enclosing_quotes
+
+    setlocal
+
+    @rem 17.10.2020. "Dequotes" each line from input file:
+    @rem 22.10.2020. We have to replace all occurences of "<" and "<" with some plain text like this is done in HTML-escaping.
+    @rem Otherwise :trim subroutine will fail to handle such rows :(
+
+    set input_file=%1
+    for /f %%a in ("!input_file!") do (
+        set tmp_output=%%~dpna.dequote_lines.tmp
+        if exist !tmp_output! del !tmp_output!
+    )
+    for /f "tokens=*" %%a in (!input_file!) do (
+        set val=%%a
+@rem echo init val=.!val!.
+        set left_char=!val:~0,1!
+        set righ_char=!val:~-1!
+
+@rem echo left_char=.!left_char!.  righ_char=.!righ_char!.
+
+        if "!left_char!"==" " set cutspaces=1
+        if "!left_char!"=="	" set cutspaces=1
+        if "!righ_char!"==" " set cutspaces=1
+        if "!righ_char!"=="	" set cutspaces=1
+
+@rem echo cutspaces=!cutspaces!
+
+        if .!cutspaces!.==.1. (
+            set val=!val:^|=$PIPE$OPERATOR$!
+            set val=!val:^&=$AMPERSAND$!
+            set val=!val:%%=$PERCENT$SIGN$!
+            set val=!val:^>=$GREATER$THEN$!
+            set val=!val:^<=$LESS$THEN$!
+
+@rem echo befo trim: val=.!val!.
+
+            call :trim val !val!
+
+@rem echo afte trim: val=.!val!.
+
+            for /f "useback tokens=*" %%x in ('!val!') do (
+                    set val=%%~x
+            )
+            set val=!val:$GREATER$THEN$=^>!
+            set val=!val:$LESS$THEN$=^<!
+            set val=!val:$PIPE$OPERATOR$=^|!
+            set val=!val:$AMPERSAND$=^&!
+            set val=!val:$PERCENT$SIGN$=%%!
+
+@rem echo afte repl: val=.!val!.
+
+        ) else (
+            for /f "useback tokens=*" %%x in ('!val!') do (
+                    set val=%%~x
+            )
+
+@rem echo w/o trim: val=.!val!.
+
+        )
+        echo !val!>>!tmp_output!
+    )
+    move !tmp_output! !input_file! 1>nul
+
 goto:eof
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -3751,68 +5559,6 @@ goto:eof
     set result=1
     if "!num_lst:%num_chk%=!"=="%num_lst%" set result=0
     endlocal & set "%~3=%result%"
-goto:eof
-
-@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-:get_sqlda_fld_name
-    setlocal
-    set fb=%1
-    set sqlda_name=%2
-    set fld_name=%2
-    if .%fb%.==.25. (
-       for /f "tokens=1-3 delims=()" %%u in ("%sqlda_name%") do (
-           if not .%%v.==.. ( set fld_name=%%v ) else ( set fld_name=%%w )
-       )
-    )
-    set fld_name=!fld_name: =!
-    
-    endlocal & set "%~3=%fld_name%"
-goto:eof
-
-@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-:is_num_type
-
-    setlocal
-
-    set fld_num=%1
-    set tmp_file=%2
-    set out_params_1st_line=%3
-
-    set /a k=1000+%fld_num%
-    set k=!k:~2,2!
-    set result=0
-    set num_types=SHORT LONG INT64 DOUBLE LONG FLOAT
-
-    @rem Sample for lines in tmp_file = %tmpdir%\make_html_table.tmp.sqd (result of output SQLDA): with OUPUT parameters:
-    @rem 2.5: 04: sqltype: 497 LONG	  Nullable sqlscale: 0 sqlsubtype: 0 sqllen: 4 -- TAB between "LONG" and NUllable
-    @rem 3.0: 04: sqltype: 496 LONG Nullable scale: 0 subtype: 0 len: 4
-
-    for /f "tokens=1-7 delims=: " %%a in ('findstr /n /c:"!k!: sqltype:" %tmp_file%') do (
-      
-      if %%a gtr %out_params_1st_line% (
-         
-         set fld_type=%%e
-
-         @rem ::: NB ::: Token for 2.5 can contain TAB as trailing character, so we have to TRIM it
-         @rem otherwise search for numeric-type columns for this resultset will NOT found any field!
-
-         if not !fld_type!==.. call :trim fld_type !fld_type!
-         @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-         
-         @rem echo rowN=%%a b=1st_token=%%b c=%%c d=%%d fld_type=^|!fld_type!^| f=%%f g=%%g &pause
-
-         for /d %%s in ( %num_types% ) do (
-            if .!fld_type!.==.%%s. (
-               set result=1
-               @rem echo found NUMERIC type, field: %fld_num% &pause
-            )
-         )
-      )
-    )
-
-    endlocal & set "%~4=%result%"
 goto:eof
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -3840,8 +5586,9 @@ goto:eof
     set /a t2s=(100%%e %% 100^) * 3600000 + (100%%f %% 100^) * 60000 + (100%%g %% 100^) * 1000 + (100%%h %% 100^) * 10
   )
   set /a tdiff=!t2s! - !t1s!
-  if .!t2s!. LSS .!t1s!. set /a tdiff=!tdiff!+86400000
-  @echo off
+  if .!t2s!. LSS .!t1s!. (
+      set /a tdiff=!tdiff!+86400000
+  )
 
   endlocal&set "%~3=%tdiff%"
 goto:eof
@@ -3890,14 +5637,36 @@ endlocal & goto:eof
 
 :bulksho
     setlocal
-    set tmp=%1
-    set log=%2
-    for /f "tokens=*" %%a in (!tmp!) do (
-       set line=%%a
-       set line=!line:"=`!
-       call :sho "!line!" !log!
+    set tmplog=%1
+    set joblog=%2
+    set keep_tmp=%3
+
+    set dts=!time!
+    set dts=!dts: =!
+    set dts=10!dts:,=.!
+    set dts=!dts:~-11!
+
+    for /f "tokens=*" %%a in (!tmplog!) do (
+       set msg=%%a
+
+       @rem Remove enclosing double quotes (if needed):
+       set left_char=!msg:~0,1!
+       set righ_char=!msg:~-1!
+       set chksym=!left_char:"=!
+       if .!chksym!.==.. (
+          set chksym=!righ_char:"=!
+          if .!chksym!.==.. (
+             set msg=!msg:~1,-1!
+          )
+       )
+
+       set msg=!dts!. !msg!
+       echo !msg!
+       echo !msg!>>!joblog!
     )
-    del !tmp!
+    if not .!keep_tmp!.==.1. (
+        del !tmplog!
+    )
 endlocal & goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -3922,7 +5691,7 @@ endlocal & goto:eof
         (
             echo ' Generated auto by %~f0, do NOT edit.
             echo ' Used to get random value within scope of two integers.
-            echo ' Usage: cscript.exe ^/^/nologo ^/^/e:vbscript %vb4sid_file% ^<from_minimal^> ^<upto_maximal^>
+            echo ' Usage: %systemroot%\system32\cscript.exe ^/^/nologo ^/^/e:vbscript %vb4sid_file% ^<from_minimal^> ^<upto_maximal^>
             echo ' Result: random value within scope, cast as integer.
             echo dim min,max
             echo min=WScript.Arguments.Item(0^)
@@ -3936,8 +5705,7 @@ endlocal & goto:eof
     ) else if /i .!mode!.==.get_rnd. (
         
         if .1.==.1. (
-            @rem echo cscript //nologo //e:vbscript %vb4sid_file% %from_min% %upto_max%
-            cscript //nologo //e:vbscript %vb4sid_file% %from_min% %upto_max% >%result_file%
+            %systemroot%\system32\cscript.exe //nologo //e:vbscript %vb4sid_file% %from_min% %upto_max% >%result_file%
             endlocal & set /p %~5=<%result_file%
             del /q %result_file%
         )
@@ -3945,7 +5713,7 @@ endlocal & goto:eof
         if .1.==.0. (
             @rem does NOT work:
             @rem ==============
-            set run_cmd=cscript //nologo %vb4sid_file% %from_min% %upto_max%
+            set run_cmd=%systemroot%\system32\cscript.exe //nologo %vb4sid_file% %from_min% %upto_max%
             for /f %%a in ('cmd /c !run_cmd!') do (
                set %~5=%%a
             )
@@ -3962,59 +5730,64 @@ goto:eof
 
 @rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-:getFileTimestamp
+:catch_err
+    
     setlocal
-    
-    @rem Introduced 09.05.2019 for usage instead old routine :getFileDTS
-    @rem Sample: 
-    @rem     set this_dts=UNKNOWN
-    @rem     call :getFileTimestamp %~f0 this_dts
-    @rem Result: variable 'this_dts' will contain timestamp in form: YYYYMMDDhhmiss of this batch file
 
-    set fname=%~nx1
-    set fpath=%~dp1
-    set fpath=!fpath:\=\\!
-    set ffull=!fpath!!fname!
+    @rem Sample:
+    @rem set run_cmd=!fbsvcrun! info_server_version
+    @rem !run_cmd! 1>%tmplog% 2>%tmperr%
+    @rem call :catch_err run_cmd !tmperr! n/a nofbvers
+    @rem call :catch_err run_isql !tmperr! !tmpchk! db_not_ready 0
+    @rem call :catch_err run_isql !tmperr! !tmpsql! db_cant_write 1
 
-    @rem NOTE: within for-loop we have to escape COMMA characters and, moreover, 
-    @rem use DOUBLE quotes to enclose both prefix (NAME=) and name of interested file, like this:
-    @rem "NAME='full-path-to-interested-file'"
-    @rem Otherwise wmic will issue invalid verb or invalid get expression error.
-    @rem https://superuser.com/questions/1078734/wmic-in-for-loop
+    set runcmd=!%1!
+    set err_file=%2
+    set sql_file=%3
+    set add_label=%4
+    set do_abend=%5
+    if .%5.==.. set do_abend=1
 
-    @rem THIS WORKS OK:
-    @rem for /f "usebackq" %%a in (`wmic datafile where "name='C:\\pagefile.sys'" get Size^,LastModified /format:list ^| findstr /r /v "^$"`) do ...
-    @rem Full list of supported properties: wmic datafile get /?
+    @rem set cmdlog=%tmpdir%\%~n0_last_cmd.log
+    @rem call :repl_with_bound_quotes %cmdlog% cmdlog
 
-    @rem wmic datafile where "name='!ffull!'" get LastModified /format:list | more | findstr = >tmp-wmic-list.tmp
+    for /f "delims=" %%a in (!cmdlog!) do set cmd_run=%%a
 
-    for /f "usebackq" %%a in (`wmic datafile where "name='!ffull!'" get LastModified /format:list ^| more ^| findstr /r /v "^^$"`) do (
-        set filedts=%%a
-        @rem for timestamp with millisecond: set filedts=!filedts:~13,18!
-        @rem it is enough for this test to get timetsamp only up to seconds:
-        set filedts=!filedts:~13,14!
+    for /f "usebackq tokens=*" %%a in ('%err_file%') do set size=%%~za
+    if .!size!.==.. set size=0
+    if !size! gtr 0 (
+        echo.
+        echo ### ATTENTION ###
+        echo.
+        if not .%add_label%.==.. (
+          if /i not .%add_label%.==.n/a. (
+              call :!add_label!
+          )
+        )
+        echo.
+        echo Command: !runcmd!
+        echo.
+        if /i not .!sql_file!.==.n/a. (
+            echo SQL script: %sql_file%
+        )
+        echo Content of error log (%err_file%^):
+        echo ^=^=^=^=^=^=^=
+        type %err_file%
+        echo ^=^=^=^=^=^=^=
+
+        if .!do_abend!.==.1. (
+            if .%can_stop%.==.1. (
+                echo.
+                echo Press any key to FINISH this batch. . .
+                pause>nul
+            )
+            goto fin
+        )
     )
-    
-    endlocal & set "%~2=%filedts%"
-
+    endlocal
 goto:eof
-@rem ^
-@rem end of getFileTimestamp
 
-@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-
-
-:err_setenv
-  @echo off
-  echo.
-  echo Batch running now: %~f0
-  echo.
-  echo Config file: %cfg% - could NOT set new environment variables.
-  echo.
-  echo Press any key to FINISH. . .
-  echo.
-  @pause>nul
-  @goto fin
+@rem +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-
 
 :fin
 @rem do NOT remove this exit command otherwise all cmd worker windows stay opened:

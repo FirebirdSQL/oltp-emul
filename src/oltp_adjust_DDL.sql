@@ -72,7 +72,7 @@ begin
     -- 18.03.2019: aux SP for totalling results that are in PERF_SPLIT_nn tables to PERF_LOG, using separate attachment.
     -- Purpose: reduce time of reports creation.
     sql_sttm = v_lf || 'set term ^;'
-            || v_lf || 'create or alter procedure tmp_aggregate_perf_data_autogen returns(msg dm_info) as begin end ^'
+            || v_lf || 'create or alter procedure tmp_aggregate_perf_data_autogen( a_ignore_stop_flag dm_sign = 0 ) returns(msg dm_info) as begin end ^'
             || v_lf || 'set term ;^'
             || v_lf || 'commit;'
     ;
@@ -123,12 +123,12 @@ begin
     
     v_lf = ascii_char(10);
 
-    v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO!.';
+    v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO, see oltp_adjust_DDL.sql';
     
     -- 13.10.2018, called only from HERE, see EB below.
     -- Generates SQL statements for TRIGGER trg_v_perf_log which serves as 'case-switcher'
     -- on every insert into UPDATABLE VIEW v_perf_log.
-    -- 15.10.2018, NB: trigger must be created EVEN if number of perf_split_nn tables is 1:
+    -- 15.10.2018, NB: trigger must be created even for number of perf_split_nn tables = 1:
     -- we have to ensure that field PERF_SPLIT_0.ID will be always NOT null!
     sql_sttm = v_lf || 'set term ^;'
        || v_lf || 'create or alter trigger trg_v_perf_log active before insert on v_perf_log as'
@@ -269,8 +269,8 @@ execute block returns(" " varchar(32765)) as
     declare DBG_PRESERVE_PERF_LOG_ROWS smallint = 0; -- 26.03.2019
 begin
     v_lf = ascii_char(10);
-    v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO!.';
-    
+    v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO, see oltp_adjust_DDL.sql';
+
     " " = 'set bail on; ' || v_autogen
     ;
     suspend;
@@ -410,10 +410,11 @@ begin
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
     --     g e n e r a t e        p r o c     f o r     a g g.    p e r f.    r e s u l t s
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
-    -- create or alter procedure tmp_aggregate_perf_data_autogen( a_dts_interval int = 0)
 
     " " = v_lf || 'set term ^;'
-       || v_lf || 'create or alter procedure tmp_aggregate_perf_data_autogen returns(msg dm_info) as'
+       || v_lf || 'create or alter procedure tmp_aggregate_perf_data_autogen('
+       || v_lf || '    a_ignore_stop_flag dm_sign = 0' -- added 19.09.2020
+       || v_lf || ') returns(msg dm_info) as'
        || v_lf || '    declare unit        dm_unit;'
        || v_lf || '    declare exc_unit    char(1);'
        || v_lf || '    declare fb_gdscode  int;'
@@ -427,24 +428,38 @@ begin
        || v_lf || '    declare v_dts_interval int;'
        || v_lf || '    declare v_ins_rows int = 0;'
        || v_lf || '    declare v_upd_rows int = 0;'
+       || v_lf || '    declare v_rownum int = 0;'
+       || v_lf || '    declare v_stopcheck int = 5000; -- how often check for stop work inside loop of PERF_SPLIT_nn cursors'
        || v_lf || 'begin'
        || v_lf ||  v_autogen
     ;
     suspend;
 
+    -- added 19.09.2020:
+    " " = v_lf
+       || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
+       || v_lf || '    begin'
+       || v_lf || '        -- Check that table `ext_stoptest` (external text file) is EMPTY,'
+       || v_lf || '        -- otherwise raises e`xception to stop test:'
+       || v_lf || '        execute procedure sp_check_to_stop_work;'
+       || v_lf || '    end'
+    ;
+    suspend;
+
+    --   || v_lf || '        -- We can SKIP from logging in perf_* tables if WARM_TIME not yet elapsed, i.e. when database is warmed-up.'
     " " = v_lf
        || v_lf || '    select p.test_time_dts_beg, p.test_time_dts_end, p.test_intervals'
        || v_lf || '    from sp_get_test_time_dts p'
        || v_lf || '    into v_test_time_dts_beg, v_test_time_dts_end, v_intervals_number;'
        || v_lf || '    if ( cast(''now'' as timestamp) < v_test_time_dts_beg ) then'
        || v_lf || '    begin'
-       || v_lf || '        -- We can SKIP from logging in perf_* tables if WARM_TIME not yet elapsed, i.e. when database is warmed-up.'
+       || v_lf || '        msg = ''SKIP until WARM_TIME expire at '' || left(cast(v_test_time_dts_beg as varchar(50)), 19);'
+       || v_lf || '        suspend;'
        || v_lf || '        exit;'
        || v_lf || '    end'
        || v_lf || '    v_seconds_per_interval = 1 + datediff(second from v_test_time_dts_beg to v_test_time_dts_end) / v_intervals_number;'
     ;
     suspend;
-
 
     i = 0;
     while ( i < v_perf_log_split_cnt ) do
@@ -457,6 +472,23 @@ begin
             ;
             suspend;
         end
+
+
+        if (i > 0) then
+        begin
+            -- added 19.09.2020: all essions except SID=1 must check stop-flag here:
+            " " =  v_lf 
+                || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
+                || v_lf || '    begin'
+                || v_lf || '        -- NB: only sessions with SID > 1 must check need to stop work'
+                || v_lf || '        -- Session with SID = 1 must gather performance data regardless stop-flag.'
+                || v_lf || '        execute procedure sp_check_to_stop_work;'
+                || v_lf || '    end'
+            ;
+            suspend;
+        end
+
+
 
         " " =  v_lf || '    for'
             || v_lf || '        select'
@@ -487,6 +519,17 @@ begin
             || v_lf || '            ,v_dts_end'
             || v_lf || '    as cursor c'
             || v_lf || '    do begin'
+        ;
+        suspend;
+
+        -- added 19.09.2020: all essions except SID=1 must check stop-flag here:
+        " " =  v_lf || '        v_rownum = v_rownum + 1;'
+            || v_lf || '        if ( a_ignore_stop_flag = 0 and mod(v_rownum, v_stopcheck) = 0 ) then'
+            || v_lf || '        begin'
+            || v_lf || '            -- NB: only sessions with SID > 1 must check need to stop work'
+            || v_lf || '            -- Session with SID = 1 must gather performance data regardless stop-flag.'
+            || v_lf || '            execute procedure sp_check_to_stop_work;'
+            || v_lf || '        end'
         ;
         suspend;
 
@@ -695,7 +738,6 @@ commit;
 
 drop procedure tmp$sp$gen_trigger_4_v_per_log;
 commit;
-
 
 -- #####################################################################################################################
 

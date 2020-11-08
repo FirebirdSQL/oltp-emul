@@ -406,6 +406,13 @@ create domain dm_stack varchar(512);
 -- See also reply from dimitr, letter 11-jan-2016 16:04 (subj: "SOS. M`ON$REMOTE_ADDRESS, ...")
 -- Fixed in http://sourceforge.net/p/firebird/code/62802 (only port numbers will serve as "suffixes")
 create domain dm_ip varchar(255);
+
+-- 16.05.2020: domain for counter fields in mon_log, mon_log_table_stats and mon_cache_memory:
+-- rec_inserts, rec_updates, ..., mem_used, mem_alloc: most of them are result of AGGREGATION of two records, with mult=-1 and +1.
+-- Result must be always greater than 0. NOTE: any measurement related to mon$ queries can fail - for example, because of insufficient
+-- space for temp files ==> one need check in firebird.log: "No free space found in temporary directories /... / No space left on device".
+create domain dm_counter as bigint check( value >= 0 );
+
 commit;
 
 -------------------------------------------------------------------------------
@@ -606,6 +613,9 @@ recreate table settings(
     ,constraint settings_unq unique(working_mode, mcode) using index settings_mode_code
     ,constraint settings_valid_ctype check(context in(null,'USER_SESSION','USER_TRANSACTION'))
 );
+commit;
+-- added 17.09.2020: forgotten since 28.04.2020!
+create unique index settings_mcode_wm_unq on settings computed by ( mcode || iif(working_mode in ('COMMON','INIT'), '', working_mode) );
 commit;
 
 -- lookup table: types of operations
@@ -998,8 +1008,8 @@ commit;
 recreate table fb_errors(
    fb_sqlcode int,
    fb_gdscode int,
-   fb_mnemona varchar(31),
-   fb_errtext varchar(100),
+   fb_mnemona varchar(64),
+   fb_errtext varchar(256),
    constraint fb_errors_gds_code_unq unique(fb_gdscode) using index fb_errors_gds_code
 );
 commit;
@@ -1127,7 +1137,7 @@ recreate global temporary table tmp$perf_est_whole(
 commit;
 
 -- introduced 09.08.2014, for checking mon$-tables stability: gather stats
--- Also used when context 'mon_unit_list' is not empty (see s`p_add_to_perf_log).
+-- Also used when config parameter 'mon_unit_list' is not empty (see s`p_add_to_perf_log).
 -- see mail: SF.net SVN: firebird:[59967] firebird/trunk/src/jrd
 -- (dimitr: Better (methinks) synchronization for the monitoring stuff)
 recreate table mon_log(
@@ -1137,37 +1147,36 @@ recreate table mon_log(
    ,trn_id bigint
    ,add_info dm_info
    --------------------
-   ,rec_inserts bigint
-   ,rec_updates bigint
-   ,rec_deletes bigint
-   ,rec_backouts bigint
-   ,rec_purges bigint
-   ,rec_expunges bigint
-   ,rec_seq_reads bigint
-   ,rec_idx_reads bigint
+   ,rec_inserts dm_counter
+   ,rec_updates dm_counter
+   ,rec_deletes dm_counter
+   ,rec_backouts dm_counter
+   ,rec_purges dm_counter
+   ,rec_expunges dm_counter
+   ,rec_seq_reads dm_counter
+   ,rec_idx_reads dm_counter
    ---------- counters avaliable only in FB 3.0, since rev. 59953 --------------
-   ,rec_rpt_reads bigint -- <<< since rev. 60005, 27.08.2014 18:52
-   ,bkv_reads bigint -- mon$backversion_reads, since rev. 60012, 28.08.2014 19:16
-    -- since rev. 59953, 05.08.2014 08:46:
-   ,frg_reads bigint
+   ,rec_rpt_reads dm_counter -- <<< since rev. 60005, 27.08.2014 18:52
+   ,bkv_reads dm_counter -- mon$backversion_reads, since rev. 60012, 28.08.2014 19:16
+   ,frg_reads dm_counter -- since rev. 59953, 05.08.2014 08:46
    -- optimal values for (letter by dimitr 27.08.2014 21:30):
    -- bkv_per_rec_reads = 1.0...1.2
    -- frg_per_rec_reads = 0.01...0.1 (better < 0.01), depending on record width; increase page size if high value
    ,bkv_per_seq_idx_rpt computed by ( 1.00 * bkv_reads / nullif((rec_seq_reads + rec_idx_reads + rec_rpt_reads),0) )
    ,frg_per_seq_idx_rpt computed by ( 1.00 * frg_reads / nullif((rec_seq_reads + rec_idx_reads + rec_rpt_reads),0) )
-   ,rec_locks bigint
-   ,rec_waits bigint
-   ,rec_confl bigint
+   ,rec_locks dm_counter
+   ,rec_waits dm_counter
+   ,rec_confl dm_counter
    -----------------------------------------------------------------------------
-   ,pg_reads bigint
-   ,pg_writes bigint
-   ,pg_fetches bigint
-   ,pg_marks bigint
-   ,mem_used bigint
-   ,mem_alloc bigint
+   ,pg_reads dm_counter
+   ,pg_writes dm_counter
+   ,pg_fetches dm_counter
+   ,pg_marks dm_counter
+   ,mem_used bigint -- must NOT be type of dm_counter because negative values can be here
+   ,mem_alloc bigint -- must NOT be type of dm_counter because negative values can be here
    ,server_pid bigint
    ,remote_pid bigint
-   ,stat_id bigint
+   ,stat_id dm_counter
    ,dump_trn bigint default current_transaction
    ,ip dm_ip
    ,usr dm_dbobj
@@ -1191,24 +1200,24 @@ recreate table mon_log_table_stats(
    ,trn_id bigint
    ,table_name dm_dbobj
    --------------------
-   ,rec_inserts bigint
-   ,rec_updates bigint
-   ,rec_deletes bigint
-   ,rec_backouts bigint
-   ,rec_purges bigint
-   ,rec_expunges bigint
-   ,rec_seq_reads bigint
-   ,rec_idx_reads bigint
+   ,rec_inserts dm_counter
+   ,rec_updates dm_counter
+   ,rec_deletes dm_counter
+   ,rec_backouts dm_counter
+   ,rec_purges dm_counter
+   ,rec_expunges dm_counter
+   ,rec_seq_reads dm_counter
+   ,rec_idx_reads dm_counter
    --------------------
-   ,rec_rpt_reads bigint
-   ,bkv_reads bigint
-   ,frg_reads bigint
+   ,rec_rpt_reads dm_counter
+   ,bkv_reads dm_counter
+   ,frg_reads dm_counter
    ,bkv_per_seq_idx_rpt computed by ( 1.00 * bkv_reads / nullif((rec_seq_reads + rec_idx_reads + rec_rpt_reads),0) )
    ,frg_per_seq_idx_rpt computed by ( 1.00 * frg_reads / nullif((rec_seq_reads + rec_idx_reads + rec_rpt_reads),0) )
-   ,rec_locks bigint
-   ,rec_waits bigint
-   ,rec_confl bigint
-   ,stat_id bigint
+   ,rec_locks dm_counter
+   ,rec_waits dm_counter
+   ,rec_confl dm_counter
+   ,stat_id dm_counter
    ,rowset bigint -- for grouping records that related to the same measurement
    ,table_id smallint
    ,is_system_table smallint
@@ -1223,36 +1232,15 @@ create index mon_log_table_stats_tn_unit on mon_log_table_stats(table_name, unit
 create index mon_log_table_stats_dts on mon_log_table_stats(dts); -- 26.09.2015, for SP srv_mon_stat_per_tables
 commit;
 
-
--- 16.12.2018: table for storing data about duration of monitoring.
--- It was decided to query data that allows to evaluate metadata cache size
--- (see SP srv_fill_mon_memo_consumption)
-recreate table mon_memory_consumption(
-    stat_type varchar(20)
-    ,sys_memo_used bigint
-    ,usr_memo_used bigint
-    ,active_attachments_cnt smallint
-    ,active_transactions_cnt smallint
-    ,running_statements_cnt int
-    ,stalled_statements_cnt int
-    ,rowset bigint -- for grouping records that related to the same measurement
-    ,id dm_idb generated by default as identity
-    ,dts timestamp default 'now'
-    ,elap_ms int -- duration of gathering mon$ info, milliseconds
-    ,constraint pk_mon_memory_consumption primary key(id)
-);
-
-create descending index mon_memo_rowset_desc on mon_memory_consumption(rowset);
-create index mon_memo_dts on mon_memory_consumption(dts);
-commit;
-
---31.12.2018
+-- 31.12.2018: data related to memory consumption (including metadata cache size).
 recreate table mon_cache_memory (
     pg_buffers int
     ,pg_size int
     ,pg_cache_type varchar(10)
     ,page_cache_size bigint
     ,meta_cache_size bigint
+    ,memo_used_all bigint -- 27.05.2020
+    ,memo_allo_all bigint -- 27.05.2020
     ,memo_used_att bigint
     ,memo_used_trn bigint
     ,memo_used_stm bigint
@@ -1265,6 +1253,8 @@ recreate table mon_cache_memory (
     ,elap_ms int -- duration of gathering mon$ info, milliseconds
     ,constraint pk_mon_cache_memory primary key(id)
 );
+commit;
+
 
 --------------------------------------------------------------------------------
 -- # # # # #                 F O R E I G N    K E Y S                  # # # # #
@@ -1425,13 +1415,21 @@ begin
 end
 ^
 
-
-
 create or alter function fn_remote_process returns varchar(255) deterministic as
 begin
     return rdb$get_context('SYSTEM', 'CLIENT_PROCESS');
 end
 ^
+
+create or alter procedure fn_remote_process returns (result varchar(255) ) as
+begin
+    -- 28.05.2020. This SP is needed only for units which are common for 2.5 and 3.x+.
+    -- We can move them in sp_comnon_sp.sql (there is no PSQL functions in FB 2.5)
+    result = fn_remote_process();
+    suspend;
+end
+^
+
 
 create or alter function fn_remote_address returns dm_ip deterministic as
 begin
@@ -1444,7 +1442,38 @@ begin
     return
         fn_remote_process() containing 'IBExpert' 
         or
-        rdb$get_context('SYSTEM','ISOLATION_LEVEL') is not distinct from upper('SNAPSHOT');
+        rdb$get_context('SYSTEM','ISOLATION_LEVEL') is not distinct from upper('SNAPSHOT')
+        or
+        rdb$get_context('SYSTEM','ENGINE_VERSION') >= '4.0' and rdb$get_context('SYSTEM', 'SNAPSHOT_NUMBER') is not null
+        ;
+end
+^
+
+-- 19.09.2020
+create or alter procedure fn_is_snapshot
+returns (
+    result dm_sign)
+AS
+begin
+    -- 19.09.2020. This SP is needed only for units which are common for 2.5 and 3.x+.
+    -- We can move them in sp_comnon_sp.sql (there is no PSQL functions in FB 2.5)
+    result = iif( fn_is_snapshot(), 1, 0);
+    suspend;
+end
+^
+
+-- 19.09.2020
+create or alter procedure fn_is_lock_trouble (
+    a_gdscode integer)
+returns(
+    result dm_sign
+)
+as
+begin
+    -- 19.09.2020. This SP is needed only for units which are common for 2.5 and 3.x+.
+    -- We can move them in sp_comnon_sp.sql (there is no PSQL functions in FB 2.5)
+    result = iif( fn_is_lock_trouble(a_gdscode), 1, 0 );
+    suspend;
 end
 ^
 
@@ -1974,6 +2003,18 @@ end
 
 ^ -- fn_get_stack
 
+create or alter procedure fn_get_stack(
+    a_halt_due_to_error smallint default 0
+) returns(result dm_stack) as
+begin
+    -- 05.10.2020. Added SP in order to make code of sp_halt_on_error common for 2.5 and 3.x+.
+    -- and move it into sp_comnon_sp.sql (there is no PSQL functions in FB 2.5)
+    result = fn_get_stack(a_halt_due_to_error);
+    suspend;
+end
+^ -- proc fn_get_stack
+
+
 -- STUB, will be redefined when config parameter 'use_external_to_stop'
 -- has some non-empty value of [path+]file of external table that will serve
 -- as mean to stop test from outside (i.e. this parameter is UNcommented)
@@ -2057,86 +2098,8 @@ create or alter procedure sp_halt_on_error(
     a_trn_id bigint default null,
     a_need_to_stop smallint default null
 ) as
-    declare v_curr_trn bigint;
-    declare v_dummy bigint;
-    declare v_need_to_stop smallint;
 begin
-    -- Adding single character + LF into external table (text file) 'stoptest.txt'
-    -- when test is needed to stop (either due to test_time expiration or because of
-    -- encountering some critical errors like PK/FK violations or negative amount remainders).
-    -- Input argument a_char:
-    -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to PK/FK violation,
-    --         and also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
-    --         sum of doc_data amounts and count of rows in QDistr + QStorned.
-    -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
-    --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
-    -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
-    --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
-    --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
-
-    -- 16.01.2019: this SP can be called from outer .sql where UDF sleep() is called
-    -- in loop with SMALL pause = 1 second and checking whether test has to be
-    -- terminated or no (between each iteration, i.e. while this loop not ends)
-    -- Loop can work in READ_ONLY transaction, thus we have to check it and SKIP
-    -- any actions that attempts to write data:
-    if ( rdb$get_context('SYSTEM','READ_ONLY') = upper('true') ) then
-        exit;
-    --########
-    if ( (a_need_to_stop < 0 or gen_id(g_stop_test, 0) <= 0) and fn_remote_process() NOT containing 'IBExpert' )
-    then
-    begin
-        v_curr_trn = coalesce(a_trn_id, current_transaction);
-
-        -- "-1" ==> decision to premature stop all ISQL sessions by issuing EXTERNAl command
-        -- (either running $tmpdir/1stoptest.tmp.sh or adding line into external file 'stoptest.txt')
-        v_need_to_stop = coalesce( :a_need_to_stop, (select p.need_to_stop from sp_stoptest p rows 1) );
-
-        v_dummy = gen_id( g_stop_test, 2147483647);
-        
-        in autonomous transaction do
-        begin
-            -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
-            insert into perf_log(
-                unit
-                ,fb_gdscode
-                ,ip
-                ,trn_id
-                ,dts_end
-                ,elapsed_ms
-                ,stack
-                ,exc_unit
-                ,exc_info
-            ) values(
-                'sp_halt_on_error'
-                ,:a_gdscode
-                ,fn_remote_address()
-                ,:v_curr_trn
-                ,'now'
-                ,-1
-                ,fn_get_stack( iif(:a_gdscode>=0, 1, 0) ) -- pass '1' to force write call_stack to perf_log if this is NOT expected test finish
-                ,:a_char
-                ,iif( -- write info for reporting state of how test finished:
-                    :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
-                    ,iif( :v_need_to_stop < 0
-                         ,'PREMATURE: EXTERNAL COMMAND.'
-                         ,'NORMAL: TEST_TIME EXPIRED.'
-                        )
-                )
-            );
-
-            begin
-                -- moved here from sp_check_to_stop_work: avoid excessive start auton. Tx!
-                update perf_log p set p.info = 'closed'
-                where p.unit = 'perf_watch_interval' and p.info containing 'active'
-                order by dts_beg desc
-                rows 1;
-            when any do
-                begin
-                    -- NOP --
-                end
-            end
-        end
-    end
+    -- STUB! Will be defined in oltp_common_sp.sql
 end
 
 ^ -- sp_halt_on_error
@@ -2150,7 +2113,7 @@ returns(
     storno_sub smallint
 ) as
 begin
-    -- STUB! Will be defined in oltp_common.sp
+    -- STUB! Will be defined in oltp_common_sp.sql
     suspend;
 end
 
@@ -2281,14 +2244,16 @@ begin
             ,trn_id
             ,ip
             ,aux1
+            ,stack
         ) values(
-             't$perf-abend:' || :a_starter                         -- unit
+             't$perf-abend:' || coalesce(:a_starter, 'unknown')    -- unit -- ?? 21.04.2019, not yet fixed ...
             ,'gds='|| :a_gdscode||', saved ' ||:i||' rows in ATx'  -- info
             ,:v_dts_beg                                            -- dts_beg
             ,'now'                                                 -- dts_end
             ,:v_curr_tx                                            -- trn_id
             ,:v_remote_addr                                        -- IP
             ,:i                                                    -- aux1
+            ,iif( :a_starter is null, fn_get_stack( 1 ), null) -- ?? 21.04.2019, not yet fixed ...
          );
 
     end -- in autonom. tx
@@ -2560,7 +2525,7 @@ create or alter procedure sp_add_perf_log (
     a_aux2 dm_aux default null
 ) as
 begin
-    -- STUB! Actual code see in oltp_common.sql
+    -- STUB! Actual code see in oltp_common_sp.sql
 end
 ^ -- sp_add_perf_log  // STUB!
 
@@ -2735,8 +2700,14 @@ begin
        )
     then
         begin
-           execute procedure sp_halt_on_error('2', -1, current_transaction, :v_need_to_stop);
-           -- exception ex_test_cancellation; -- E X C E P T I O N:  C A N C E L   T E S T
+           -- current SP = sp_check_to_stop_work
+           execute procedure sp_halt_on_error('2', -1, current_transaction, :v_need_to_stop); -- '2' => NORMAL test finish due to time expiration
+           -- a_char char(1) default '1',
+           -- a_gdscode bigint default null,
+           -- a_trn_id bigint default null,
+           -- a_need_to_stop smallint default null
+
+           -- E X C E P T I O N:  C A N C E L   T E S T
            exception ex_test_cancellation ( select result from sys_stamp_exception('ex_test_cancellation') );
         end
 end
@@ -2856,7 +2827,7 @@ as
     declare id_max double precision;
     declare v_rows int;
     declare id_random bigint;
-    declare v_detailed_exc_text dm_info; -- prev: msg; 19.12.2018
+    declare v_detailed_exc_text dm_info;
     declare v_info dm_info;
     declare v_this dm_dbobj = 'sp_get_random_id';
     declare v_ctxn dm_ctxnv;
@@ -3200,7 +3171,7 @@ begin
                 :a_clo_for_our_firm = 0
                 or
                 -- do NOT multiply rows for rcv_op = 'RES' if current doc = client order for OUR firm!
-                :a_clo_for_our_firm = 1 and r.rcv_optype_id <> 3300 -- fn_oper_retail_reserve()
+                :a_clo_for_our_firm = 1 and r.rcv_optype_id <> 3300 -- 4speed; do not call fn_oper_retail_reserve every time
             )
         into v_rcv_optype_id, v_doc_data_id, v_ware_id, v_qty_for_distr, v_purchase_for_distr, v_retail_for_distr, v_storno_sub
     do
@@ -3649,6 +3620,8 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- 12.08.2018: get subsequent number of "current" ISQL session.
+    -- We need this when config parameter separate_workers = 1:
     v_worker_id = fn_this_worker_seq_no();
 
     open cs;
@@ -4342,7 +4315,7 @@ begin
     for
         select d.id, r.rcv_optype_id, r.storno_sub, d.ware_id, d.qty,  d.cost_purchase
         from doc_data d
-        cross join v_rules_for_qdistr r
+        cross join v_rules_for_qdistr r -- 29.03.2019: replaced with view in order to remove dependencies
         where d.doc_id = :a_doc_id and r.snd_optype_id = :a_old_optype
     into v_dd_id, v_old_rcv_optype, v_storno_sub, v_dd_ware_id, v_dd_qty, v_dd_cost
     do
@@ -5051,7 +5024,7 @@ when any do
             gdscode,
             v_info,
             v_this,
-            fn_halt_sign(gdscode) -- iif( fn_is_uniqueness_trouble(gdscode), 1, 0) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+            fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
         );
         --#######
         exception;  -- ::: nb ::: anonimous but in when-block!
@@ -5224,7 +5197,6 @@ begin
                     and qd.rcv_optype_id = :v_rcv_optype_id
                     -- This is mandatory otherwise get lot of different docs for the same {ware,snd_optype_id,rcv_optype_id}:
                     and qd.snd_id = :v_dd_id
-                    -- Added only 18.12.2018
                     and qd.worker_id is not distinct from fn_this_worker_seq_no()
                 into v_qd_qs_orphan_src, v_qd_qs_orphan_doc, v_qd_qs_orphan_sid, v_qd_qs_orphan_id;
 
@@ -5656,7 +5628,12 @@ begin
                :v_this, -- fn_get_stack(),
                current_transaction
             );
-            execute procedure sp_halt_on_error('5', :c_chk_violation_code, :v_curr_tx); -- temply
+            -- current sp = srv_check_neg_remainders
+            execute procedure sp_halt_on_error('5', :c_chk_violation_code, :v_curr_tx); -- '5' ==> ABEND because of negative stock remainder
+            -- a_char char(1) default '1',
+            -- a_gdscode bigint default null,
+            -- a_trn_id bigint default null,
+            -- a_need_to_stop smallint default null
         end
         -- 335544558 check_constraint    Operation violates CHECK constraint @1 on view or table @2.
         execute procedure sp_add_to_abend_log(
@@ -5717,7 +5694,7 @@ where
 
 
 create or alter view v_cancel_supplier_invoice as
--- source for random choose invoice from supplier that will be cancelled
+-- source for random choose supplier order doc to be cancelled
 select h.id
 from doc_list h
 where
@@ -6693,7 +6670,7 @@ when any do
             fn_halt_sign(gdscode) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
         );
         --#######
-        exception;  -- ::: nb ::: anon  imous but in when-block!
+        exception;  -- ::: nb ::: anonimous but in when-block!
         --#######
     end
 
@@ -8237,6 +8214,54 @@ begin
 end 
 
 ^ -- sys_get_func_ddl
+
+create or alter procedure srv_drop_oltp_worker as
+begin
+
+    -- 17.05.2020, needed only in FB 3.x+.
+    -- Drop all temporary users which could be created before when mon_unit_perf = 1
+    -- for reducing affect of gathering mon$ data before and after every business action.
+    -- Then drop temporary role.
+    -- ::: NB::: TAG '#OLTP_EMUL#'IS USED HERE FOR SEARCH AND DROP OLD TEMPORARY USERS/ROLE.
+    -- See also sp srv_gen_sql_make_oltp_worker
+    for
+            select trim(s.sec$user_name) as usr_name
+            from sec$users s
+            where
+                upper(trim(s.sec$user_name)) != upper('sysdba')
+                and s.sec$description containing '#oltp_emul#'
+            as cursor c
+    do begin
+            begin
+                execute statement 'drop user ' || c.usr_name;
+            when any do
+                begin
+                    -- nop --
+                end
+            end
+    end
+
+    -- ::: NB::: TAG '#OLTP_EMUL#'IS USED HERE FOR SEARCH AND DROP OLD TEMPORARY USERS/ROLE.
+    -- See also sp srv_gen_sql_make_oltp_worker
+    for
+        select trim(r.rdb$role_name) as role_name
+        from rdb$roles r
+        where
+            upper(r.rdb$role_name) != upper('rdb$admin')
+            and r.rdb$description containing '#oltp_emul#'
+        as cursor c
+    do  begin
+        begin
+            execute statement 'drop role ' || c.role_name;
+        when any do
+            begin
+                -- nop --
+            end
+        end
+    end
+end
+
+^ -- srv_drop_oltp_worker
 
 set term ;^
 set list on;

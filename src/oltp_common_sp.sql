@@ -108,8 +108,58 @@ where e.minute_since_test_start>0
 group by e.minute_since_test_start
 ;
 
-commit;
+----------------------------------------------------------
 
+-- 06.10.2020
+create or alter view z_severe_errors as
+/*
+1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
+2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
+   Auto removing of .err files which did contain "string truncation" error was the main reason
+   why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
+*/
+select 0 as fb_gdscode, 'Unidentified error in PSQL code: gdscode=0 within WHEN block when exception raised.' as fb_descr from rdb$database union all
+select 335544321, 'string truncation: attempt to assign too long text into string variable.' from rdb$database union all
+select 335544347, 'not_valid: validation error for column.' from rdb$database union all
+select 335544558, 'check_constraint: operation violates CHECK constraint on view or table.' from rdb$database union all
+select 335544665, 'unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint'  from rdb$database union all
+select 335544349, 'no_dup: operation violates unique index' from rdb$database union all
+select 335544466, 'foreign_key: violation of FOREIGN KEY constraint "@1" on table "@2".'  from rdb$database union all
+select 335544838, 'foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table' from rdb$database union all
+select 335544839, 'foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause' from rdb$database
+;
+--------------------------------------------------------
+create or alter view z_severe_gds_occured as
+select
+      -- do NOT use current_timestamp in FB 4.0: this is time with timezone:
+      -- e.g.: 2020-05-09 09:21:27.1160 Europe/Moscow
+      left(cast(cast('now' as timestamp) as varchar(255)),19) as finished_at
+     ,x.severe_errors_occured
+    ,iif( x.severe_errors_occured = 1, 'SEVERE PSQL-related errors occured!', 'No severe PSQL-related problems occured' ) as errors_checking_result
+from (
+  select
+      iif(
+        exists(
+                select *
+                from perf_log p
+                join z_severe_errors e
+                  on p.fb_gdscode = e.fb_gdscode
+                     and p.dts_beg >
+                     (
+                        select x.dts_beg
+                        from perf_log x -- 12.10.2018: do NOT replace here "perf_log" with "v_perf_log"
+                        where x.unit=lower('perf_watch_interval')
+                        order by x.dts_beg desc
+                        rows 1
+                    )
+             )
+          ,1 -- found at least one record with severe gdscode {335544321,335544347,335544558,335544665,335544349,335544466,335544838,335544839}
+          ,0 -- no severe gdscode found
+      ) as severe_errors_occured
+  from rdb$database
+) x;
+
+commit;
 
 -------------------------------------------------------
 
@@ -255,7 +305,7 @@ group by r.tab_name, r.idx_name
 
 --------------------------------------------------------------------------------
 
-create or alter view z_halt_log as -- upd 28.09.2014
+create or alter view z_halt_log as
 -- :: NB :: this view is only for DEBUG! 
 -- One need to create index on perf_log.trn_id before usage of this view!
 select p.id, p.fb_gdscode, p.unit, p.trn_id, p.dump_trn, p.att_id, p.exc_unit, p.info, p.ip, p.dts_beg, e.fb_mnemona, p.exc_info,p.stack
@@ -263,17 +313,8 @@ from perf_log p
 join (
     select g.trn_id, g.fb_gdscode
     from perf_log g
-    -- 335544558    check_constraint    Operation violates CHECK constraint @1 on view or table @2.
-    -- 335544347    not_valid    Validation error for column @1, value "@2".
-    -- if table has unique constraint: 335544665 unique_key_violation (violation of PRIMARY or UNIQUE KEY constraint "T1_XY" on table "T1")
-    -- if table has only unique index: 335544349 no_dup (attempt to store duplicate value (visible to active transactions) in unique index "T2_XY")
-    where g.fb_gdscode in (      0 -- 3.0 SC trouble, core-4565 (gdscode can come in when-section with value = 0!)
-                                ,335544347, 335544558 -- not_valid or viol. of check constr.
-                                ,335544665, 335544349 -- viol. of UNQ constraint or just unq. index (without binding to unq constr)
-                                ,335544466 -- viol. of FOREIGN KEY constraint @1 on table @2
-                                ,335544838 -- Foreign key reference target does not exist (when attempt to ins/upd in DETAIL table FK-field with value which doesn`t exists in PARENT)
-                                ,335544839 -- Foreign key references are present for the record  (when attempt to upd/del in PARENT table PK-field and rows in DETAIL (no-cascaded!) exists for old value)
-                          )
+    join z_severe_errors e -- 16.10.2020: added instead of hard-coded gdscodes for errors considered as 'severe'
+    on g.fb_gdscode = e.fb_gdscode
     group by 1,2
 ) g
 on p.trn_id = g.trn_id
@@ -283,7 +324,28 @@ order by p.id
 
 ------------------------------------------------------
 
+create or alter view z_finish_state as
+-- 16.10.2020. This view is used when final report is created, see oltp_isql_run_worker' scenario:
+select
+    p.exc_info as finish_state
+    ,p.dts_end
+    ,p.fb_gdscode
+    ,e.fb_mnemona
+    ,coalesce(p.stack,'') as stack
+    ,p.ip
+    ,p.trn_id
+    ,p.att_id
+    ,p.exc_unit
+from rdb$database r
+left join perf_log p on p.unit = 'sp_halt_on_error' -- 13.10.2018: do NOT replace here "perf_log" (table) with "v_perf_log" (view)
+left join fb_errors e on p.fb_gdscode = e.fb_gdscode
+order by p.dts_beg desc
+rows 1;
+
 commit;
+
+------------------------------------------------------
+
 
 set term ^;
 
@@ -689,6 +751,247 @@ end
 ^  -- sp_upd_in_perf_log
 
 
+-- 19.09.2020: moved here, code was changed to be compatible with 2.5:
+
+create or alter procedure srv_aggregate_perf_data (
+    a_ignore_stop_flag dm_sign = 0)
+returns (
+    msg dm_info)
+as
+    declare v_semaphore_id type of dm_ids;
+    declare v_deferred_to_next_time smallint = 0;
+    declare v_gdscode int = null;
+    declare v_dts_beg timestamp;
+    declare v_this dm_dbobj = 'srv_aggregate_perf_data';
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
+begin
+    -- 19.09.2020: make code common for 2.5 and 3.x+
+    -- This SP must be stored in oltp_common_sp.sql
+
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- Check that table `ext_stoptest` (external text file) is EMPTY,
+        -- otherwise raises e`xception to stop test:
+        execute procedure sp_check_to_stop_work;
+    end
+
+    -- Check that current Tx run in NO wait or with lock_timeout.
+    -- Otherwise raise error: performance degrades almost to zero.
+    execute procedure sp_check_nowait_or_timeout;
+    
+    if ( (select result from fn_is_snapshot) <> 1 )
+    then
+        exception ex_snapshot_isolation_required;
+
+    -- Ensure that current attach is the ONLY one which tries to make totals.
+    -- Use locking record from `semaphores` table to serialize access to this
+    -- code:
+    begin
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found; -- using('semaphores', v_this);
+            update semaphores set id = id where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
+    when any do
+        -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
+        -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
+        -- catched it's kind of exception!
+        -- 1) tracker.firebirdsql.org/browse/CORE-3275
+        --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
+        -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
+        begin
+            if ( (select result from fn_is_lock_trouble(gdscode)) = 1 ) then
+                begin
+                    -- concurrent_transaction ==> if select for update failed;
+                    -- deadlock ==> if attempt of UPDATE set id=id failed.
+                    v_gdscode = gdscode;
+                    v_deferred_to_next_time = 1;
+                end
+            else
+                exception;  -- ::: nb ::: anonimous but in when-block! (check will it be really raised! find topic in sql.ru)
+        end
+    end
+
+    if ( coalesce(v_deferred_to_next_time,0) <> 0 ) then
+    begin
+        -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; -- current unit: srv_aggregate_perf_data
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
+
+    end
+
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit:
+        execute procedure sp_add_perf_log(1, v_this);
+    end
+
+    v_dts_beg = 'now';
+    --- ###########################################################################################################
+    --- ### a g g r e g a t i o n:   g a t h e r   d a t a   f r o m   p e r f _ s p l i t _ NN    t a b l e s  ###
+    --- ###########################################################################################################
+    select msg from tmp_aggregate_perf_data_autogen( :a_ignore_stop_flag ) into msg; -- 'i=1234, u=3210' etc
+    -- temply, 20.09.2020, in order to see this call in trace log:
+    --execute statement ( 'select msg from tmp_aggregate_perf_data_autogen( ? )' ) ( a_ignore_stop_flag ) into msg;
+    msg =  msg ||', ms='||datediff(millisecond from v_dts_beg to cast('now' as timestamp) );
+
+    rdb$set_context('USER_SESSION','ADD_INFO', msg);  -- to be displayed in result log of isql
+
+    if ( a_ignore_stop_flag = 0 ) then
+    begin
+        -- add to performance log timestamp about start/finish this unit:
+        execute procedure sp_add_perf_log(0, v_this, v_gdscode, msg );
+    end
+
+    suspend;
+
+when any do
+    begin
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
+        execute procedure sp_add_to_abend_log(
+            msg,  -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
+            gdscode,
+            msg,
+            v_this,
+            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+end
+
+^ -- srv_aggregate_perf_data
+
+-- moved here 05.10.2020: code of this SP was made common for FB 2.5 and 3.x
+create or alter procedure sp_halt_on_error(
+    a_char char(1) default '1',
+    a_gdscode bigint default null,
+    a_trn_id bigint default null,
+    a_need_to_stop smallint default null
+) as
+    declare v_curr_trn bigint;
+    declare v_dummy bigint;
+    declare v_need_to_stop smallint;
+begin
+    -- Adding single character + LF into external table (text file) 'stoptest.txt'
+    -- when test is needed to stop (either due to test_time expiration or because of
+    -- encountering some critical errors like PK/FK violations or negative amount remainders).
+    -- Input argument a_char:
+    -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to PK/FK violation,
+    --         and also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
+    --         sum of doc_data amounts and count of rows in QDistr + QStorned.
+    -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
+    --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
+    -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
+    --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
+    --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
+
+    -- 16.01.2019: this SP can be called from outer .sql where UDF sleep() is called
+    -- in loop with SMALL pause = 1 second and checking whether test has to be
+    -- terminated or no (between each iteration, i.e. while this loop not ends)
+    -- Loop can work in READ_ONLY transaction, thus we have to check it and SKIP
+    -- any actions that attempts to write data:
+    if ( rdb$get_context('SYSTEM','READ_ONLY') = upper('true') ) then
+        exit;
+    --########
+
+    -- DO NOT change 'a_need_to_stop' here otherwise record into perf_log will not be added
+    -- in case of premature test stop which can be done by 1stoptest.tmp.sh launch:
+    -- a_need_to_stop = iif( gen_id(g_stop_test, 0) > 0, 0, a_need_to_stop);
+
+    if ( (a_need_to_stop < 0 or gen_id(g_stop_test, 0) <= 0) and (select result from fn_remote_process) NOT containing 'IBExpert' )
+    then
+    begin
+        v_curr_trn = coalesce(a_trn_id, current_transaction);
+
+        -- "-1" ==> decision to premature stop all ISQL sessions by issuing EXTERNAl command
+        -- (either running $tmpdir/1stoptest.tmp.sh or adding line into external file 'stoptest.txt')
+        v_need_to_stop = coalesce( :a_need_to_stop, (select p.need_to_stop from sp_stoptest p rows 1) );
+
+        -- 05.10.2020:
+        -- 1) changed order of statements. We have to add record into PERF_LOG *before* changing value of g_stop_test!
+        -- 2) make code of this SP common for 2.5 and 3.0, in order to move it to oltp_common_sp.sql
+        in autonomous transaction do
+        begin
+            begin
+                -- Following record was inserted into PERF_LOG table before test start.
+                -- UPDATE statement will serialize access to it and all but one transactions will fail
+                -- here with update-conflist error and immediately quit from this block.
+                -- If record is absent for some (unknown) reason then we have immediatly to raise error
+                -- <ex_record_not_found> and quit at all.
+                update perf_log p set p.info = 'closed', trn_id = :v_curr_trn, fb_gdscode = :a_gdscode
+                where p.unit = 'perf_watch_interval' and p.info containing 'active'
+                order by dts_beg desc
+                rows 1;
+
+                if ( row_count = 0 ) then
+                     exception ex_record_not_found;
+
+                -- This point can be achieved by only one transaction (because of serialized access
+                -- to record which was  updated by previous statement).
+                -- Leave as ES for ability to see this statement in the trace:
+                execute statement ('
+                  insert into perf_log(
+                      unit             -- 1
+                     ,fb_gdscode       -- 2
+                     ,ip               -- 3
+                     ,trn_id           -- 4
+                     ,dts_end          -- 5
+                     ,elapsed_ms       -- 6
+                     ,stack            -- 7
+                     ,exc_unit         -- 8
+                     ,exc_info         -- 9
+                  ) values(
+                      ?,?,?, ?,?,?, ?,?,?
+                  )'
+                )
+                (
+                    'sp_halt_on_error'    -- 1
+                    ,:a_gdscode           -- 2
+                    ,rdb$get_context('SYSTEM', 'CLIENT_ADDRESS') -- 3
+                    ,:v_curr_trn          -- 4
+                    ,'now'                -- 5
+                    ,-1 -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
+                    ,(select result from fn_get_stack( iif(:a_gdscode>=0, 1, 0) )) -- pass '1' to force write call_stack to perf_log if this is NOT expected test finish
+                    ,:a_char              -- 8
+                    ,trim(iif( -- write info for reporting state of how test finished:
+                               :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
+                              ,iif( :v_need_to_stop < 0
+                                    ,'PREMATURE: EXTERNAL COMMAND.'
+                                    ,'NORMAL: TEST_TIME EXPIRED AT ' || left(cast(cast('now' as timestamp) as varchar(50)),19)
+                                  )
+                             )
+                         )                -- 9
+                )
+                ;
+
+                -- Value of sequence g_stop_test must be changed only ***AFTER***
+                -- insering record about finish into poerf_log table!
+                -- We change it to positive number in order to get false for
+                -- any subsequent evaluation of 'gen_id(g_stop_test, 0) <= 0' (see above):
+                v_dummy = gen_id( g_stop_test, abs(gen_id(g_stop_test,0)) + 1 );
+                --v_dummy = gen_id( g_stop_test, 2147483647);
+
+            when any do
+                begin
+                    -- NOP --
+                end
+            end
+        end
+    end
+end
+
+^ -- sp_halt_on_error
+
+
 create or alter procedure sp_add_to_abend_log(
        a_exc_info dm_info,
        a_gdscode int default null,
@@ -791,7 +1094,7 @@ begin
     -- ########################   H A L T   T E S T   ######################
     if ( a_halt_due_to_error = 1 ) then
     begin
-        execute procedure sp_halt_on_error('1', a_gdscode);
+        execute procedure sp_halt_on_error('1', a_gdscode); -- '1' ==> unexpected test finish due to PK/FK violation or call from SRV_FIND_QD_QS_MISM
         if ( ( select result from fn_halt_sign( :a_gdscode ) ) = 1 ) then -- 27.07.2014 1003
         begin
              execute procedure zdump4dbg;
@@ -803,6 +1106,150 @@ end
 
 ^ -- sp_add_to_abend_log
 
+-- moved here 19.09.2020: code was changed to be compatible with 2.5.
+create or alter procedure srv_recalc_idx_stat returns(
+    tab_name dm_dbobj,
+    idx_name dm_dbobj,
+    elapsed_ms int
+)
+as
+    declare msg dm_info;
+    declare v_semaphore_id type of dm_idb;
+    declare v_deferred_to_next_time smallint = 0;
+    declare v_dummy bigint;
+    declare idx_stat_befo double precision;
+    declare v_gdscode int = null;
+    declare v_this dm_dbobj = 'srv_recalc_idx_stat';
+    declare v_start timestamp;
+    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
+begin
+
+    -- Refresh index statistics for most changed tables.
+    -- Needs to be run in regular basis otherwise ineffective plans
+    -- can be generated when doing inner joins!
+
+    -- Check that table `ext_stoptest` (external text file) is EMPTY,
+    -- otherwise raises ex`ception to stop test:
+    execute procedure sp_check_to_stop_work;
+
+    -- Check that current Tx run in NO wait or with lock_timeout.
+    -- Otherwise raise error: performance degrades almost to zero.
+    execute procedure sp_check_nowait_or_timeout;
+
+    -- Use locking record from `semaphores` table to synchronize access to this
+    -- code:
+    begin
+        v_semaphore_id = null;
+        open c_semaphores;
+        while (1=1) do
+        begin
+            fetch c_semaphores into v_semaphore_id;
+            if ( row_count = 0 ) then
+                exception ex_record_not_found;
+            update semaphores set id = id, dts = 'now'
+            where current of c_semaphores;
+            leave;
+        end
+        close c_semaphores;
+    when any do
+        -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
+        -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
+        -- catched it's kind of exception!
+        -- 1) tracker.firebirdsql.org/browse/CORE-3275
+        --    "W`HEN ANY handles exceptions even if they are handled in another W`HEN section"
+        -- 2) sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1088890&msg=15879669
+        begin
+            if ( (select result from fn_is_lock_trouble(gdscode)) = 1 ) then
+                begin
+                    -- concurrent_transaction ==> if select for update failed;
+                    -- deadlock ==> if attempt of UPDATE set id=id failed.
+                    v_deferred_to_next_time = 1;
+                    v_gdscode = gdscode;
+                end
+            else
+                exception; -- ::: nb ::: anonimous but in when-block!
+        end
+    end
+
+    if ( v_deferred_to_next_time = 1 ) then
+    begin
+       -- Info to be stored in context var. A`DD_INFO, see below call of sp_add_to_abend_log (in W`HEN ANY section):
+        msg = 'can`t lock semaphores.id='|| coalesce(v_semaphore_id,'<?>') ||', deferred'; --  current unit: srv_recalc_idx_stat
+        exception ex_cant_lock_semaphore_record ( select result from sys_stamp_exception('ex_cant_lock_semaphore_record', :msg) );
+    end
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(1, v_this);
+
+    for
+        select ri.rdb$relation_name, ri.rdb$index_name, ri.rdb$statistics
+        from rdb$indices ri
+        where
+            coalesce(ri.rdb$system_flag,0)=0
+            -- make recalc only for most used tables:
+            and ri.rdb$relation_name in
+            (
+                 'DOC_DATA'
+                ,'DOC_LIST'
+                ,'QDISTR'
+                ,'QSTORNED'
+                ,'PDISTR'
+                ,'PSTORNED'
+                ,'XQD_1000_1200'
+                ,'XQD_1000_3300'
+                ,'XQD_1200_2000'
+                ,'XQD_2000_3300'
+                ,'XQD_2100_3300'
+                ,'XQD_3300_3400'
+                ,'XQS_1000_1200'
+                ,'XQS_1000_3300'
+                ,'XQS_1200_2000'
+                ,'XQS_2000_3300'
+                ,'XQS_2100_3300'
+                ,'XQS_3300_3400'
+            )
+        order by ri.rdb$relation_name, ri.rdb$index_name
+    into
+        tab_name, idx_name, idx_stat_befo
+    do begin
+        -- Check that table `ext_stoptest` (external text file) is EMPTY,
+        -- otherwise raises ex`ception to stop test:
+        execute procedure sp_check_to_stop_work;
+
+        execute procedure sp_add_perf_log(1, v_this||'_'||idx_name);
+
+        v_start='now';
+
+        execute statement( 'set statistics index '||idx_name )
+        with autonomous transaction; -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
+
+        elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
+
+        execute procedure sp_add_perf_log(0, v_this||'_'||idx_name,null,tab_name, idx_stat_befo);
+        suspend;
+    end
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(0, v_this, v_gdscode);
+
+when any do
+    begin
+        -- NB: proc sp_add_to_abend_log will set rdb$set_context('USER_SESSION','A`DD_INFO', msg)
+        -- in order to show this additional info in ISQL log after operation will finish:
+        execute procedure sp_add_to_abend_log(
+            msg, -- ==> context var. ADD_INFO will be = "can`t lock semaphores.id=..., deferred" - to be shown in ISQL log
+            gdscode,
+            null,
+            v_this
+        );
+
+        --#######
+        exception; -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+
+end
+^ -- srv_recalc_idx_stat
 
 
 create or alter procedure sys_get_fb_arch (
@@ -1718,6 +2165,179 @@ begin
 end
 ^ -- srv_get_page_cache_info
 
+
+create or alter procedure srv_fill_mon_cache_memory
+returns (
+    info dm_info)
+as
+    declare v_dts_beg timestamp;
+    declare v_dbkey dm_dbkey;
+    declare v_meta_cache_size bigint;
+    declare v_statements_running_cnt smallint;
+    declare v_statements_stalled_cnt smallint;
+    declare v_ibe smallint;
+    declare v_elapsed_ms int;
+    declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
+begin
+    -- This SP is used when mon_unit_perf=2 and is called only by SID=1,
+    -- in the loop with delay = <mon_query_interval> seconds (see config file).
+    -- Adds data to the table MON_CACHE_MEMORY about memory consumption.
+
+    -- 28.05.2020: moved here as common for 2.5 and 3.x+
+
+    v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
+    if ( v_ibe = 0 -- fn_remote_process() NOT containing 'IBExpert'
+         and
+         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
+       ) then
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
+        suspend;
+        --###
+        exit;
+        --###
+    end
+    -- Check that table `ext_stoptest` (external text file) is EMPTY,
+    -- otherwise raises e`xception to stop test:
+    execute procedure sp_check_to_stop_work;
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(1, v_this);
+
+    v_dts_beg  = 'now';
+
+    -- Result of subtraction: (m.memo_used_att - (memo_used_trn + memo_used_stm)) equals to:
+    -- 1) when pg_cache_type='dedicated' (SC, CS) then SUM of page cache and metadata cache
+    -- 2) when pg_cahce_type='shared' (SS) then only metadata cache
+    insert into mon_cache_memory (
+        pg_buffers
+        ,pg_size
+        ,pg_cache_type -- 'dedicated' (SC/CS) or 'shared' (SS); just for info
+        ,page_cache_size
+        ,meta_cache_size
+        ,memo_used_all -- 27.05.2020
+        ,memo_allo_all -- 27.05.2020
+        ,memo_used_att
+        ,memo_used_trn
+        ,memo_used_stm
+        ,total_attachments_cnt
+        ,active_attachments_cnt
+        ,page_cache_operating_stm_cnt
+        ,data_transfer_paused_stm_cnt
+    )
+    select
+        d.mon$page_buffers pg_buffers
+        ,d.mon$page_size pg_size
+        ,iif(m.memo_db_used = 0, 'dedicated', 'shared') pg_cache_type
+        ,d.mon$page_buffers * d.mon$page_size * iif( m.memo_db_used = 0, total_attachments_cnt, 1 ) as page_cache_size
+        ,m.memo_used_att - (memo_used_trn + memo_used_stm) - iif( m.memo_db_used = 0, d.mon$page_buffers * d.mon$page_size * total_attachments_cnt, 0)  as meta_cache_size
+        ,m.memo_db_used
+        ,m.memo_db_allo
+        ,m.memo_used_att
+        ,m.memo_used_trn
+        ,m.memo_used_stm
+        ,m.total_attachments_cnt
+        ,m.active_attachments_cnt
+        ,m.page_cache_operating_stm_cnt
+        ,m.data_transfer_paused_stm_cnt
+    from (
+        select
+            sum( iif( u.stat_gr = 0, m.mon$memory_used, 0) ) memo_db_used -- SC/CS: 0; SS: >0
+           ,sum( iif( u.stat_gr = 0, m.mon$memory_allocated, 0) ) memo_db_allo -- SC/CS: 0; SS: >0
+           ,sum( iif( u.stat_gr = 1, m.mon$memory_used, 0) ) memo_used_att
+           ,sum( iif( u.stat_gr = 2, m.mon$memory_used, 0) ) memo_used_trn
+           ,sum( iif( u.stat_gr = 3, m.mon$memory_used, 0) ) memo_used_stm
+           ,sum( iif( u.stat_gr = 1, 1, 0 ) ) total_attachments_cnt
+           ,sum( iif( u.stat_gr = 1 and u.state = 1, 1, 0 ) ) active_attachments_cnt
+           ,sum( iif( u.stat_gr = 2 and u.state = 1, 1, 0 ) ) active_transactions_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 1, 1, 0 ) ) page_cache_operating_stm_cnt --  server_side_run_stm_cnt
+           ,sum( iif( u.stat_gr = 3 and u.state = 2, 1, 0 ) ) data_transfer_paused_stm_cnt -- data_transf_run_stm_cnt
+        from mon$memory_usage m
+        join
+        (
+            select 0 as stat_gr, m.mon$stat_id as stat_id, null as att_id, null as state
+            from mon$memory_usage m
+            where m.mon$stat_group =0
+            UNION ALL
+            select 1 as stat_gr, a.mon$stat_id as stat_id, a.mon$attachment_id as att_id, a.mon$state as state
+            from mon$attachments a
+             -- added 07.05.2020, actual for SuperServer 3.x+:
+             -- total_attachments_cnt must not include GC and CW
+            where mon$remote_protocol is not null -- common for 2.5 and 3.x+
+            -- FB 3.x+ only: a.mon$system_flag is distinct from 1
+            UNION ALL
+            select 2,            t.mon$stat_id, t.mon$attachment_id, t.mon$state
+            from mon$transactions t
+            UNION ALL
+            select 3,            s.mon$stat_id, s.mon$attachment_id, s.mon$state
+            from mon$statements s
+            -- ?! --> where upper( s.mon$sql_text ) not similar to upper('EXECUTE[[:WHITESPACE:]]+BLOCK%')
+        )  u
+        on
+            m.mon$stat_id = u.stat_id and
+            m.mon$stat_group = u.stat_gr
+    ) m
+    cross join mon$database d
+    returning
+         rdb$db_key
+        ,meta_cache_size
+        ,page_cache_operating_stm_cnt
+        ,data_transfer_paused_stm_cnt
+    into
+        v_dbkey
+        ,v_meta_cache_size
+        ,v_statements_running_cnt
+        ,v_statements_stalled_cnt
+    ;
+
+    v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
+
+    update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
+    where rdb$db_key = :v_dbkey ;
+
+    -- meta_cache 123456789012, stm_running 12345, stm_stalled 12345
+    -- NB: do not add 'elapsed_ms NNNN', it will be evaluated in execute block.
+    info = 'meta_cache ' || lpad(v_meta_cache_size,12,' ')
+        || ', stm_running ' || lpad(v_statements_running_cnt,5,' ')
+        || ', stm_stalled ' || lpad(v_statements_stalled_cnt,4,' ')
+    ;
+
+    -- ::: NB ::: We have to limit length of this info by 80 characters, see execute block 
+    -- in tmp_random_run.sql (it is recreated every test start in .bat/.sh).
+    -- This message will be displayed in SID_1 log after this SP finish:
+    -- *** RESULT: *** (after business operation finish)
+    -- DTS          TRN            UNIT                            ELAPSED_MS MSG                  ADD_INFO
+    -- ============ ============== =============================== ========== ==================== ============================================================
+    -- 22:09:21.823 tra_663        srv_fill_mon_cache_memory             1234 OK, 1 rows           meta_cache 123456789012, stm_running 12345, stm_stalled 1234
+
+    info = left(info, 80); -- this is limit for output length in execute block, see $tmpdir/tmp_random_run.sql
+
+    rdb$set_context( 'USER_SESSION','ADD_INFO', info ); -- to be displayed in log of ISQL, SID=1
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(0, v_this, null, info );
+
+    suspend;
+
+when any do
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'gds='||gdscode );
+        execute procedure sp_add_to_abend_log(
+            '',
+            gdscode,
+            '',
+            v_this,
+            (select result from fn_halt_sign(gdscode)) -- ::: nb ::: 1 ==> force get full stack, ignoring settings `DISABLE_CALL_STACK` value, and HALT test
+        );
+
+        --#######
+        exception;  -- ::: nb ::: anonimous but in when-block!
+        --#######
+    end
+end
+^ -- srv_fill_mon_cache_memory
+
+
 create or alter procedure report_cache_dynamic
 returns (
      measurement_timestamp timestamp
@@ -1732,13 +2352,14 @@ returns (
     ,memo_used_by_attachments bigint
     ,memo_used_by_transactions bigint
     ,memo_used_by_statements bigint
+    ,memo_used_all bigint -- 27.05.2020 memory_used for DB level; actual only for SS; always zero in SC/CS
+    ,memo_allo_all bigint -- 27.05.2020 memory_allocatedd for DB level; actual only for SS; always zero in SC/CS
 ) as
 begin
 
     -- 02.01.2019. Called only when config parameter 'mon_unit_perf' is 2: report about memory consumption
     -- by metadata cache size, active attachments and statements in 'running' and 'stalled' state.
     -- NB: all records from table 'mon_cache_memory' are DELETED before every new test run, see 1run_oltp_emul.bat/.sh
-
     for
         select
             m.dts
@@ -1753,6 +2374,8 @@ begin
             ,m.memo_used_att
             ,m.memo_used_trn
             ,m.memo_used_stm
+            ,m.memo_used_all
+            ,m.memo_allo_all
         from mon_cache_memory m
         order by m.id
     into
@@ -1768,12 +2391,13 @@ begin
         ,memo_used_by_attachments
         ,memo_used_by_transactions
         ,memo_used_by_statements
+        ,memo_used_all
+        ,memo_allo_all
     do
         suspend;
 end
 ^ -- report_cache_dynamic
 
--- old name: s`rv_mon_stat_per_units; moved here 17.02.2019
 create or alter procedure report_stat_per_units (
     a_last_hours smallint default 0,
     a_last_mins smallint default 0 )
@@ -1781,6 +2405,45 @@ returns (
     unit dm_unit
    ,iter_counts bigint
    ,avg_elap_ms bigint
+
+   --- io ---
+   ,avg_fetches numeric(12,2)
+   ,avg_marks numeric(12,2)
+   ,avg_reads numeric(12,2)
+   ,avg_writes numeric(12,2)
+
+   ----- 19.05.2020. Page cache misses (the higher the worse) -----
+   ,avg_reads_to_fetches numeric(12,4)
+   ,avg_writes_to_marks numeric(12,4)
+
+   --- memory usage ---
+   -- NB: these are values that was gathered at the FINAL point of
+   -- business action (i.e. after it completed but before commit).
+   ,avg_mem_used bigint
+   ,avg_mem_alloc bigint
+
+    -------- scans, absolute values -----------
+   ,avg_seq numeric(12,2)
+   ,avg_idx numeric(12,2)
+   ,avg_rpt numeric(12,2)
+   ,avg_bkv numeric(12,2)
+   ,avg_frg numeric(12,2)
+    -------------- scans, ratios --------------
+   ,avg_bkv_per_rec numeric(12,4)
+   ,avg_frg_per_rec numeric(12,4)
+    ---------- modifications ----------
+   ,avg_ins numeric(12,2)
+   ,avg_upd numeric(12,2)
+   ,avg_del numeric(12,2)
+    ---- garbage-related processing ----
+   ,avg_bko numeric(12,2)
+   ,avg_pur numeric(12,2)
+   ,avg_exp numeric(12,2)
+   ----------------------------------------
+   ,avg_locks numeric(12,2)
+   ,avg_confl numeric(12,2)
+
+/* commented 19.05.2020: can not see any reason for use of these:
    ,avg_rec_reads_sec numeric(12,2)
    ,avg_rec_dmls_sec numeric(12,2)
    ,avg_bkos_sec numeric(12,2)
@@ -1790,25 +2453,6 @@ returns (
    ,avg_marks_sec numeric(12,2)
    ,avg_reads_sec numeric(12,2)
    ,avg_writes_sec numeric(12,2)
-   ,avg_seq bigint
-   ,avg_idx bigint
-   ,avg_rpt bigint
-   ,avg_bkv bigint
-   ,avg_frg bigint
-   ,avg_bkv_per_rec numeric(12,2)
-   ,avg_frg_per_rec numeric(12,2)
-   ,avg_ins bigint
-   ,avg_upd bigint
-   ,avg_del bigint
-   ,avg_bko bigint
-   ,avg_pur bigint
-   ,avg_exp bigint
-   ,avg_fetches bigint
-   ,avg_marks bigint
-   ,avg_reads bigint
-   ,avg_writes bigint
-   ,avg_locks bigint
-   ,avg_confl bigint
    ,max_seq bigint
    ,max_idx bigint
    ,max_rpt bigint
@@ -1830,6 +2474,8 @@ returns (
    ,max_confl bigint
    ,job_beg varchar(16)
    ,job_end varchar(16)
+*******/
+
 ) as
     declare v_test_time_dts_beg timestamp;
     declare v_test_time_dts_end timestamp;
@@ -1853,11 +2499,50 @@ begin
         -- (need FB rev. >= 60013: new mon$ counters were introduced, 28.08.2014)
         -- 25.01.2015: added rec_locks, rec_confl.
         -- 06.02.2015: reorder columns, made all `max` values most-right
+        -- 17.05.2020: changed return type for all AVG* counters from bigint to numeric(12,2)
         select
              m.unit
+            -------------- count, speed -------------
             ,count(*) iter_counts
-            -------------- speed -------------
             ,avg(m.elapsed_ms) avg_elap_ms
+            --------------- io -----------------
+            ,avg(1.00 * m.pg_fetches) avg_fetches
+            ,avg(1.00 * m.pg_marks) avg_marks
+            ,avg(1.00 * m.pg_reads) avg_reads
+            ,avg(1.00 * m.pg_writes) avg_writes
+            -------------- page cache usage -----------
+            ,avg( 1.0000 * m.pg_reads / nullif(m.pg_fetches,0) ) as avg_reads_to_fetches
+            ,avg( 1.0000 * m.pg_writes / nullif(m.pg_marks,0) ) as avg_writes_to_marks
+            ----- memory usage  -----
+            -- ATTENTION: counters in the MON$MEMORY_USAGE are *not* cumulative,
+            -- their values are like 'snapshots' and represent current memory consumption.
+            -- Delta between start and end of some query has no sense, we have to get only
+            -- value that was gathered at the FINAL of business action (i.e. after it ended but before commit).
+            -- See SP SRV_FILL_MON: we take in account only values that was at the END of action and ignore
+            -- starting values (with t.mult=-1): select ... max( nullif(t.mult,-1) * t.mem_...) ...
+            ,avg(m.mem_used) as avg_mem_used -- avg value of mem_used that was gathered only at the FINAL point of each business action
+            ,avg(m.mem_alloc) as avg_mem_alloc -- avg value of mem_alloc that was gathered only at the FINAL point of each business action
+            -------- scans, absolute values -----------
+            ,avg(1.00 * m.rec_seq_reads) avg_seq
+            ,avg(1.00 * m.rec_idx_reads) avg_idx
+            ,avg(1.00 * m.rec_rpt_reads) avg_rpt
+            ,avg(1.00 * m.bkv_reads) avg_bkv
+            ,avg(1.00 * m.frg_reads) avg_frg
+            -------------- scans, ratios --------------
+            ,avg(1.0000 * m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
+            ,avg(1.0000 * m.frg_per_seq_idx_rpt) avg_frg_per_rec
+            ---------- modifications ----------
+            ,avg(1.00 * m.rec_inserts) avg_ins
+            ,avg(1.00 * m.rec_updates) avg_upd
+            ,avg(1.00 * m.rec_deletes) avg_del
+            ,avg(1.00 * m.rec_backouts) avg_bko
+            ,avg(1.00 * m.rec_purges) avg_pur
+            ,avg(1.00 * m.rec_expunges) avg_exp
+            ----------- locks and conflicts ----------
+            ,avg(1.00 * m.rec_locks) avg_locks
+            ,avg(1.00 * m.rec_confl) avg_confl
+
+/* commented 19.05.2020: can not see any reason for use of these:
             ,avg(1000.00 * ( (m.rec_seq_reads + m.rec_idx_reads + m.bkv_reads ) / nullif(m.elapsed_ms,0))  ) avg_rec_reads_sec
             ,avg(1000.00 * ( (m.rec_inserts + m.rec_updates + m.rec_deletes ) / nullif(m.elapsed_ms,0))  ) avg_rec_dmls_sec
             ,avg(1000.00 * ( m.rec_backouts / nullif(m.elapsed_ms,0))  ) avg_bkos_sec
@@ -1867,29 +2552,6 @@ begin
             ,avg(1000.00 * ( m.pg_marks / nullif(m.elapsed_ms,0)) ) avg_marks_sec
             ,avg(1000.00 * ( m.pg_reads / nullif(m.elapsed_ms,0)) ) avg_reads_sec
             ,avg(1000.00 * ( m.pg_writes / nullif(m.elapsed_ms,0)) ) avg_writes_sec
-            -------------- reads ---------------
-            ,avg(m.rec_seq_reads) avg_seq
-            ,avg(m.rec_idx_reads) avg_idx
-            ,avg(m.rec_rpt_reads) avg_rpt
-            ,avg(m.bkv_reads) avg_bkv
-            ,avg(m.frg_reads) avg_frg
-            ,avg(m.bkv_per_seq_idx_rpt) avg_bkv_per_rec
-            ,avg(m.frg_per_seq_idx_rpt) avg_frg_per_rec
-            ---------- modifications ----------
-            ,avg(m.rec_inserts) avg_ins
-            ,avg(m.rec_updates) avg_upd
-            ,avg(m.rec_deletes) avg_del
-            ,avg(m.rec_backouts) avg_bko
-            ,avg(m.rec_purges) avg_pur
-            ,avg(m.rec_expunges) avg_exp
-            --------------- io -----------------
-            ,avg(m.pg_fetches) avg_fetches
-            ,avg(m.pg_marks) avg_marks
-            ,avg(m.pg_reads) avg_reads
-            ,avg(m.pg_writes) avg_writes
-            ----------- locks and conflicts ----------
-            ,avg(m.rec_locks) avg_locks
-            ,avg(m.rec_confl) avg_confl
             --- 06.02.2015 moved here all MAX values, separate them from AVG ones: ---
             ,max(m.rec_seq_reads) max_seq
             ,max(m.rec_idx_reads) max_idx
@@ -1912,6 +2574,7 @@ begin
             ,max(m.rec_confl) max_confl
             ,left(cast(:v_test_time_dts_beg as varchar(24)),16)
             ,left(cast(:v_test_time_dts_end as varchar(24)),16)
+-- *****************/
         from mon_log m
         where m.dts between :v_test_time_dts_beg and :v_test_time_dts_end
         group by unit
@@ -1919,34 +2582,39 @@ begin
         unit
        ,iter_counts
        ,avg_elap_ms
-       ,avg_rec_reads_sec
-       ,avg_rec_dmls_sec
-       ,avg_bkos_sec
-       ,avg_purg_sec
-       ,avg_xpng_sec
-       ,avg_fetches_sec
-       ,avg_marks_sec
-       ,avg_reads_sec
-       ,avg_writes_sec
+       --- io ---
+       ,avg_fetches
+       ,avg_marks
+       ,avg_reads
+       ,avg_writes
+       ----- 19.05.2020. Page cache usage -----
+       ,avg_reads_to_fetches
+       ,avg_writes_to_marks
+       --- memory usage ---
+       ,avg_mem_used
+       ,avg_mem_alloc
+        -------- scans, absolute values -----------
        ,avg_seq
        ,avg_idx
        ,avg_rpt
        ,avg_bkv
        ,avg_frg
+        -------------- scans, ratios --------------
        ,avg_bkv_per_rec
        ,avg_frg_per_rec
+        ---------- modifications ----------
        ,avg_ins
        ,avg_upd
        ,avg_del
        ,avg_bko
        ,avg_pur
        ,avg_exp
-       ,avg_fetches
-       ,avg_marks
-       ,avg_reads
-       ,avg_writes
+       ----------------------------------------
        ,avg_locks
        ,avg_confl
+ 
+
+/* commented 19.05.2020: can not see any reason for use of these:
        ,max_seq
        ,max_idx
        ,max_rpt
@@ -1968,11 +2636,12 @@ begin
        ,max_confl
        ,job_beg
        ,job_end
+-- *****************/
     do
         suspend;
 end
-
 ^ -- report_stat_per_units
+
 
 -- ################################################################
 -- ###         a u x i l i a r y        p r o c e d u r e s     ###
@@ -1996,6 +2665,7 @@ create or alter procedure srv_get_report_name(
     ,heavy_load_ddl varchar(50) -- only when a_format='benchmark': solid' | 'split'
     ,compound_1st_col varchar(50) -- only when a_format='benchmark': 'most__selective_1st' | 'least_selective_1st'
     ,compound_idx_num varchar(50) -- only when a_format='benchmark': 'one_index' | 'two_indxs'
+    ,html_doc_title varchar(50) -- 10.05.2020: string for top.document.title = '...'
 )
 as
     declare v_test_finish_state varchar(50);
@@ -2066,12 +2736,21 @@ begin
     v_test_finish_state = null;
     if ( a_test_time_minutes = -1 ) then -- call AFTER test finish, when making final report
         begin
-            select 'ABEND_GDS_'||p.fb_gdscode
+            select iif(p.exc_unit = '9', 'FB_CRASHED', 'ABEND_GDS_' || p.fb_gdscode)
             from perf_log p
-            where p.unit = 'sp_halt_on_error' and p.fb_gdscode >= 0
+            where
+                p.unit = 'sp_halt_on_error'
+                and ( p.fb_gdscode >= 0
+                      or 
+                      exc_unit = '9' -- see 'oltp_isql_run_worker':  exc_unit='9' is reserved for crashes
+                    )
             order by p.dts_beg desc
             rows 1
-            into v_test_finish_state; -- will remain NULL if not found ==> test finished NORMAL.
+            into v_test_finish_state;
+            -- v_test_finish_state:
+            --    will remain NULL if not found ==> test finished NORMAL.
+            --    'ABEND_GDS_nnnnnn' ==> critical error occured (negative remainders or PK violation, etc)
+            --    'CRASHED' ==> FB has crashed during test run or after this when SID=1 attempted to change DB state to shutdown
         end
     else -- a_test_time_minutes > = 0
         begin
@@ -2146,14 +2825,13 @@ begin
             into
                 v_tab_name, v_min_idx_key, v_max_idx_key
             do begin
-        
+
                 heavy_load_ddl = iif( upper(v_tab_name)=upper('qdistr'), 'solid', 'split' );
-        
                 if ( upper(v_min_idx_key) starting with upper('ware_id') or upper(v_max_idx_key) starting with upper('ware_id')  ) then
                     compound_1st_col = 'most__sel_1st';
                 else if ( upper(v_min_idx_key) starting with upper('snd_optype_id') or upper(v_max_idx_key) starting with upper('snd_optype_id')  ) then
                     compound_1st_col = 'least_sel_1st';
-        
+
                 if ( v_min_idx_key = v_max_idx_key ) then
                     compound_idx_num = 'one_index';
                 else
@@ -2180,6 +2858,10 @@ begin
     if ( trim(a_prefix) > '' ) then report_file = trim(a_prefix) || '-' || report_file;
 
     if ( trim(a_suffix) > '' ) then report_file = report_file || '-' || trim(a_suffix);
+
+    -- 10.05.2020: extract main parameters of just finished test: score, build/FB_server_mode, FW and (if turned on) replication
+    -- Example: '08958 b.33290/ss fw on repl_1'
+    html_doc_title = replace(overall_perf,'score_','') || ' b.' || a_build || '/' || fb_arch || ' ' || replace(fw_setting,'_',' ') || trim(iif( v_repl_involv containing '1', 'repl_1', '' ));
 
     suspend;
 
