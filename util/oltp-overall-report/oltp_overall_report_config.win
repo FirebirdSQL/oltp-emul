@@ -1,0 +1,94 @@
+# Results of OLTP-EMUL on different Firebird versions must be restored
+# from apropriate <results_storage_fbk> files on *most recent* 
+# version of Firebird. It is supposed that such FB instance can be found
+# in the folder that is specified by parameter <fbc> of OLTP-EMUL config
+# that is used for Firebird 4.x. 
+#
+# Path to config that is used by OLTP-EMUL for test Firebird 4.x.
+# Following parameters will be searched there:
+# usr; pwd; fbc; results_storage_fbk
+# Values of <usr> and <pwd> will be used here for create/open database
+# with overall results using client library from <fbc> folder.
+# Database from <results_storage_fbk> will be restored for gathering
+# results of runs on FB 4.x, see below parameter 'DB_OVERALL_FILE'
+#
+oltp40_config=..\..\oltp40_config.win
+
+# Path to config that is used by OLTP-EMUL when test Firebird 3.x:
+# Value of <results_storage_fbk> will be extracted from there.
+# Database with results will be restored on Firebird 4.x which home
+# is defined by <fbc> in oltp40_config
+#
+oltp30_config=..\..\oltp30_config.win
+
+# Should we create DB_OVERALL or open existing ?
+# Normally value of this parameter must be 0.
+# Set it to 1 if DB became obsolete vs oltp_overall_report_DDL.sql
+#
+RECREATE_DB=0
+
+# Folder for storing generated HTML report and logs of this scenario:
+#
+LOGDIR=e:\temp\oltp_overall_report
+
+# Folder for storing HTML reports for of each OLTP-EMUL runs:
+#
+DETAILS_DIR=!LOGDIR!\details
+
+# Name of HTML file with main (overall) report. Must be specified without path.
+# File will be created by Python script in the folder defined by <LOGDIR> parameter.
+#
+MAIN_RPT_FILE=oltp-overall-main.html
+
+
+# max age for logs, in days:
+#
+LOGS_MAX_AGE=10
+
+PYTHON_HOME=C:\Python39
+# PYTHON_HOME=C:\Python3x
+
+# Limit for rows to be shown in the final table.
+# Used in Python scenario, do NOT change its name without adjusting in in .py!
+# Set this value to 0 if report must be with unlimited number of rows.
+# Charts in any case will not contain more than value defined by MAX_POINTS_IN_CHART.
+#
+MAX_ROWS_IN_REPORT=0
+
+# Limit for number of points in charts. Must be adjusted with current screen resolution:
+#
+MAX_POINTS_IN_CHART=250
+
+# Default width and height for charts.
+# Can be overwritten in .py by specifying divWidth and divHeight key/value
+# pairs when call write_chart_script_beg():
+#
+DEFAULT_CHART_DIV_WIDTH=1800
+DEFAULT_CHART_DIV_HEIGHT=350
+
+# Default values for chartArea:{left:NNN, top:MM}
+# DO NOT assign value less than 100 for DEFAULT_CHART_AREA_LEFT otherwise numbers on Y-axis will not be seen.
+# DO NOT set assign value less than 20 for DEFAULT_CHART_AREA_TOP otherwise legends will not be seen.
+DEFAULT_CHART_AREA_LEFT=100
+DEFAULT_CHART_AREA_TOP=30
+
+DECOMPRESS_ZIP=C:\mix\7z.exe
+DECOMPRESS_7Z=C:\mix\7z.exe
+DECOMPRESS_ZST=C:\mix\zstd\zstd.exe
+
+P7ZCMD=!DECOMPRESS_7Z!
+
+FTP_UPLOAD_ENABLED=0
+
+# ftp://oemul:123@192.168.1.55:5521
+FTP_UPLOAD_HOST=192.168.1.55
+FTP_UPLOAD_PORT=5521
+# User who has enough rights to read/write/delete files and directories
+# within <home_dir> of ftp server after he successfully connects to it:
+#
+FTP_UPLOAD_USER=oemul
+FTP_UPLOAD_PSWD=123
+
+# Always must start from forward slash ("/").
+#
+FTP_UPLOAD_DIR=/archive

@@ -1,0 +1,447 @@
+<style type="text/css">
+    table {
+        border-collapse: collapse;
+        border: 2px solid black;
+    }
+
+    .t_table {
+        border-collapse: collapse;
+        border: 2px solid black;
+    }
+
+    tr:hover td {
+         color: #00008B;
+         background-color: #E0FFFF;
+    }
+
+    table tr:hover td.fb3x_font {
+         color: #00008B;
+       background-color: #E0FFFF;
+    }
+    table tr:hover td.fb4x_font {
+         color: #00008B;
+       background-color: #E0FFFF;
+    }
+    table tr:hover td.null_cell {
+         color: #00008B;
+       background-color: #E0FFFF;
+    }
+
+
+    table tr td.fb3x_font {
+       color: #800000;
+    }
+
+    table tr td.fb4x_font {
+       color: #000080;
+    }
+    table tr td.perf_score_column {
+       background-color: #FFE4B5;
+    }
+
+    
+    table tr td.f3xperf_score {
+       /* Maroon / Moccasin */
+       color: #800000;
+       background-color: #FFE4B5;
+    }
+
+    table tr td.f4xperf_score {
+       /* Navy / Moccasin */
+       color: #000080;
+       background-color: #FFE4B5;
+    }
+
+
+    /* ------ memory consumption ---- */
+    table tr td.big_numbers {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    table tr td.memo_used_whole_db_column {
+        background-color: #F0E68C;  /* Khaki */
+    }
+
+    table tr td.memo_used_att_level_column {
+        /* background-color: #B0E0E6; */  /* PowderBlue */
+        /* background-color: #E0FFFF; */  /* LightCyan */
+        background-color: #E6E6FA; /* Lavender */
+    }
+
+
+    table tr td.memo_used_trn_level_column {
+        background-color: #E2EFDA; /* no-named, hint of pale-green*/
+    }
+
+
+    table tr td.memo_used_stm_level_column {
+        background-color: #ffebff; /* no-named, hint of pale-pink */
+        /* background-color: #FFE4E1; */ /* MistyRose */
+    }
+
+
+
+    /* ------------ outcomes -------- */
+    table tr td.fbx_outcome_normal {
+       /* HoneyDew */
+       background-color: #F0FFF0;
+    }
+
+    table tr td.fbx_outcome_premature {
+       /* LemonChiffon */
+       background-color: #FFFACD;
+    }
+
+    table tr td.fbx_outcome_abend {
+       /* LightPink */
+       background-color: #FFB6C1;
+    }
+
+    table tr td.fbx_outcome_crash {
+       color: yellow;
+       /* Dark-Violet */
+       background-color: #9400D3;
+    }
+
+    table tr td.null_cell {
+       /* background-color: #F5F5F5; */ /* WhiteSmoke */
+       background-color: #DCDCDC; /* Gainsboro */
+    }
+
+    /* ----------------------------- */ 
+
+    table tr td.rt_blocker {
+       color: yellow;
+       background-color: #479cff;
+       white-space: pre;
+    }
+
+    table tr td.rt_critical {
+       background-color: #70baff;
+       white-space: pre;
+    }
+
+    table tr td.rt_danger {
+       background-color: #99d9ff;
+       white-space: pre;
+    }
+
+    table tr td.rt_high {
+       background-color: #c2f7ff;
+       white-space: pre;
+    }
+
+    table tr td.rt_ok
+    {
+        white-space: pre;
+    }
+
+    table tr td.rt_common {
+       /* sienna */
+       color: #A0522D;
+       white-space: pre;
+    }
+
+    table tr.all_pass {
+       color: black;
+       background-color: #daebe8;
+       white-space: pre;
+    }
+
+    
+
+    th {
+        padding: 3px; 
+        background: #E6E6FA;
+        border: 1px solid black;
+        font-size: 14px;
+        font-weight: normal;
+        font-style:normal;
+        min-width:30px;
+    }
+
+
+    .v_dir {
+        writing-mode: vertical-rl;
+        vertical-align: middle;
+        text-orientation: mixed;
+        white-space:wrap;
+        /* min-width:30px; */
+
+        /* https://stackoverflow.com/questions/22754040/text-rotation-with-google-chrome-using-css */
+        -moz-transform:rotate(180deg); /* Firefox */
+        -webkit-transform:rotate(180deg); /* Safari and Chrome */
+        -ms-transform:rotate(270deg); /* IE 9 */
+        -o-transform:rotate(0deg); /* Opera */
+    }
+    td {
+        padding: 3px; 
+        border: 1px solid black;
+        text-align: center;
+        font-size: 12px;
+        /* font-weight: normal; */
+    }
+
+    .t_fbt_name {
+       text-align: left;
+       font-size: 14px;
+    }
+
+    .t_seq_no {
+       white-space: pre;
+    }
+
+    .t_passed {
+       /* https://www.w3schools.com/colors/colors_palettes.asp */
+       color: black;
+       background-color: #daebe8;
+       white-space: pre;
+    }
+
+    /* for ERROR-line cell in overall report with value = ZERO   */
+    .t_no_error {
+       color: black;
+       background-color: #f5f7cf;
+       white-space: pre;
+    }
+
+    /* for FAILED-line cell in overall report with value = ZERO   */
+    .t_no_fail {
+       color: black;
+       background-color: #f2c9cc;
+       white-space: pre;
+    }
+    
+    table tr td.t_error {
+       color: black;
+       /* background-color:  #ffff99; */
+       background-color: #f5f7cf;
+       white-space: pre;
+    }
+
+
+    table tr td.t_failed {
+       color: black;
+       /* background-color: #ff9999; */
+       background-color: #f2c9cc;
+       white-space: pre;
+    }
+
+    /* intensive yellow  */
+    table tr td.new_t_error {
+       color: black;
+       background-color: yellow;
+       white-space: pre;
+    }
+
+    /* intensive red  */
+    table tr td.new_t_failed {
+       color: yellow;
+       background-color: red;
+       white-space: pre;
+    }
+
+    table tr td.t_srv_crash {
+       font-style: italic;
+       /* fuchsia */
+       background-color: #FF00FF;
+       font-weight: bold;
+    }
+
+    table tr td.t_bug_check {
+       font-style: italic;
+       /* fuchsia */
+       background-color: #FF00FF;
+       font-weight: bold;
+    }
+
+
+    /* table tr td.t_skipped */
+    .t_skipped {
+       color: black;
+       background-color: #D3D3D3;
+       white-space: pre;
+    }
+
+    /* table tr td.t_missed */
+    .t_missed {
+       color: black;
+       background-color: #D3D3D3;
+       white-space: pre;
+    }
+
+    table tr td.t_loosed {
+       color: yellow;
+       background-color: black;
+       font-weight: bold;
+       white-space: pre;
+    }
+
+    .t_nullrow {
+       color: black;
+       background-color: #FFE4E1;
+       white-space: pre;
+    }
+
+    .passed_row {
+       color: black;
+       background-color: #daebe8;
+    }
+
+
+    .even_row {
+       color: black;
+       background-color: #F5F5F5;
+    }
+    .odd_row {
+       color: black;
+       background-color: #F5FFFA;
+    }
+
+    .run2med_blocker {
+       color: yellow;
+       background-color: #479cff;
+       white-space: pre;
+    }
+
+    .run2med_critical {
+       background-color: #70baff;
+       white-space: pre;
+    }
+
+    .run2med_danger {
+       background-color: #99d9ff;
+       white-space: pre;
+    }
+
+    .run2med_high {
+       background-color: #c2f7ff;
+       white-space: pre;
+    }
+
+    .run2med_normal {
+       white-space: pre;
+    }
+
+    .run_time_common {
+       /* sienna */
+       color: #A0522D;
+       white-space: pre;
+    }
+
+    .overall_total {
+       background: #FAEBD7;
+       font-weight: bold;
+    }
+
+    .current_report_name {
+        background: #E6E6FA;
+        font-weight: bold;
+    }
+
+    .outcome_build_no {
+       font-weight: bold;
+    }
+
+    .outcome_run_date {
+       /*color: gray;*/
+       font-weight: normal;
+       font-size: 12px;
+    }
+
+    .nodecor {
+       text-decoration: none;
+    }
+
+    .f_e_link {
+       text-decoration: none;
+       target: _blank;
+    }
+
+    .f_e_common_link {
+       text-decoration: none;
+       color: #0066d9;
+       target: _blank;
+    }
+
+    .f_e_notion_link {
+       text-decoration: none;
+       target: _blank;
+       font-style: italic;
+       color: #0533cc;
+       background-color: #ffb8f0;
+    }
+
+    .f_right {
+       font-size: 14px;
+       white-space: pre;
+       float:right;
+    }
+
+    .f_left {
+       font-size: 14px;
+       white-space: pre;
+       float:left;
+    }
+
+    .t_title_nowrap {
+       text-align: left;
+       white-space: nowrap;
+       font-size: 14px;
+    }
+
+    .t_title_wrapped {
+       text-align: left;
+       white-space: wrap;
+       font-size: 14px;
+    }
+
+
+    #hidblock {
+        display: none;
+        /* CAN BE USEFUL: https://www.drupal.org/project/drupal/issues/766444 */
+        /* visibility: hidden !important; */
+    }
+
+    #load_data_msg {
+       opacity: 0.7;
+       background-color: #fff;
+    }
+
+    #sbl-meter {
+        /* https://mdjunaidalam5.github.io/SpinBolt */
+        height: 48px;
+        width: 48px;
+        color: #5a5a5a;
+        border-radius: 50%;
+        border: 5px solid;
+
+        position: relative;
+        left: 100px;
+        display: inline-block; 
+    }
+    #sbl-meter::after {
+        content: '';
+        height: 25%;
+        width: 0;
+        border-radius: 5px;
+        border: 3px solid;
+        display: block;
+        color: inherit;
+        position: absolute;
+        left: 22px;
+        top: 5px;
+        transform-origin: bottom;
+        animation: rotate 1s linear infinite; 
+    }
+
+    @keyframes rotate {
+      0% {
+        transform: rotate(0); }
+      100% {
+        transform: rotate(360deg); } 
+    }
+
+</style>
