@@ -1,4 +1,4 @@
-params_order:intro00;intro01;fbc;clu;dbnm;results_storage_fbk;report_compress_cmd;host;port;usr;pwd;tmpdir;remove_isql_logs;intro02;used_in_replication;working_mode;actions_todo_before_reconnect;max_cps;sleep_min;sleep_max;sleep_ddl;no_auto_undo;recalc_idx_min_interval;intro03;separate_workers;update_conflict_percent;unit_selection_method;intro04;detailed_info;mon_unit_perf;mon_query_role;mon_usr_prefix;mon_unit_list;mon_query_interval;trc_unit_perf;intro05;halt_test_on_errors;qmism_verify_bitset;use_external_to_stop;intro06;create_with_fw;create_with_sweep;wait_if_not_exists;wait_after_create;init_docs;expected_workers;init_buff;wait_for_copy;create_with_debug_objects;create_with_split_heavy_tabs;create_with_separate_qdistr_idx;create_with_compound_columns_order;intro07;warm_time;test_time;test_intervals;etalon_dbnm;make_htm;run_db_statistics;run_db_validation;file_name_with_test_params;file_name_this_host_info;gather_hardware_info;intro08;use_mtee;is_embed
+params_order:intro00;intro01;fbc;clu;dbnm;results_storage_fbk;report_compressor;report_compress_cmd;host;port;usr;pwd;tmpdir;remove_isql_logs;intro02;used_in_replication;working_mode;actions_todo_before_reconnect;max_cps;sleep_min;sleep_max;sleep_ddl;no_auto_undo;recalc_idx_min_interval;intro03;separate_workers;update_conflict_percent;unit_selection_method;intro04;detailed_info;mon_unit_perf;mon_query_role;mon_usr_prefix;mon_unit_list;mon_query_interval;trc_unit_perf;intro05;halt_test_on_errors;qmism_verify_bitset;use_external_to_stop;intro06;create_with_fw;create_with_sweep;wait_if_not_exists;wait_after_create;init_docs;expected_workers;init_buff;wait_for_copy;create_with_debug_objects;create_with_split_heavy_tabs;create_with_separate_qdistr_idx;create_with_compound_columns_order;intro07;warm_time;test_time;test_intervals;etalon_dbnm;make_htm;run_db_statistics;run_db_validation;file_name_with_test_params;file_name_this_host_info;gather_hardware_info;intro08;use_mtee;is_embed
 
 
 intro00_all: ####################################################################
@@ -60,14 +60,14 @@ dbnm_all:    # FULL PATH and file name. Use only ASCII characters in its name.
 dbnm_all_win:    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
 dbnm_all_nix:    # Allows referencing to existing OS environment variable by using dollar sign.
 dbnm_all:    # Examples:
-dbnm_win:    # dbnm = c:\temp\oltp_%(fb)s.fdb
+dbnm_win:    # dbnm = C:\temp\oltp_%(fb)s.fdb
 dbnm_win:    # dbnm = !TEMP!\oltp_%(fb)s.fdb
 dbnm_nix:    # dbnm = /var/db/oltp_%(fb)s.fdb
 dbnm_nix:    # dbnm = $TMP/data/oltp_%(fb)s.fdb
 dbnm_all:    #
 dbnm_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
 dbnm_all:    #
-dbnm_def_win:    dbnm = c:\temp\oltp_%(fb)s.fdb
+dbnm_def_win:    dbnm = C:\temp\oltp_%(fb)s.fdb
 dbnm_def_nix:    dbnm = /var/tmp/oltp_%(fb)s.fdb
 
 results_storage_fbk_all:    # Backup of DB for storing settings and results of every completed test.
@@ -85,28 +85,40 @@ results_storage_fbk_all:    #
 results_storage_fbk_all:    # NOTE: *BACKUP* must be speficied here rather then .fdb file!
 results_storage_fbk_all:    #
 results_storage_fbk_all:    # Examples:
-results_storage_fbk_win:    # results_storage_fbk = C:\data\oltp_%(fb)s-results-storage.fbk
+results_storage_fbk_win:    # results_storage_fbk = C:\temp\oltp_%(fb)s-results-storage.fbk
 results_storage_fbk_nix:    # results_storage_fbk = /var/db/oltp_%(fb)s-results-storage.fbk
 results_storage_fbk_all:    #
-results_storage_fbk_def_win:    results_storage_fbk = c:\temp\oltp_%(fb)s_results.fbk
+results_storage_fbk_def_win:    results_storage_fbk = C:\temp\oltp_%(fb)s_results.fbk
 results_storage_fbk_def_nix:    results_storage_fbk = /var/tmp/oltp_%(fb)s_results.fbk
 
 
-report_compress_cmd_all:    # External utility to compress HTML report before storing it in the database
-report_compress_cmd_all:    # defined by <results_storage_fbk> parameter.
-report_compress_cmd_all_win:    # Supported compressors: 7z and zstd.
+report_compress_cmd_all_nix:    # External utility to compress HTML report before storing it in the database
+report_compress_cmd_all_nix:    # defined by <results_storage_fbk> parameter.
 report_compress_cmd_all_nix:    # Supported compressors: 7za, zstd and zip
-report_compress_cmd_all_win:    # When commented then report will be compressed using standard ZIP format by applying
-report_compress_cmd_all_win:    # temporary created .vbs scenario using %systemroot%\system32\cscript.exe
-report_compress_cmd_all:    # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
-report_compress_cmd_all:    # Examples:
-report_compress_cmd_all_win:    # report_compress_cmd=C:\soft\7zip\7za.exe
-report_compress_cmd_all_win:    # report_compress_cmd=C:\soft\zstd\zstd.exe
+report_compress_cmd_all_nix:    # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
+report_compress_cmd_all_nix:    # Examples:
 report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/7za
 report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/zstd
 report_compress_cmd_all_nix:    # report_compress_cmd=/usr/bin/zip
-report_compress_cmd_all:    #
+report_compress_cmd_all_nix:    #
+report_compress_cmd_all_nix:    # NOTE: YOU HAVE TO INSTALL APROPRIATE PACKAGE FIRST.
+report_compress_cmd_all_nix:    #
 report_compress_cmd_def_nix:    report_compress_cmd = /usr/bin/zip
+
+report_compressor_all_win:    # Path and name of .zip file from {OLTP_ROOT}\util\compressors\ directory with
+report_compressor_all_win:    # utility for compressing HTML report before storing it in the database defined by
+report_compressor_all_win:    # <results_storage_fbk> parameter.
+report_compressor_all_win:    # Path must be specified RELATIVELY current folder. Do not change it if uncomment.
+report_compressor_all_win:    # Currently two compressors are provided in the test package: 7-Zip and Z-Standard.
+report_compressor_all_win:    # You don't need to extract these binaries because script will do it every time
+report_compressor_all_win:    # after test finish.
+report_compressor_all_win:    # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
+report_compressor_all_win:    # If this parameter remains undefined then standard ZIP format will be used.
+report_compressor_all_win:    # Otherwise one and only one of folliwing lines must be uncommented:
+report_compressor_all_win:    #
+report_compressor_all_win:    # report_compressor=..\util\compressors\7z.exe.zip
+report_compressor_all_win:    # report_compressor=..\util\compressors\zstd.exe.zip
+
 
 
 host_all:    # Parameters for remote connection and authentication.
@@ -138,7 +150,7 @@ tmpdir_all:    # Trailing backslash is optional.
 tmpdir_all_win:    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
 tmpdir_all_nix:    # Allows referencing to existing OS environment variable by using dollar sign.
 tmpdir_all:    # Examples:
-tmpdir_all_win:    # tmpdir = c:\temp\logs.oltp%(fb)s
+tmpdir_all_win:    # tmpdir = C:\temp\logs.oltp%(fb)s
 tmpdir_all_win:    # tmpdir = !temp!\logs.oltp%(fb)s
 tmpdir_all_nix:    # tmpdir = /var/tmp/logs.oltp%(fb)s
 tmpdir_all_nix:    # tmpdir = $TMP/logs.oltp%(fb)s
@@ -147,7 +159,7 @@ tmpdir_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii
 tmpdir_all_win:    # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
 tmpdir_all_win:    # then do NOT use here reference to it (!temp!) and specify something like C:\TEMP instead.
 tmpdir_all:    #
-tmpdir_def_win:    tmpdir = c:\temp\logs.oltp%(fb)s
+tmpdir_def_win:    tmpdir = C:\temp\logs.oltp%(fb)s
 tmpdir_def_nix:    tmpdir = /var/tmp/logs.oltp%(fb)s
 
 
@@ -748,7 +760,7 @@ etalon_dbnm_nix:    #     <fbc>/gfix -icu <etalon_dbnm>
 etalon_dbnm_all:    # NOTE.
 etalon_dbnm_all:    # It is recommended to change state of this DB to 'full shutdown' or at least make it read only.
 etalon_dbnm_all:    #
-etalon_dbnm_def_win:    etalon_dbnm = c:\temp\oltp_%(fb)s.etalone.fdb
+etalon_dbnm_def_win:    etalon_dbnm = C:\temp\oltp_%(fb)s.etalone.fdb
 etalon_dbnm_def_nix:    etalon_dbnm = /var/tmp/oltp_%(fb)s.etalone.fdb
 
 
@@ -780,14 +792,24 @@ file_name_with_test_params_all:    # If yes, choose format according to one of f
 file_name_with_test_params_all:    #     regular   - appropriate for quick found performance degradation, without details of test settings
 file_name_with_test_params_all:    #     benchmark - appropriate for analysis when different settings are applied
 file_name_with_test_params_all:    #
-file_name_with_test_params_all:    # Example of report name when this parameter = 'regular':
-file_name_with_test_params_25x_all:    #     YYYYmmDD_HHMM_score_00957_build_27152_sc%(fb)s__3h00m_100_att_fw__on.txt
-file_name_with_test_params_30x_all:    #     YYYYmmDD_HHMM_score_06543_build_31236_ss%(fb)s__3h00m_100_att_fw__on.txt
-file_name_with_test_params_40x_all:    #     YYYYmmDD_HHMM_score_07011_build_2241_ss%(fb)s__3h00m_100_att_fw__on.txt
-file_name_with_test_params_all:    # Example of report name when this parameter = 'benchmark':
-file_name_with_test_params_25x_all:    #     sc%(fb)s_fw_off_split_most__sel_1st_one_index_score_02545_build_27152__3h00m_100_att_YYYYmmDD_HHMM.txt
-file_name_with_test_params_30x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM.txt
-file_name_with_test_params_40x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM.txt
+file_name_with_test_params_all:    # Report file name always consists of tokens that reflect:
+file_name_with_test_params_all:    # * Performance score;
+file_name_with_test_params_all:    # * FB snapshot number;
+file_name_with_test_params_all:    # * ServerMode value;
+file_name_with_test_params_all:    # * Test phase duration (hours and minutes);
+file_name_with_test_params_all:    # * Number of worked sessions;
+file_name_with_test_params_all:    # * Forced Writes value;
+file_name_with_test_params_all:    # * Number of CPU cores;
+file_name_with_test_params_all:    # * Total RAM size, Gb;
+file_name_with_test_params_all:    # * Timestamp when test started.
+file_name_with_test_params_all:    # Example of report name when this parameter is 'regular':
+file_name_with_test_params_25x_all:    #     YYYYmmDD_HHMM_score_00957_build_27152_sc%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
+file_name_with_test_params_30x_all:    #     YYYYmmDD_HHMM_score_06543_build_31236_ss%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
+file_name_with_test_params_40x_all:    #     YYYYmmDD_HHMM_score_07011_build_2241_ss%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
+file_name_with_test_params_all:    # Example of report name when this parameter is 'benchmark':
+file_name_with_test_params_25x_all:    #     sc%(fb)s_fw_off_split_most__sel_1st_one_index_score_02545_build_27152__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
+file_name_with_test_params_30x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
+file_name_with_test_params_40x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
 file_name_with_test_params_all:    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
 file_name_with_test_params_all:    #
 file_name_with_test_params_all:    # Available options when uncommented: regular | benchmark
@@ -796,11 +818,10 @@ file_name_with_test_params_def_all:    file_name_with_test_params = regular
 
 
 file_name_this_host_info_all:    # Suffix for adding at the end of report name. CHANGE this value to some useful info about host location, 
-file_name_this_host_info_all:    # hardware specifics, FB instance etc.
+file_name_this_host_info_all:    # operating system, hardware specifics, FB instance etc.
 file_name_this_host_info_win:    # For example, use value of %%COMPUTERNAME%% environment variable
 file_name_this_host_info_nix:    # For example, use value of 'hostname' command.
-file_name_this_host_info_all:    # It is also useful to specify here number of CPU cores and size of RAM, e.g.:
-file_name_this_host_info_all:    #     testsrv_cpu16_ram64
+file_name_this_host_info_all:    # You do not need to specify here number of CPU cores or RAM size: they will be added to file name by test itself.
 file_name_this_host_info_all:    #
 file_name_this_host_info_def_win:    file_name_this_host_info = !COMPUTERNAME!
 file_name_this_host_info_def_nix:    file_name_this_host_info = linux_hostname

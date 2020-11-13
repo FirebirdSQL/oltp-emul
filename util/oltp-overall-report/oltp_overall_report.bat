@@ -3,10 +3,33 @@ setlocal enabledelayedexpansion enableextensions
 
 set THIS_DIR=%~dp0
 set THIS_DIR=!THIS_DIR:~0,-1!
+
+@rem Get parent and grand-parent directories relating to current one:
+for /f %%a in ("%~dp0.") do (
+    for %%i in ("%%~dpa")  do (
+        set PARENTDIR=%%~dpi
+        set PARENTDIR=!PARENTDIR:~0,-1!
+    )
+    for %%i in ("%%~dpa.") do (
+        set GRANDPDIR=%%~dpi
+        set GRANDPDIR=!GRANDPDIR:~0,-1!
+    )
+)
+
 cd /d !THIS_DIR!
 
-set abendlog=!THIS_DIR!\abend.log.tmp
+set abendlog=%~n0.abend-log.tmp
+if .%TEMP%.==.. (
+    set abendlog=%TEMP%\!abendlog!
+) else (
+    if exist c:\temp\nul (
+        set abendlog=c:\temp\!abendlog!
+    ) else (
+        set abendlog=!THIS_DIR!\!abendlog!
+    )
+)
 del !abendlog! 2>nul
+echo abendlog=!abendlog!
 
 set ISC_USER=
 set ISC_PASSWORD=
@@ -52,6 +75,7 @@ set tmperr=!LOGDIR!\%~n0.!dts!.err
 set tmplog=!LOGDIR!\%~n0.!dts!.tmp
 set tmpfdb=!LOGDIR!\%~n0.!dts!.fdb
 set tmplst=!LOGDIR!\%~n0.!dts!.lst
+set tmpvbs=!LOGDIR!\%~n0.extract-from-zip.tmp.vbs
 set htmfile=!LOGDIR!\%~n0.tmp.html
 
 del !joblog! 2>nul
@@ -121,6 +145,20 @@ for /d %%f in (!FB4x_FBK!,!FB3x_FBK!) do (
 
 set dbauth=-user !DBA_USER! -password !DBA_PSWD!
 set dbconn=localhost:!DB_OVERALL_FILE!
+
+@rem ------------------------------------
+
+%systemroot%\system32\cscript.exe 1>!tmplog! 2>&1
+findstr /i /c:"Windows Script Host" !tmplog! >nul
+if errorlevel 1 (
+    (
+        echo Windows Script executive is unavaliable.
+        echo Check access rights to %systemroot%\system32\cscript.exe
+    )>!tmplog!
+    call :bulksho !tmplog! !joblog!
+
+    goto final
+)
 
 @rem ------------------------------------
 
@@ -263,6 +301,99 @@ if not exist !DB_OVERALL_FILE! (
     )
 )
 
+@rem ----------------------------------------
+
+@rem Replace relative path to decompress binaries with absolute one:
+set DECOMPRESS_7Z=!DECOMPRESS_7Z:..\..=%GRANDPDIR%!
+set DECOMPRESS_7Z=!DECOMPRESS_7Z:..=%PARENTDIR%!
+set DECOMPRESS_ZST=!DECOMPRESS_ZST:..\..=%GRANDPDIR%!
+set DECOMPRESS_ZST=!DECOMPRESS_ZST:..=%PARENTDIR%!
+
+if not exist !DECOMPRESS_7Z! (
+    call :sho "Parameter 'DECOMPRESS_7Z' points to missed file: !DECOMPRESS_7Z!" !joblog!
+    call :final
+)
+if not exist !DECOMPRESS_ZST! (
+    call :sho "Parameter 'DECOMPRESS_ZST' points to missed file: !DECOMPRESS_ZST!" !joblog!
+    call :final
+)
+
+@rem Generate temporary .vbs script in !LOGDIR! for extracting binaries of 7z.exe and zstd.exe
+@rem from apropriate .zip files, see config parameters 'DECOMPRESS_7Z' and 'DECOMPRESS_ZST':
+@rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+(
+    echo ' Original text:
+    echo ' https://social.technet.microsoft.com/Forums/en-US/8df8cbfc-fe5d-4285-8a7a-c1fb201656c8/automatic-unzip-files-using-a-script?forum=ITCG
+    echo ' Examples:
+    echo '     %systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !DECOMPRESS_7Z! !LOGDIR!
+    echo '     %systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !DECOMPRESS_ZST! !LOGDIR!
+
+    echo option explicit
+
+    echo dim sourceZip, targetDir, oFSO, oShell, oSource, oTarget
+
+    echo ' Required input arguments:
+    echo ' N1 = *full* name of .zip to be extracted;
+    echo ' N2 = target directory 
+
+    echo sourceZip=WScript.Arguments.Item(0^)
+    echo targetDir=WScript.Arguments.Item(1^)
+
+    echo set oFSO = CreateObject("Scripting.FileSystemObject"^)
+    echo if not oFSO.FolderExists(targetDir^) then
+    echo     oFSO.CreateFolder(targetDir^)
+    echo end if
+    echo set oShell = CreateObject("Shell.Application"^)
+    echo set oSource = oShell.NameSpace(sourceZip^).Items(^)
+    echo set oTarget = oShell.NameSpace(targetDir^)
+
+    echo ' Prevent from dialog box with question overwrite existing files:
+    echo ' https://docs.microsoft.com/en-us/previous-versions/tn-archive/ee176633(v=technet.10^)?redirectedfrom=MSDN
+    echo ' Table 11.9 Shell Folder CopyHere Constants
+    echo ' ^&H10^& -- Automatically responds "Yes to All" to any dialog box that appears. 
+    echo ' ^&H4^& Copies files without displaying a dialog box.
+    echo ' bin_or(10,14^) is 14
+
+    echo oTarget.CopyHere oSource, ^&H14^&
+) >!tmpvbs!
+
+call :sho "Extract compressors from .zip files to !LOGDIR!" !joblog!
+%systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !DECOMPRESS_7Z! !LOGDIR! 1>!tmperr! 2>&1
+%systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !DECOMPRESS_ZST! !LOGDIR! 1>>!tmperr! 2>&1
+
+@rem ####################################
+@rem ::: NB ::: 12.11.2020
+@rem cscript returns errorlevel = 0 even when some error occured.
+@rem We have to check SIZE of STDERR log!
+@rem ####################################
+for /f "usebackq tokens=*" %%a in ('!tmperr!') do (
+    set err_size=%%~za
+)
+if .!err_size!.==.. set err_size=0
+if !err_size! GTR 0 (
+    call :sho "Extraction FAILED. Check log:" !joblog!
+    type !tmperr!
+    type !tmperr!>>!joblog!
+
+    goto final
+
+)
+call :sho "Completed." !joblog!
+
+
+@rem Adjust path and name of utilities for make decompression:
+@rem =========================================================
+for /f %%a in ("!DECOMPRESS_7Z!") do (
+    set DECOMPRESS_7Z=!LOGDIR!\%%~na
+)
+for /f %%a in ("!DECOMPRESS_ZST!") do (
+    set DECOMPRESS_ZST=!LOGDIR!\%%~na
+)
+
+@rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+@rem ----------------------------------------
 
 @rem If value of <mon_unit_perf> not equal to 2 then warning will issue
 @rem about pissible absence of monitoring data related to memory consumption.
@@ -390,31 +521,38 @@ for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do (
             set html_detl_name=!DETAILS_DIR!\%%~nc.html
             set compressed_ext=%%~xc
 
-            @rem call :sho "Decompress html content, command:" !joblog!
-
             if /i "!compressed_ext!"==".zip" (
-                set extract_cmd="!decompress_zip! e -tzip -so !decoded_zip! ^> !html_detl_name!"
-                @rem echo !decompress_zip! e -tzip -so !decoded_zip! ^> !html_detl_name!
+                set extract_cmd="!DECOMPRESS_7Z! e -tzip -so !decoded_zip! ^> !html_detl_name!"
             ) else if /i "!compressed_ext!"==".7z" (
                 set extract_cmd="!decompress_7z! e -so !decoded_zip! ^> !html_detl_name!"
-                @rem echo !decompress_7z! e -so !decoded_zip! ^> !html_detl_name!
             ) else (
                 set extract_cmd="!decompress_zst! -d !decoded_zip! -o !html_detl_name!"
-                @rem echo !decompress_zst! -d !decoded_zip! -o !html_detl_name!
             )
-            echo compressed_ext=!compressed_ext!, check cmd: !extract_cmd!
+
+            call :sho "Decompress html content, command:" !joblog!
+            @rem echo compressed_ext=!compressed_ext!, check cmd: !extract_cmd!
+            echo !extract_cmd!
             echo !extract_cmd! >>!joblog!
+            @rem DO NOT >>> call :sho "!extract_cmd!" !joblog!
+
+            @rem ############################################################
+            @rem ### Decompress OLTP-EMUL report: .zip/.7z/.zstd --> HTML ###
+            @rem ############################################################
             cmd /c !extract_cmd! 1>!tmplog! 2>!tmperr!
             if errorlevel 1 (
-                call :sho "WARNING: could not extract data from !decoded_zip! and/or save it to !html_detl_name!" !joblog!
+                call :sho "ACHTUNG: could not extract data from !decoded_zip!" !joblog!
+                type !tmperr!
+                type !tmperr! >>!joblog!
+
+                call :final
+
             ) else (
                 @rem do NOT use here: zst writes to STDERR its actions! ==> call :catch_err run_cmd !joblog! !tmperr! !tmplog!
                 del !tmplog!
                 del !decoded_zip!
+                call :sho "Completed." !joblog!
             )
         )
-
-
     )
 )
 
@@ -443,7 +581,7 @@ if !cleanup_error! GTR 0 (
 
 if !can_upload! EQU 1 (
     set compressed_report=!LOGDIR!\%~n0.!dts!.7z
-    set run_cmd=!P7ZCMD! u -mx9 -mfb273 !compressed_report! !LOGDIR!\oltp-overall-main.html !LOGDIR!\oltp-overall-main.css !DETAILS_DIR!\
+    set run_cmd=!DECOMPRESS_7Z! u -mx9 -mfb273 !compressed_report! !LOGDIR!\oltp-overall-main.html !LOGDIR!\oltp-overall-main.css !DETAILS_DIR!\
     call :sho "Compress report before uploading. Command: !run_cmd!" !joblog!
     cmd /c "!run_cmd!" 1>!tmplog! 2>!tmperr!
     set elev=!errorlevel!
@@ -472,6 +610,14 @@ if !can_upload! EQU 1 (
 )
 @rem !can_upload! EQU 1 or 0
 
+@rem Cleanup: remove extracted binaries for compression:
+for /d %%a in ("!DECOMPRESS_7Z!", "!DECOMPRESS_ZST!") do (
+    if /i "%%~dpa"=="!logdir!\" (
+        call :sho "Deleting file %%a" !joblog!
+        del %%a
+    )
+)
+
 echo.
 (
     echo ###########################################################################
@@ -481,6 +627,8 @@ echo.
 ) >!tmplog!
 call :bulksho !tmplog! !joblog!
 echo.
+
+
 call :sho "Job completed, exit from %~f0." !joblog!
 
 goto :final
@@ -759,7 +907,7 @@ if .%2.==.. (
 @rem 05.03.2020: remove excessive CR symbols using VBS:
 @rem ==================================================
 for /f %%a in ("!sourfile!") do (
-    set remove_extra_cr_vbs=%%~dparemove_excessive_CR.vbs.tmp
+    set remove_extra_cr_vbs=%%~dparemove_excessive_CR.tmp.vbs
     if NOT exist !remove_extra_cr_vbs! (
         (
             echo ' Generated auto by %~f0 at !date! !time!

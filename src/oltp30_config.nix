@@ -85,6 +85,8 @@
    # report_compress_cmd=/usr/bin/zstd
    # report_compress_cmd=/usr/bin/zip
    #
+   # NOTE: YOU HAVE TO INSTALL APROPRIATE PACKAGE FIRST.
+   #
    report_compress_cmd = /usr/bin/zip
 
 
@@ -721,10 +723,20 @@
    #     regular   - appropriate for quick found performance degradation, without details of test settings
    #     benchmark - appropriate for analysis when different settings are applied
    #
-   # Example of report name when this parameter = 'regular':
-   #     YYYYmmDD_HHMM_score_06543_build_31236_ss30__3h00m_100_att_fw__on.txt
-   # Example of report name when this parameter = 'benchmark':
-   #     ss30_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM.txt
+   # Report file name always consists of tokens that reflect:
+   # * Performance score;
+   # * FB snapshot number;
+   # * ServerMode value;
+   # * Test phase duration (hours and minutes);
+   # * Number of worked sessions;
+   # * Forced Writes value;
+   # * Number of CPU cores;
+   # * Total RAM size, Gb;
+   # * Timestamp when test started.
+   # Example of report name when this parameter is 'regular':
+   #     YYYYmmDD_HHMM_score_06543_build_31236_ss30__3h00m_100_att_fw__on_cpu4_ram32.txt
+   # Example of report name when this parameter is 'benchmark':
+   #     ss30_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
    #
    # Available options when uncommented: regular | benchmark
@@ -733,10 +745,9 @@
 
 
    # Suffix for adding at the end of report name. CHANGE this value to some useful info about host location, 
-   # hardware specifics, FB instance etc.
+   # operating system, hardware specifics, FB instance etc.
    # For example, use value of 'hostname' command.
-   # It is also useful to specify here number of CPU cores and size of RAM, e.g.:
-   #     testsrv_cpu16_ram64
+   # You do not need to specify here number of CPU cores or RAM size: they will be added to file name by test itself.
    #
    file_name_this_host_info = linux_hostname
 

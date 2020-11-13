@@ -129,14 +129,13 @@ msg_noserv() {
 
 ###########################  m a i n    p a r t   #############################
 
-this_script_directory="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-
 # this file must be allowed to create on any POSIX:
-abendlog=/var/tmp/oltp_overall_report.abend.txt
+abendlog=/var/tmp/oltp_overall_report.abend.err
 rm -f $abendlog
 
-cd ${this_script_directory}
+this_script_directory="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+cd ${this_script_directory}
 this_script_full_name=${BASH_SOURCE[0]}
 this_script_name_only=$(basename $this_script_full_name)
 this_script_name_only=${this_script_name_only%.*}
@@ -180,7 +179,6 @@ else
     echo $msg > $abendlog
     exit 1
 fi
-rm -f $abendlog
 
 this_script_log=$LOGDIR/${this_script_name_only}.$dts.log
 this_script_lst=$LOGDIR/${this_script_name_only}.lst
@@ -263,7 +261,10 @@ do
         fi
         declare $lhs=$rhs
         if [ $? -gt 0 ]; then
-          echo +++ ACHTUNG +++ SOMETHING WRONG IN YOUR CONFIG FILE
+          msg="+++ ACHTUNG +++ SOMETHING WRONG IN YOUR CONFIG FILE"
+          echo $msg
+          echo $dts. $msg >> $abendlog
+          exit 1
           exit
         fi
         echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
@@ -416,7 +417,6 @@ if [[ $RECREATE_DB -eq 0 ]]; then
     fi
 fi
 
-
 if [[ $RECREATE_DB -eq 0 ]]; then
     sho "Config parameter RECREATE_DB=0. Existing database will be used."
     chown firebird $DB_OVERALL_FILE
@@ -456,6 +456,7 @@ fi
 #------------------------------------------------------------------------
 
 dbarr=($FB4X_FBK $FB3X_FBK)
+
 for fbk_name in "${dbarr[@]}"
 do
     dbname_only=$(basename $fbk_name)
@@ -538,6 +539,7 @@ export MAIN_RPT_FILE=$MAIN_RPT_FILE
 
 run_cmd="${PYTHON_BINARY} $this_script_directory/${this_script_name_only}.py"
 display_intention "Launch Python and generate HTML reports" "$run_cmd" "$this_script_log" "$this_script_err"
+
 eval "$run_cmd" 2>$this_script_err
 catch_err $this_script_err "Check errors log."
 
@@ -582,10 +584,11 @@ do
     if [[ $? -ne 0 ]]; then
         sho "WARNING: could not extract data from $decoded_zip and/or save it to $html_detl_name"
         cat $this_script_err
-        cat $this_script_err>>$log4all
     else
+        sho "Completed OK."
         rm -f $decoded_zip
     fi
+    cat $this_script_err>>$log4all
     rm -f $this_script_tmp $this_script_err
 
 done
@@ -654,5 +657,5 @@ else
     sho "Upload DISABLED or impossible."
 fi
 
-sho "Completed script $0"
-
+sho "Completed script $this_script_full_name"
+exit

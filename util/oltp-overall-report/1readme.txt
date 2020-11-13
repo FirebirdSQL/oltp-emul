@@ -1,5 +1,6 @@
 This directory contains two scripts (oltp_overall_report.bat; oltp_overall_report.sh) for generating report
 that contains results of every previous OLTP-EMUL runs, for both FB 3.x and 4.x.
+Firebird 4.x must present to make overall report with OLTP-EMUL results.
 
 It is reasonably to start these scripts by scheduler, when OLTP-EMUL not running.
 
@@ -23,6 +24,7 @@ Report is HTML file with path and name defined by parameter <MAIN_RPT_FILE>.
 In the same folder file <reportname>.css will be stored for correct display of report content.
 Sub-folder with name 'DETAILS' will be created forstoring results of every test run, also in HTML format.
 
-These results can be compressed and uploaded to some http or ftp server. Package 7-Zip is used for this.
+These results can be compressed and uploaded to some http or ftp server.
+Compressor 7-Zip is used for this. On Linux it must be already installed first.
 For Linux uploading task was implemented only for HTTP server, see config SSH_* parameters.
 For Windows this script can only upload results to ftp server, see config FTP_* parameters (not tested deep).

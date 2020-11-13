@@ -2680,7 +2680,10 @@ as
     declare v_sep_workers varchar(50) = 'sep_UNKNOWN';
     declare v_unit_select varchar(50) = 'uns_UNKNOWN';
     declare v_repl_involv varchar(50) = 'rpl_UNKNOWN';
+    declare v_cpu_cores smallint;
+    declare v_mem_total smallint;
 begin
+
 
     -- Aux. SP for returning FILE NAME of final report which does contain all
     -- significant FB, database and test params
@@ -2716,12 +2719,14 @@ begin
          max(iif( mcode='SEPARATE_WORKERS',            iif( svalue=1,             'sepw_1',     'sepw_0'), null ))
         ,max(iif( mcode='UNIT_SELECTION_METHOD',       iif( svalue = 'random',    'rndUnitSel', 'predictSel' ), null ))
         ,max(iif( mcode='USED_IN_REPLICATION',         iif( svalue=1,             'repl_1',     'repl_0' ), null ))
+        ,max(iif( mcode='CPU_CORES',                   svalue, null                                              ))
+        ,max(iif( mcode='MEM_TOTAL',                   svalue, null                                              ))
     from (
         select s.mcode, s.svalue
         from settings s
-        where s.mcode in ( 'SEPARATE_WORKERS', 'UNIT_SELECTION_METHOD', 'USED_IN_REPLICATION')
+        where s.mcode in ( 'SEPARATE_WORKERS', 'UNIT_SELECTION_METHOD', 'USED_IN_REPLICATION', 'CPU_CORES', 'MEM_TOTAL')
     )
-    into v_sep_workers, v_unit_select, v_repl_involv;
+    into v_sep_workers, v_unit_select, v_repl_involv, v_cpu_cores, v_mem_total;
 
     select
         'score_'||lpad( cast( coalesce(aux1,0) as int ), iif( coalesce(aux1,0) < 99999, 5, 18 ) , '0' )
@@ -2808,6 +2813,8 @@ begin
             -- excluded 02.01.19, not needed: || '_' || v_sep_workers
             -- excluded 31.10.18, not needed: || '_' || v_unit_select
             || '_' || v_repl_involv
+            || coalesce('_cpu' || v_cpu_cores, '')
+            || coalesce('_ram' || v_mem_total, '')
         ;
     else if (a_format = 'benchmark') then
         -- ###############################################
@@ -2852,6 +2859,9 @@ begin
                 || '_' || load_time
                 || '_' || load_att
                 || '_' || start_at
+                || coalesce('_cpu' || v_cpu_cores, '')
+                || coalesce('_ram' || v_mem_total, '')
+
             ;
         end
 

@@ -220,7 +220,7 @@ if .%make_html%.==.1. (
 
     )
 
-    @rem cer5tutil is used to convert COMPRESSED HTML content (7z, .zst, .zip)
+    @rem certutil is used to convert COMPRESSED HTML content (7z, .zst, .zip)
     @rem to base64 before it will be inserted into temporary .fdb and further
     @rem backed up to %results_storage_fbk%.
 

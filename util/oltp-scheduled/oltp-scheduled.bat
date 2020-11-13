@@ -3,10 +3,34 @@ setlocal enabledelayedexpansion enableextensions
 
 set THIS_DIR=%~dp0
 set THIS_DIR=!THIS_DIR:~0,-1!
+
+@rem Get parent and grand-parent directories relating to current one:
+for /f %%a in ("%~dp0.") do (
+    for %%i in ("%%~dpa")  do (
+        set PARENTDIR=%%~dpi
+        set PARENTDIR=!PARENTDIR:~0,-1!
+    )
+    for %%i in ("%%~dpa.") do (
+        set GRANDPDIR=%%~dpi
+        set GRANDPDIR=!GRANDPDIR:~0,-1!
+    )
+)
+
 cd /d !THIS_DIR!
 
-set abendlog=!THIS_DIR!\abend.log.tmp
+set abendlog=%~n0.abend-log.tmp
+if .%TEMP%.==.. (
+    set abendlog=%TEMP%\!abendlog!
+) else (
+    if exist c:\temp\nul (
+        set abendlog=c:\temp\!abendlog!
+    ) else (
+        set abendlog=!THIS_DIR!\!abendlog!
+    )
+)
 del !abendlog! 2>nul
+echo abendlog=!abendlog!
+
 
 if not .%1.==.25. if not .%1.==.30. if not .%1.==.40. (
     call :show_syntax !abendlog!
@@ -46,18 +70,24 @@ set err_setenv=0
 
 set cfg=%~dpn0_config.win
 
-::::::::::::::::::::::::::::::::
-:::: R E A D    C O N G I G ::::
-::::::::::::::::::::::::::::::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: R E A D     O L T P - S C H E D U L E D    C O N G I G ::::
+::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 echo Parsing config file ^>%cfg%^<. Please wait. . .
 call :readcfg %cfg% err_setenv
 if .%err_setenv%.==.1. (
     call :no_env !abendlog! !cfg!
 )
 
+@rem OLTP_ROOT_DIR - from .conf fir this script; can be specified as relative path: ..\..
+set OLTP_SRC_DIR=!OLTP_ROOT_DIR!\src
 
-set oemul_cfg=!OLTP_HOME_DIR!\oltp!fb_major!_config.win
+set oemul_cfg=!OLTP_SRC_DIR!\oltp!fb_major!_config.win
 echo Parsing config file ^>!oemul_cfg!^<. Please wait. . .
+
+:::::::::::::::::::::::::::::::::::::::::::::::::::::::
+:::: R E A D     O L T P - E M U L     C O N G I G ::::
+:::::::::::::::::::::::::::::::::::::::::::::::::::::::
 call :readcfg !oemul_cfg! err_setenv
 if .%err_setenv%.==.1. (
     call :no_env !abendlog! !oemul_cfg!
@@ -83,6 +113,7 @@ set tmplog=!tmpdir!\%~n0.tmp
 set tmperr=!tmpdir!\%~n0.err
 set tmpsql=!tmpdir!\%~n0.sql
 set tmplst=!tmpdir!\%~n0.lst
+set tmpvbs=!LOGDIR!\%~n0.extract-from-zip.tmp.vbs
 
 for /d %%x in (!joblog!,!tmplog!,!tmperr!) do (
     del %%x 2>nul
@@ -104,63 +135,115 @@ if errorlevel 1 (
     goto final
 )
 
+@rem Replace relative path to decompress binaries with absolute one:
+set COMPRESS_7Z=!COMPRESS_7Z:..\..=%GRANDPDIR%!
+set COMPRESS_7Z=!COMPRESS_7Z:..=%PARENTDIR%!
 
-if not exist "!p7zcmd!" (
-    (
-        echo.
-        echo Config parameter 'p7zcmd': !p7zcmd! -- points to missed file.
-        echo.
-    )>!tmplog!
-    call :bulksho !tmplog! !joblog!
+if not exist !COMPRESS_7Z! (
+    call :sho "Parameter 'COMPRESS_7Z' points to missed file: !COMPRESS_7Z!" !joblog!
+    call :final
+)
+
+
+@rem Generate temporary .vbs script in !TMPDIR! for extracting binary 7z.exe
+@rem from ..\compressors\7z.exe.zip
+@rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+(
+    echo ' Original text:
+    echo ' https://social.technet.microsoft.com/Forums/en-US/8df8cbfc-fe5d-4285-8a7a-c1fb201656c8/automatic-unzip-files-using-a-script?forum=ITCG
+    echo ' Examples:
+    echo '     %systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !COMPRESS_7Z! !tmpdir!
+
+    echo option explicit
+
+    echo dim sourceZip, targetDir, oFSO, oShell, oSource, oTarget
+
+    echo ' Required input arguments:
+    echo ' N1 = *full* name of .zip to be extracted;
+    echo ' N2 = target directory 
+
+    echo sourceZip=WScript.Arguments.Item(0^)
+    echo targetDir=WScript.Arguments.Item(1^)
+
+    echo set oFSO = CreateObject("Scripting.FileSystemObject"^)
+    echo if not oFSO.FolderExists(targetDir^) then
+    echo     oFSO.CreateFolder(targetDir^)
+    echo end if
+    echo set oShell = CreateObject("Shell.Application"^)
+    echo set oSource = oShell.NameSpace(sourceZip^).Items(^)
+    echo set oTarget = oShell.NameSpace(targetDir^)
+
+    echo ' Prevent from dialog box with question overwrite existing files:
+    echo ' https://docs.microsoft.com/en-us/previous-versions/tn-archive/ee176633(v=technet.10^)?redirectedfrom=MSDN
+    echo ' Table 11.9 Shell Folder CopyHere Constants
+    echo ' ^&H10^& -- Automatically responds "Yes to All" to any dialog box that appears. 
+    echo ' ^&H4^& Copies files without displaying a dialog box.
+    echo ' bin_or(10,14^) is 14
+
+    echo oTarget.CopyHere oSource, ^&H14^&
+) >!tmpvbs!
+
+set run_cmd=%systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !COMPRESS_7Z! !tmpdir!
+call :sho "Extract compressor from COMPRESS_7Z=!COMPRESS_7Z! to !tmpdir!. Command" !joblog!
+call :sho "!run_cmd!" !joblog!
+cmd /c !run_cmd! 1>!tmperr! 2>&1
+
+@rem ####################################
+@rem ::: NB ::: 12.11.2020
+@rem cscript returns errorlevel = 0 even when some error occured.
+@rem We have to check SIZE of STDERR log!
+@rem ####################################
+for /f "usebackq tokens=*" %%a in ('!tmperr!') do (
+    set err_size=%%~za
+)
+if .!err_size!.==.. set err_size=0
+if !err_size! GTR 0 (
+    call :sho "Extraction FAILED. Check log:" !joblog!
+    type !tmperr!
+    type !tmperr!>>!joblog!
 
     goto final
+
 )
 
-call :trim p7zcmd !p7zcmd!
+call :sho "Completed." !joblog!
 
-@rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
-echo !p7zcmd!| findstr /e /i /c:"\7za.exe" /c:"\7za" /c:"\7z.exe" /c:"\7z" >nul
-if NOT errorlevel 1 (
-    @rem Check that 'p7zcmd' actually points to 7-Zip
-    cmd /c !p7zcmd! 1>!tmplog! 2>&1
-    findstr /i /c:"7-Zip" !tmplog!>nul
-    if errorlevel 1 (
 
-        (
-            echo.
-            echo Config parameter 'p7zcmd': !p7zcmd! -- points to binary that actually is NOT 7-Zip.
-            echo.
-        )>!tmplog!
-        call :bulksho !tmplog! !joblog!
-
-        goto final
-    
-    )
+@rem Adjust path and name of utilities for make decompression:
+@rem =========================================================
+for /f %%a in ("!COMPRESS_7Z!") do (
+    set COMPRESS_7Z=!tmpdir!\%%~na
 )
 
-if not exist !curlcmd! (
-    (
-        echo.
-        echo Config parameter 'curlcmd': !curlcmd! -- points to missed file.
-        echo.
-    )>!tmplog!
-    call :bulksho !tmplog! !joblog!
+@rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 
-    goto final
+set CURL_ZIP=!CURL_ZIP:..\..=%GRANDPDIR%!
+set CURL_ZIP=!CURL_ZIP:..=%PARENTDIR%!
+
+if not exist !CURL_ZIP! (
+    call :sho "Parameter 'CURL_ZIP' points to missed file: !CURL_ZIP!" !joblog!
+    call :final
 )
-!CURLCMD! --version 1>!tmplog! 2>&1
-findstr /i /c:"libcurl" !tmplog! 1>nul
+
+set run_cmd=%systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !CURL_ZIP! !tmpdir!
+call :sho "Extract compressor from CURL_ZIP=!CURL_ZIP! to !tmpdir!. Command" !joblog!
+call :sho "!run_cmd!" !joblog!
+cmd /c !run_cmd! 1>!tmperr! 2>&1
 if errorlevel 1 (
-        (
-            echo.
-            echo Config parameter 'CURLCMD': !curlcmd! -- points to binary that actually is NOT curl.
-            echo.
-        )>!tmplog!
-        call :bulksho !tmplog! !joblog!
-
-        goto final
-    
+    call :sho "Extracting FAILED. Check !tmperr!:" !joblog!
+    type !tmperr!
+    type !tmperr!>>!joblog!
 )
+call :sho "Completed." !joblog!
+
+
+@rem Adjust path and name of utilities for make decompression:
+@rem =========================================================
+for /f %%a in ("!CURL_ZIP!") do (
+    set curl_cmd=!tmpdir!\%%~na
+)
+
 
 @rem #########################################################
 @rem Check whether standard Windows console utility 
@@ -174,34 +257,6 @@ if NOT errorlevel 1 (
 ) else (
     call :sho "CLI utility 'certutil.exe' is unavaliable e-mail attachments will not created." !joblog!
 )
-
-
-if .1.==.0. (
-
-        @REM TEMPORARY HERE. MOVE LATER IN APROPRIATE PLACE
-        @rem $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$
-        @rem FB_daily_build 13:55. Build: Firebird-3.0.7.33387-0.amd64.tar.gz, part: 1 of 1
-
-        @rem call :mailsender !joblog! "!mail_hdr_subj! INFO. !info_msg!"  n/a  n/a  mail_sending_result
-        @rem                 1     \-------------------------------/   |    |          |
-        @rem                                    2                      |    |          |
-        @rem                                  mail_subj                3    |          |
-        @rem                                              mail_body_file    4          5
-        @rem                                               mail_attachment_file    out: retcode
-
-
-        set build_7z=C:\1INSTALL\FIREBIRD\1snap-3.x\Firebird-3.0.7.33372-0_x64.7z
-        set build_no=Firebird-3.0.7.33372-0_x64.7z
-        set bld_size=16356832
-
-        call :mailsender !joblog! "!mail_hdr_subj!. Build: !build_no!, total size !bld_size!" "n/a" !build_7z! mail_sending_result
-        @rem                1      \-----------------------  2  ---------------------------/    3       4            5
-
-
-        call :sho "Return to main part of script, e-mail sending retcode: !mail_sending_result!" !joblog!
-
-)
-
 
 set fb_config_prototype=!THIS_DIR!\oltp-scheduled-fb!fb_major!.conf.!fb_mode!
 
@@ -354,6 +409,13 @@ del !fb_cfg_for_work! 2>nul
 
 for /f "tokens=*" %%a in ('findstr /r /c:"^^[^^#;]" !fb_config_prototype!') do (
     set line=%%a
+    @rem Following parameters will be added separately:
+    @rem ===============================================
+    @rem ServerMode
+    @rem BugCheckAbort
+    @rem RemoteServicePort
+    @rem UdfAccess
+    @rem ===============================================
     echo !line! | findstr /i /c:"ServerMode" /c:"BugCheckAbort" /c:"RemoteServicePort" /c:"UdfAccess" >nul
     if errorlevel 1 (
         echo !line!>>!fb_cfg_for_work!
@@ -441,7 +503,7 @@ if .!upd_fb!.==.1. (
         call :sho "Invalid/unsupported FB major version passed. Can not defined URL for downloading FB snapshot." !joblog!
         goto final
     )
-    set run_cmd=!CURLCMD! -L -v -trace !PROXY_DATA! !fb_major_vers_url!
+    set run_cmd=!curl_cmd! -L -v -trace !PROXY_DATA! !fb_major_vers_url!
     call :sho "Obtaining list of files. Command: !run_cmd!" !joblog!
 
     @rem ################################
@@ -495,7 +557,7 @@ if .!upd_fb!.==.1. (
 
     if !previous_fb_snapshot! LSS !actual_fb_snapshot! (
         call :sho "Currently installed FB instance is OLDER that offered one." !joblog!
-        set run_cmd=!CURLCMD! -L -v -trace !PROXY_DATA! !fb_major_vers_url!/!fb_build_file!
+        set run_cmd=!curl_cmd! -L -v -trace !PROXY_DATA! !fb_major_vers_url!/!fb_build_file!
         (
             echo Downloading !fb_build_file!: installed snapshot No. !previous_fb_snapshot! is OLDER than offered on site: !actual_fb_snapshot!
             echo Command: !run_cmd!
@@ -528,7 +590,7 @@ if .!upd_fb!.==.1. (
         @rem #########################################################################
         @rem ### e x t r a c t    c o m p r e s s e d     F B    s n a p s h o t   ###
         @rem #########################################################################
-        set run_cmd=!p7zcmd! x -y -o"!dir_to_install!" !tmpdir!\!fb_build_file!
+        set run_cmd=!COMPRESS_7Z! x -y -o"!dir_to_install!" !tmpdir!\!fb_build_file!
         
         call :sho "Extracting fresh build files. Command: !run_cmd!" !joblog!
 
@@ -641,47 +703,68 @@ if .!upd_fb!.==.1. (
         call :bulksho !tmplog! !joblog!
 
     )
-    @rem fb_major not 25
+    @rem fb_major not 25: must initialize securityN.fdb
 
+    @rem NB: space+TAB inside [ ]:
+    findstr /i /r /c:"UdfAccess[ 	]*=" !fb_cfg_for_work! >nul
+    if not errorlevel 1 (
+        @rem Check whether oltp-emul config parameter 'sleep_ddl' points to 'default' UDF that is provided with test.
+        @rem If yes then we have to make dir 'UDF' in FB_HOME and unpack there .\util\udf64\SleepUDF.dll.zip
 
-    @rem Check whether oltp-emul config parameter 'sleep_ddl' points to 'default' UDF that is provided with test.
-    @rem If yes then we have to make dir 'UDF' in FB_HOME and unpack there .\util\udf64\SleepUDF.dll.zip
-    if /i "!sleep_ddl!"==".\oltp_sleepUDF_win.sql" (
-        md !dir_to_install!\UDF 2>nul
-        if not exist !dir_to_install!\UDF\nul (
-            call :sho "Can not create directory !dir_to_install!\UDF. Check access rights." !joblog!
+        @rem !sleep_ddl! - parameter from oltpNN_config.
+        @rem It must be name of SQL script which declares UDF to make delays.
+        @rem This .sql file must be specified relatively to ${OLTP_ROOT}/src/ folder
+        @rem This UDF is always needed when oltp-emul config parameter 'mon_unit_perf' is 2.
+        @rem Also it is needed when parameters 'sleep_max' greater than 0 and 'sleep_ddl'
+        @rem is uncommented and points to the script which declares this UDF.
+        if /i "!sleep_ddl!"==".\oltp_sleepUDF_win.sql" (
+            md !dir_to_install!\UDF 2>nul
+            if not exist !dir_to_install!\UDF\nul (
+                call :sho "Can not create directory !dir_to_install!\UDF. Check access rights." !joblog!
 
-            goto :final
-        )
-        set run_cmd=!p7zcmd! x -y -tzip -o!dir_to_install!\UDF !OLTP_HOME_DIR!\util\udf64\SleepUDF.dll.zip
-        call :sho "Attempt to extract DLL with implementation of SLEEP. Command: !run_cmd!" !joblog!
-
-        @rem ###########################################################
-        @rem ###   e x t r a c t     U D F     f o r     S L E E P   ###
-        @rem ###########################################################
-        cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
-        set elevel=!errorlevel!
-        set size=1
-        
-        if !elevel! EQU 0 (
-            for /f "usebackq tokens=*" %%a in ('!tmperr!') do (
-                set size=%%~za
+                goto :final
             )
-            if .!size!.==.. set size=0
+            
+            @rem config parameter OLTP_ROOT_DIR is specified as RELATIVE path, e.g.: ..\..
+            @rem OLTP_SRC_DIR = OLTP_SRC_DIR\src
+            @rem THIS_DIR is absolute path // current batch folder
+
+            cd !THIS_DIR!
+            cd !OLTP_SRC_DIR!
+
+            set run_cmd=!COMPRESS_7Z! x -y -tzip -o!dir_to_install!\UDF ..\util\udf64\SleepUDF.dll.zip
+            call :sho "Attempt to extract DLL with implementation of SLEEP. Command: !run_cmd!" !joblog!
+
+            @rem ###########################################################
+            @rem ###   e x t r a c t     U D F     f o r     S L E E P   ###
+            @rem ###########################################################
+            cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
+            set elevel=!errorlevel!
+            set size=1
+            
+            if !elevel! EQU 0 (
+                for /f "usebackq tokens=*" %%a in ('!tmperr!') do (
+                    set size=%%~za
+                )
+                if .!size!.==.. set size=0
+            )
+            if !size! GTR 0 (
+                call :sho "Extract FAILED. Errorlevel: !elevel!. Check log:" !joblog!
+                type !tmperr!
+                type !tmperr!>>!joblog!
+
+                goto :final
+
+            )
+            call :sho "Extraction of DLL completed successfully." !joblog!
+
+            cd !THIS_DIR!
+
         )
-        if !size! GTR 0 (
-            call :sho "Extract FAILED. Errorlevel: !elevel!. Check log:" !joblog!
-            type !tmperr!
-            type !tmperr!>>!joblog!
-
-            goto :final
-
-        )
-        call :sho "Extraction of DLL completed successfully." !joblog!
-
     )
+    @rem find 'UDFAccess' in fb.conf
 
-
+    @rem get name of FB service that can be installed in !dir_to_install!
     set fb_svc_name=
     for /f "delims=\ tokens=5" %%a in ('reg query HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services ^| findstr /i /c:"firebird"') do (
         set fb_svc_check=%%a
@@ -744,7 +827,8 @@ if .!upd_fb!.==.1. (
         )
 
     )
-    ping -n 2 127.0.0.1>nul
+    @rem Wait here: FB launch may take several seconds on slow machine!
+    ping -n 3 127.0.0.1>nul
 
     set run_cmd=netstat -a -n -o -b -p TCP -p TCPv6 ^| findstr /i /c:"LISTENING" ^| findstr /i /c:!port!
     (
@@ -816,7 +900,17 @@ if .!upd_fb!.==.1. (
 )
 @rem !upd_fb!=1
 
+for /f %%a in ("!curl_cmd!") do (
+    if "%%~dpa"=="!tmpdir!\" (
+        if exist !curl_cmd! (
+            call :sho "Deleting file !curl_cmd!" !joblog!
+            del !curl_cmd!
+        )
+    )
+)
 call :sho "Perform copying !etalon_dbnm! to !dbnm!" !joblog!
+
+
 copy !etalon_dbnm! !dbnm!
 
 if .!etalon_shutdown!.==.1. (
@@ -849,18 +943,21 @@ if .!BACKUP_LOCK!.==.1. (
 !fbc!\gstat -h !dbnm! | findstr /i /c:"attributes" /c:"sweep" >!tmplog!
 call :bulksho !tmplog! !joblog!
 
+cd /d !OLTP_SRC_DIR!
 
 (
     echo ############################################
     echo ###  L A U N C H     O L T P - E M U L  ###
     echo ############################################
+    echo Current dir: !cd!
+    dir /-c .\1run_oltp_emul.bat | findstr /i /c:"1run_oltp_emul.bat"
     echo Command:
-    echo call !OLTP_HOME_DIR!\1run_oltp_emul.bat !fb_major! !sess_cnt! nostop
+    echo call .\1run_oltp_emul.bat !fb_major! !sess_cnt! nostop
 ) >!tmplog!
 
 call :bulksho !tmplog! !joblog!
 
-cd /d !OLTP_HOME_DIR!
+
 call .\1run_oltp_emul.bat !fb_major! !sess_cnt! nostop
 
 echo.
@@ -1777,16 +1874,12 @@ goto :eof
        )
     )
 
-    @rem from config:
-    @rem ------------
-    set curl_bin=!CURLCMD!
-
-    if not .!curl_bin!.==.. (
+    if not .!curl_cmd!.==.. (
 
         @rem https://curl.haxx.se/mail/lib-2012-01/0121.html
 
         set dump_eml=%log_dir%\%~n0.email.log
-        set curl_cmd=!curl_bin! !curl_opt! --upload-file "!dump_eml!"
+        set curl_cmd=!curl_cmd! !curl_opt! --upload-file "!dump_eml!"
 
         @rem 25.06.2018:
         @rem We have to remove parenthesis from name of file that will be specified in cUrl "--upload-file" command swicth,
@@ -1813,7 +1906,7 @@ goto :eof
                     )
                 )
                 if !mail_attachment_size! GTR !max_size_without_split! (
-                    set run_cmd=!P7ZCMD! u -mx0
+                    set run_cmd=!COMPRESS_7Z! u -mx0
                     if !mail_attachment_size! GTR !max_size_without_split! (
                         set run_cmd=!run_cmd! -v!max_size_without_split!
                     ) 
@@ -2015,7 +2108,7 @@ goto :eof
         @rem if exist !mail_attachment_file! --> TRUE / FALSE
 
     )
-    @rem if defined curl_bin
+    @rem if defined curl_cmd
 
     call :sho "Leaving routine mailsender, mail_sending_result=!mail_sending_result!" !joblog!
 

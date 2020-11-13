@@ -3,6 +3,17 @@ setlocal enabledelayedexpansion enableextensions
 
 set THIS_DIR=%~dp0
 set THIS_DIR=!THIS_DIR:~0,-1!
+for /f %%a in ("%~dp0.") do (
+    for %%i in ("%%~dpa")  do (
+        set PARENTDIR=%%~dpi
+        set PARENTDIR=!PARENTDIR:~0,-1!
+    )
+    for %%i in ("%%~dpa.") do (
+        set GRANDPDIR=%%~dpi
+        set GRANDPDIR=!GRANDPDIR:~0,-1!
+    )
+)
+
 cd /d !THIS_DIR!
 
 path=..\util;%path%
@@ -150,6 +161,7 @@ for /d %%i in (%tmp% %log% %err% %rpt%)  do (
       )
   )
 )
+
 
 @rem Only for 3.0: we can get content of firebird.log before and after test
 @rem and compare them:
@@ -3728,19 +3740,105 @@ if .1.==.0. (
                           set v_run_id=%%a
                       )
                       if not .!v_run_id!.==.. (
-                          if not .!report_compress_cmd!.==.. (
-                              @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
-                              echo !report_compress_cmd!| findstr /e /i /c:"\7za.exe" /c:"\7za" /c:"\7z.exe" /c:"\7z"
-                              if NOT errorlevel 1 set compress_format=7z
 
-                              @rem NOTE: do NOT put space between 'echo' and PIPE character for pass result to 'findstr':
-                              echo !report_compress_cmd!| findstr /e /i /c:"\zstd.exe" /c:"\zstd"
-                              if NOT errorlevel 1 set compress_format=zstd
+                          if not "!report_compressor!"=="" (
 
+                              if not exist !report_compressor! (
+                                  call :sho "Parameter 'report_compressor' points to missed file: !report_compressor!" !final_txt!
+                                  goto :fin
+                              )
+
+                              @rem ################################################################
+                              @rem Replace relative path to decompress binaries with absolute one.
+                              @rem ::: NB ::: Variabled PARENTDIR and GRANDPDIR must be defined
+                              @rem at the START of this script, NOT inside if (...) block!
+                              @rem Otherwise replacing string will fail because their values
+                              @rem will not be seen here!
+                              @rem ################################################################
+                              set report_compressor=!report_compressor:..\..=%GRANDPDIR%!
+                              set report_compressor=!report_compressor:..=%PARENTDIR%!
+
+                              @rem Generate temporary .vbs script in !TMPDIR! for extracting binary 7z.exe
+                              @rem from ..\compressors\7z.exe.zip
+                              @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+                              set tmpvbs=!tmpdir!\%~n0.extract-from-zip.tmp.vbs
+
+                              (
+                                  echo ' Original text:
+                                  echo ' https://social.technet.microsoft.com/Forums/en-US/8df8cbfc-fe5d-4285-8a7a-c1fb201656c8/automatic-unzip-files-using-a-script?forum=ITCG
+                                  echo ' Examples:
+                                  echo '     %systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !report_compressor! !tmpdir!
+
+                                  echo option explicit
+
+                                  echo dim sourceZip, targetDir, oFSO, oShell, oSource, oTarget
+
+                                  echo ' Required input arguments:
+                                  echo ' N1 = *full* name of .zip to be extracted;
+                                  echo ' N2 = target directory 
+
+                                  echo sourceZip=WScript.Arguments.Item(0^)
+                                  echo targetDir=WScript.Arguments.Item(1^)
+
+                                  echo set oFSO = CreateObject("Scripting.FileSystemObject"^)
+                                  echo if not oFSO.FolderExists(targetDir^) then
+                                  echo     oFSO.CreateFolder(targetDir^)
+                                  echo end if
+                                  echo set oShell = CreateObject("Shell.Application"^)
+                                  echo set oSource = oShell.NameSpace(sourceZip^).Items(^)
+                                  echo set oTarget = oShell.NameSpace(targetDir^)
+
+                                  echo ' Prevent from dialog box with question overwrite existing files:
+                                  echo ' https://docs.microsoft.com/en-us/previous-versions/tn-archive/ee176633(v=technet.10^)?redirectedfrom=MSDN
+                                  echo ' Table 11.9 Shell Folder CopyHere Constants
+                                  echo ' ^&H10^& -- Automatically responds "Yes to All" to any dialog box that appears. 
+                                  echo ' ^&H4^& Copies files without displaying a dialog box.
+                                  echo ' bin_or(10,14^) is 14
+
+                                  echo oTarget.CopyHere oSource, ^&H14^&
+                              ) >!tmpvbs!
+
+                              set run_cmd=%systemroot%\system32\cscript //nologo //e:vbs !tmpvbs! !report_compressor! !tmpdir!
+                              call :sho "Extract compressor from report_compressor=!report_compressor! to !tmpdir!. Command:" !final_txt!
+                              call :sho "!run_cmd!" !final_txt!
+                              
+                              @rem ####################################
+                              @rem ::: NB ::: 12.11.2020
+                              @rem cscript returns errorlevel = 0 even when some error occured.
+                              @rem We have to check SIZE of STDERR log!
+                              @rem ####################################
+                              cmd /c !run_cmd! 1>!err! 2>&1
+                              
+                              for /f "usebackq tokens=*" %%a in ('!err!') do (
+                                  set err_size=%%~za
+                              )
+                              if .!err_size!.==.. set err_size=0
+                              if !err_size! GTR 0 (
+                                  call :sho "Extraction FAILED. Check log:" !final_txt!
+                                  type !err!
+                                  type !err!>>!final_txt!
+                                  goto :fin
+                              )
+                              call :sho "Completed." !final_txt!
+
+                              @rem Adjust path and name of utility for make HTML report compression:
+                              @rem =================================================================
+                              for /f %%a in ("!report_compressor!") do (
+                                  set report_compress_cmd=!tmpdir!\%%~na
+                                  if /i "%%~na"=="7z.exe" (
+                                      set compress_format=7z
+                                  ) else if /i "%%~na"=="zstd.exe" (
+                                      set compress_format=zstd
+                                  )
+                              )
+
+                              @rem @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+                          ) else (
+                              call :sho "Ñonfig parameter 'report_compressor' is undefined. ZIP format is used to compress HTML report." !final_txt!
+                              set compress_format=zip
                           )
                           
-                          if .!compress_format!.==.. set compress_format=zip
-                          set tmpvbs=!tmpdir!\compress_report_to_zip.vbs.tmp
 
                           if /i .!compress_format!.==.7z. (
                               set compressed_name=!final_htm!.tmp.7z
@@ -3756,12 +3854,13 @@ if .1.==.0. (
 
                           ) else if /i .!compress_format!.==.zip. (
                               @rem Generate .vbs for compressing text file
+                              set tmpvbs=!tmpdir!\%~n0.compress_report_to_zip.tmp.vbs
                               set compressed_name=!final_htm!.tmp.zip
                               (
                                   echo "' Generated auto by %~f0, !date! !time!"
                                   echo "' Source idea: https://www.tek-tips.com/viewthread.cfm?qid=1231429"
                                   echo "' This script is used for compressing html report to ZIP format when"
-                                  echo "' OLTP-EMUL config parameter 'report_compress_cmd' is UNDEFINED."
+                                  echo "' OLTP-EMUL config parameter 'report_compressor' is UNDEFINED."
                                   echo "' Required input arguments:"
                                   echo "' N1 = path+name of .zip to be created;"
                                   echo "' N2 = path+name of text file to be compressed."
@@ -3797,11 +3896,33 @@ if .1.==.0. (
                               @rem ###  compress file to .ZIP format using .VBS ###
                               @rem ################################################
 
-                              cmd /c !zip_cmd! 2>>!final_txt!
+                              cmd /c !zip_cmd! 2>!err!
+
+                              if .!err_size!.==.. set err_size=0
+                              if !err_size! GTR 0 (
+                                  call :sho "Compress FAILED. Check !tmperr!:" !final_txt!
+                                  type !err!
+                                  type !err!>>!final_txt!
+                                  goto :fin
+                              )
+                              call :sho "Completed." !final_txt!
+
                               dir /-c !compressed_name! | findstr /i /c:".zip" 1>>!final_txt! 2>&1
 
                           )
                           @rem !compress_format! == 7z / zstd /  zip
+
+                          if not "!report_compress_cmd!"=="" (
+                              for /f %%a in ("!report_compress_cmd!") do (
+                                  if "%%~dpa"=="!tmpdir!\" (
+                                      if exist !report_compress_cmd! (
+                                          call :sho "Deleting file !report_compress_cmd!" !final_txt!
+                                          del !report_compress_cmd! 1>>!final_txt! 2>&1
+                                      )
+                                  )
+                              )
+                          )
+
 
                           set b64_cmd="certutil -encode !compressed_name! !final_htm!.b64.tmp"
                           cmd /c !b64_cmd! 2>>!final_txt!
@@ -5607,7 +5728,7 @@ goto:eof
         @rem ::: Execution control can jump here even for correct
         @rem ::: input msg if it contains closing parenthesis ")"
         echo Arg. #1 = ^|!msg!^|
-        goto final
+        goto fin
     ) 
 
     set left_char=!msg:~0,1!

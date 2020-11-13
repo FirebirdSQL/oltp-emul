@@ -19,7 +19,7 @@ Apropriate configuration file will be parsed and directory to the instance of Fi
 ### CAUTION ###
 By default, Firebird instance will be stopped and fully replaced with new at every start of this script!
 Be sure that parameter <fbc> from every OLTP-EMUL config file DOES NOT point to some FB instance that is important for you!
-NEVER set value of this parameter to folder where your production or other crusial FB instance is.
+NEVER set value of this parameter to the folder where your production or other crusial FB instance is.
 ###############
 
 When value of 4th parameter is 1 (default!) then every run of this script will check new FB snapshot on official site
@@ -38,11 +38,9 @@ script:
 After this, it compress obtained files.
 Maximal number of compressed stack traces and lock prints can be limited by <MAX_ZIP_FILES>.
 
-
 Download task is executed by curl utility. 
 On Linux curl package must be installed first.
-On Windows apropriate binary already is provided and must be extracted from '..\curl\bin\curl-7.63.0_x64.7z' file
-(extracted curl.exe must be in the same folder, i.e. '..\curl\bin\')
+On Windows apropriate binary is provided and will be extracted by scenario.
 
 Parameters of "target" firebird.conf will be replaced with values from apropriate config from this folder.
 Name of this config will be evaluated as: 'oltp-scheduled-fb' || <param1> || '.conf.' || <param3>
@@ -66,14 +64,14 @@ letters with subject like:
     "FB_daily_build. Build: Firebird-4.0.0.2248-ReleaseCandidate1.amd64.tar.gz, part: 1 of 2"
     "FB_daily_build. Debug package: Firebird-debuginfo-4.0.0.2248-ReleaseCandidate1.amd64.tar.gz, part: 1 of 13"
 
-On Windows you must have console executable of 7-Zip in order to do this (see parameter <P7ZCMD>).
+On Windows compression will be done using 7z.exe utility. You do not need to install or specify path to it.
 On Linux compression not needed, splitting of package onto volumes is done by OS built-in command.
 
-Script (oltp-scheduled.*) requires that you preliminarily create ETALONE database which will serve as source for copy
-to the target DB before oltp-emul launch. Such database must be defined by parameter 'etalon_dbnm' in apropriate
-oltpNN_config file. It is recommended to change mode of this DB to read_only or set its state to full shutdown
-(script will run all necessary commands to change copy of this DB to normal state before launch OLTP-EMUL).
-
+This scenario (oltp-scheduled.*) requires that you preliminarily create ETALONE database which will serve as 
+source for copy to the target DB before OLTP-EMUL launch. Such database must be defined by parameter 'etalon_dbnm'
+in apropriate oltpNN_config file. 
+It is recommended to change mode of this DB to read_only or set its state to full shutdown (script will run all
+necessary commands to change copy of this DB to normal state before launch OLTP-EMUL).
 
 At the end stage, script will change directory to <OLTP_HOME_DIR> and launch main test from there.
 Reports will be accumulated in the folder defined by <tmpdir> from oltpNN_config file.

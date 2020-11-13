@@ -193,7 +193,10 @@ upd_sysdba_pswd() {
 	    set echo on;
 	    create or alter user sysdba password '${new_password}' firstname '$fb_snapshot_version' lastname '$fb_installed_stamp' using plugin Srp;
 	    commit;
-	    select sec\$user_name,sec\$first_name,sec\$last_name,sec\$admin,sec\$plugin from sec\$users;
+	    select sec\$user_name,sec\$first_name,sec\$last_name,sec\$admin,sec\$plugin
+	    from sec\$users
+	    where upper(trim(sec\$user_name)) = upper('sysdba')
+	    ;
 	EOF
 
     set -x
@@ -227,17 +230,49 @@ check_for_sleep_UDF() {
     # Check whether oltp-emul config parameter 'sleep_ddl' points to 'default' UDF that is provided with test.
     # If yes then we have to make dir 'UDF' in FB_HOME and unpack there ./util/udf64/SleepUDF.so.tar.gz
     if grep -i -q "UdfAccess" $fb_cfg_for_work ; then
+
+        # $sleep_ddl - parameter from oltpNN_config.
+        # It must be name of SQL script which declares UDF to make delays.
+        # This .sql file must be specified relatively to ${OLTP_ROOT}/src/ folder
+        # This UDF is always needed when oltp-emul config parameter 'mon_unit_perf' is 2.
+        # Also it is needed when parameters 'sleep_max' greater than 0 and 'sleep_ddl'
+        # is uncommented and points to the script which declares this UDF.
+
         if [[ "${sleep_ddl}" == "./oltp_sleepUDF_nix.sql" ]]; then
             sho "Test requires UDF for make delays." $log
             # NB: firebird.conf already *contains* line UdfAccess = Restrict UDF - see creating of $fb_cfg_for_work at the start of main part.
-            if grep -i -E -q "entry_point[[:space:]]+'SleepUDF'[[:space:]]+module_name[[:space:]]+'SleepUDF'" ${OLTP_HOME_DIR}/$sleep_ddl ; then
-                sho "Extracting UDF binary provided with test package. Current dir: ${PWD}, file to extract: ${COMPRESSED_OLTP_UDF}" $log
+            cd ${this_script_directory}
+
+            # this can RELATIVE path, e.g.: ../..
+            #cd ${OLTP_ROOT_DIR}
+            cd ${OLTP_SRC_DIR}
+            
+            sho "Current directory: $PWD" $log
+            if grep -i -E -q "entry_point[[:space:]]+'SleepUDF'[[:space:]]+module_name[[:space:]]+'SleepUDF'" ${sleep_ddl} ; then
                 [[ -d "$dir_to_install_fb/UDF" ]] || mkdir $dir_to_install_fb/UDF
-                run_cmd="tar xvf ${COMPRESSED_OLTP_UDF} -C $dir_to_install_fb/UDF"
+
+                COMPRESSED_OLTP_UDF=../util/udf64/SleepUDF.so.tar.gz
+                sho "Extracting UDF binary provided with test package. Current dir: ${PWD}" $log
+                if [[ -s $COMPRESSED_OLTP_UDF ]]; then
+                    run_cmd="tar xvf ${COMPRESSED_OLTP_UDF} -C $dir_to_install_fb/UDF"
+                else
+                    sho "Compressed UDF $COMPRESSED_OLTP_UDF does not exist. Using alternate name for this file:" $log
+                    COMPRESSED_OLTP_UDF=../util/udf64/SleepUDF.so.bz2
+                    sho "$COMPRESSED_OLTP_UDF." $log
+                    run_cmd="bzip2 --decompress --keep --force --stdout ${COMPRESSED_OLTP_UDF} 1>$dir_to_install_fb/UDF/SleepUDF.so"
+                fi
+                sho "Compressed file: ${COMPRESSED_OLTP_UDF}" $log
                 sho "Command: $run_cmd" $log
                 eval $run_cmd 1>$tmp 2>&1
                 if [[ $? -eq 0 ]]; then
                     sho "Success. Size of extracted binary $dir_to_install_fb/UDF/SleepUDF.so: $(stat -c%s $dir_to_install_fb/UDF/SleepUDF.so)" $log
+                    #############################################
+                    # Check actual type of UDF library:
+                    # ELF 64-bit LSB shared object, x86-64, ... dynamically linked, BuildID[sha1]=..., not stripped
+                    file $dir_to_install_fb/UDF/SleepUDF.so >$tmp
+                    #############################################
+                    cat $tmp
+                    cat $tmp >>$log
                     rm -f $tmp
                 else
                     sho "ACHTUNG. UDF binary could not be extracted. Job terminated." $log
@@ -249,6 +284,8 @@ check_for_sleep_UDF() {
             else
                 sho "Config of OLTP-EMUL test contains script thats point to 3rd-party UDF" $log
             fi
+            cd ${this_script_directory}
+            
             chown firebird:root -R $dir_to_install_fb/UDF
             sho "Completed preparing steps for UDF usage. Check UDF folder:" $log
             ls -l $dir_to_install_fb/UDF
@@ -266,6 +303,38 @@ check_for_sleep_UDF() {
 }
 # end of check_for_sleep_UDF
 #.............................................
+
+check_port() {
+    local port=$1
+    local fbc=$2
+    local tmp=$3
+    local log=$4
+    sho "Check whether port $port is listening by FB process." $log
+
+    # NB: this delay needed because FB service can launch not instantly on slow hosts!
+    sleep 2
+    
+    netstat --tcp --udp --listening --program --numeric | grep $port | grep -i "firebird\|fb_smp_server\|fb_inet_server" 1>$tmp 2>&1
+    retcode=$?
+    cat $tmp
+    cat $tmp>>$log
+    if [[ $retcode -ne 0 ]]; then
+            sho "Port $port is NOT linstening by any FB process. Job terminated." $log
+            exit
+    else
+        fb_pid=$(awk '{print $NF}' $tmp | cut -d"/" -f1)
+        fb_exe=$(readlink -f /proc/${fb_pid}/exe)
+        sho "Port $port is listening by process $fb_pid, executable name: $fb_exe" $log
+        fb_dir=$(dirname $fb_exe)
+        if [[ "$fb_dir" == "$fbc" ]]; then
+            sho "Executable was launched from directory '$fbc'. Job can continue." $log
+        else
+            sho "Executable was launched NOT from '$fbc'. Job terminated." $log
+            exit
+        fi
+    fi
+}
+# end of check_port
 
 cleanup_dir() {
     local dir_to_clean=$1
@@ -306,6 +375,10 @@ cleanup_dir() {
 ###############################
 
 this_script_directory="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Grand-parent directory related to current:
+#OLTP_HOME_DIR=${this_script_directory%/*/*}
+
 
 # this file must be allowed to create on any POSIX:
 abendlog=/var/tmp/oltp-scheduled.abend.txt
@@ -435,10 +508,10 @@ do
     fi
 done < <(awk '$1=$1' $this_script_conf_name | grep "^[^#]")
 
+# OLTP_ROOT_DIR - from .conf fir this script.
+OLTP_SRC_DIR=${OLTP_ROOT_DIR}/src
 
-
-#export oltp_emul_conf_name=$this_script_directory/oltp$fb"_config.nix"
-export oltp_emul_conf_name=${OLTP_HOME_DIR}/oltp${fb}_config.nix
+export oltp_emul_conf_name=${OLTP_SRC_DIR}/oltp${fb}_config.nix
 
 if [[ -s $oltp_emul_conf_name ]]; then
     :
@@ -447,6 +520,8 @@ else
     cat $abendlog
     exit
 fi
+
+
 echo Parsing config file ${oltp_emul_conf_name}>>$abendlog
 
 #######################
@@ -512,18 +587,24 @@ rm -f $abendlog
 if [[ $update_fb_instance -eq 1 ]]; then
     command -v curl 1>>$abendlog 2>&1
     if [[ $? -ne 0 ]]; then
-        msg="Package 'curl' was not installed on this host. You have to install it first."
+        msg="Package 'curl' not found on this host. You have to install it first."
         echo $msg
         echo $msg>>$abendlog
         exit 1
     fi
 fi
+
+command -v netstat 1>>$abendlog 2>&1
+if [[ $? -ne 0 ]]; then
+    msg="Package 'netstat' not found on this host. You have to install it first."
+    echo $msg
+    echo $msg>>$abendlog
+    exit 1
+fi
+
 rm -f $abendlog
 
-# || { echo "Command '$curl' not found. Install its package first."; exit 1; }
-
 sho "Config files parsing completed." $log
-
 
 ##########################################
 ###  c l e a n u p    t e m p   d i r  ###
@@ -548,6 +629,8 @@ if [[ $update_fb_instance -eq 1 ]]; then
     ### c h e c k    f o r     l i b t o m a t h    &   l i b t o m c r y p t     p a c k a g e s ###
     #################################################################################################
     cat /etc/*release* | grep -m1 -i "^id=" > $tmp
+
+    # NB: Ubuntu names have suffix '-dev', e.g.: libtommath-dev, libtomcrypt-dev
     required_packages_list="libtommath libtomcrypt"
     if grep -q -i "debian" $tmp ; then
         # needed by gsec, gstat etc:
@@ -930,7 +1013,6 @@ while read line; do
 done < <(cat $tmp | awk '{print $2}')
 #############################################################
 
-
 previous_fb_snapshot=0
 actual_fb_snapshot=0
 debug_package_tar_gz=UNDEFINED
@@ -1131,7 +1213,7 @@ if [[ $update_fb_instance -eq 1 ]]; then
 		                    # Example of error when messages are sent too often:
 		                    # 450 4.2.1 The recipient has exceeded message rate limit. Try again later.
 		                    sho "Now take some delay because of possible recipient deny of spam." $log
-		                    sleep 30
+		                    sleep $mail_delay_seconds
 		                fi
 		            else
 		                sho "Result of sending: UNKNOWN: could not find 'Sender/Recipient OK' phrases." $log
@@ -1183,7 +1265,6 @@ if [[ $update_fb_instance -eq 1 ]]; then
 
     # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-
     if [[ $previous_fb_snapshot -ge $actual_fb_snapshot ]]; then
         sho "SKIP from re-installation. Perform only copying of firebird.conf prototype and restart of $service_name" $log
 
@@ -1197,7 +1278,6 @@ if [[ $update_fb_instance -eq 1 ]]; then
         #######################################
         cp --force --preserve $fb_cfg_for_work $dir_to_install_fb/firebird.conf
         chown firebird -R $dir_to_install_fb
-
 
         if [[ "$fb" != "25" ]]; then
             systemctl daemon-reload
@@ -1238,6 +1318,10 @@ if [[ $update_fb_instance -eq 1 ]]; then
             rm -f $dir_to_install_fb/security${fb:0:1}.fdb
         fi
 
+        # change dir to extracted FB snapshot. Files
+        #   buildroot.tar.gz
+        #   install.sh
+        # - must present there:
         cd $tmpdir/fb_extracted.$fb.tmp
 
         if [[ "$fb" != "25" ]]; then
@@ -1355,6 +1439,12 @@ if [[ $update_fb_instance -eq 1 ]]; then
     fi
     # $previous_fb_snapshot -lt $actual_fb_snapshot
 
+    # check whether port $port is listening by some of following processes:
+    # firebird | fb_smp_server | fb_inet_server
+    # - and, if yes, that this process was launched from $fbc folder.
+    check_port $port $fbc $tmp $log
+    # Return here means that all OK.
+
     sho "Verifying that FB instance is working." $log
     rm -f /var/tmp/tmp4test.fdb
     rm -f $sql
@@ -1362,7 +1452,7 @@ if [[ $update_fb_instance -eq 1 ]]; then
             set list on;
             set echo on;
             set bail on;
-            create database 'localhost:/var/tmp/tmp4test.fdb' user 'SYSDBA' password '${pwd}';
+            create database 'localhost:/var/tmp/tmp4test.fdb' user '${usr}' password '${pwd}';
             select mon\$database_name, mon\$page_buffers,mon\$creation_date from mon\$database;
             create global temporary table gtt_test_firebird_tmp(s varchar(36) unique using index gtt_test_uniq_s);
             commit;
@@ -1375,7 +1465,7 @@ if [[ $update_fb_instance -eq 1 ]]; then
 
                  set term ^;
                  create or alter procedure sys_get_fb_arch (
-                      a_connect_with_usr varchar(31) default 'SYSDBA'
+                      a_connect_with_usr varchar(31) default '${usr}'
                      ,a_connect_with_pwd varchar(31) default '${pwd}'
                  ) returns(
                      fb_arch varchar(50)
@@ -1396,7 +1486,7 @@ if [[ $update_fb_instance -eq 1 ]]; then
                          into cur_server_pid, att_protocol;
                          if ( att_protocol is null ) then
                              fb_arch = 'Embedded';
-                         else if ( upper(current_user) = upper('SYSDBA')
+                         else if ( upper(current_user) = upper('${usr}')
                                    and rdb\$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
                                    and exists(select * from mon\$attachments a 
                                               where a.mon\$remote_protocol is null
@@ -1443,7 +1533,7 @@ if [[ $update_fb_instance -eq 1 ]]; then
                  ^ -- sys_get_fb_arch
                  set term ;^
                  commit;
-                 select * from sys_get_fb_arch('SYSDBA', '${pwd}');
+                 select * from sys_get_fb_arch('${usr}', '${pwd}');
                  commit;
                  delete from mon\$attachments where mon\$attachment_id != current_connection ;
                  commit;
@@ -1471,6 +1561,7 @@ else # update_fb_instance = 0 - do NOT update FB, just run test; e.g. change FB 
     #########################################################################
     check_for_sleep_UDF $dir_to_install_fb $fb_cfg_for_work $tmp $log
 
+    sho "Current dir: $PWD" $log
 
     #######################################
     # Replace firebird.conf with custom one
@@ -1557,27 +1648,24 @@ else # update_fb_instance = 0 - do NOT update FB, just run test; e.g. change FB 
             cat $tmp>>$log
         fi
     else
-        sho "Check whether port $port is listened by FB process." $log
-        netstat --tcp --udp --listening --program --numeric | grep $port | grep -i "firebird\|fb_smp_server\|fb_inet_server" 1>$tmp 2>&1
+        # check whether port $port is listening by some of following processes:
+        # firebird | fb_smp_server | fb_inet_server
+        # - and, if yes, that this process was launched from $fbc folder.
+        check_port $port $fbc $tmp $log
+
+        # Return here means that all OK.
+        sho "Attempt to get FB server version." $log
+        $fbc/fbsvcmgr localhost/$port:service_mgr user ${usr} password ${pwd} info_server_version 1>$tmp 2>&1
         retcode=$?
         cat $tmp
         cat $tmp>>$log
         if [[ $retcode -ne 0 ]]; then
-            sho "Port $port is NOT linstened by any FB process. Job terminated." $log
+            sho "Could not get FB server version. Job terminated." $log
             exit
-        else
-            sho "Attempt to get FB server version." $log
-            $fbc/fbsvcmgr localhost/$port:service_mgr info_server_version 1>$tmp 2>&1
-            retcode=$?
-            cat $tmp
-            cat $tmp>>$log
-            if [[ $retcode -ne 0 ]]; then
-                sho "Could not get FB server version. Job terminated." $log
-                exit
-            fi
-            sho "Firebird is running. We are ready to launch OLTP-EMUL test." $log
         fi
+        sho "Firebird is running. We are ready to launch OLTP-EMUL test." $log
     fi
+    
 fi # update_fb_instance = 1 or 0
 
 rm -f $fb_cfg_for_work $tmp $sql
@@ -1720,11 +1808,11 @@ rm -f $tmp
 
 sho "Completed. Now run OLTP-EMUL test with launching $winq ISQL sessions agains FB $fb." $log
 
-cd $this_script_directory
+cd $OLTP_SRC_DIR
 
 sho "#################################################" $log
 sho "### ::: L a u n c h ::: O L T P - E M U L ::: ###" $log
 sho "#################################################" $log
+sho "Current dir: $PWD" $log
 
-cd $OLTP_HOME_DIR
 bash ./1run_oltp_emul.sh $fb $winq
