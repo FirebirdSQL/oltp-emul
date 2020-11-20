@@ -813,11 +813,24 @@ if .%need_rebuild_db%.==.1. (
     call :prepare
 )
 
+@rem check FB config:
+@rem * 4.0: 
+@rem   if build >= 2260 then
+@rem        get content of RDB$CONFIG table for any server IP, and check current value of UseFileSystemCache.
+@rem        If UseFileSystemCache was not set then check FileSystemCacheThreshold and compare with cache buffers
+@rem        that are set for !dbnm!
+@rem   else
+@rem      same as for 2.5 and 3.0 (see below)
+@rem * 2.5 and 3.0: [ DO IT ONLY IF !host! is 'localhost' or '127.0.0.1' ]: get content of firebird.conf and extract
+@rem        value of FileSystemCacheThreshold from it. Compare this value with DefaultDBCachePages for !dbnm!.
+@rem If FileSystem cache can not be used - ABEND.
+
+call :chk_FSCacheUsage
 
 @rem ********************
 @rem *** COMMON BLOCK ***
 @rem ********************
-@rem 1. Ensure that current FB instance is allowed to create *ADD* records into GTT table.
+@rem 1. Ensure that current FB instance is allowed to insert records into GTT table.
 @rem    If FIREBIRD_TMP variable points to invalid drive then INSERT INTO GTT will fail with:
 @rem    Statement failed, SQLSTATE = 08001
 @rem    I/O error during "CreateFile (create)" operation for file ""
@@ -974,10 +987,6 @@ set log_tab=unknown_table
 call :count_existing_docs !tmpdir! !fbc! !dbconn! "!dbauth!" %init_docs% existing_docs engine log_tab
 @rem                         1       2       3        4         5             6          7       8
 
-@rem echo existing_docs=%existing_docs%, log_tab=%log_tab%
-@rem if /i .%init_docs%.==.0. goto more
-
-
 set initd_bak=%init_docs%
 set /a required_docs = init_docs - !existing_docs!
 
@@ -1037,8 +1046,6 @@ echo.
 @echo ##############################################################
 @echo ###             w o r k i n g     p h a s e                ###
 @echo ##############################################################
-
-:more
 
 set mode=oltp_%1
 
@@ -2813,8 +2820,321 @@ goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
+:chk_FSCacheUsage
+    setlocal
+
+    call :sho "Internal routine: chk_FSCacheUsage." %log4tmp%
+
+    @rem commit was 12.11.2020 23:34
+    @rem next day build number was 2260
+    @rem https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
+    @rem Reworked Config: correct work with 64-bit integer in 32-bit code, refactor config values checks and defaults,
+    @rem remove some type casts.
+    @rem Introduce new virtual table RDB$CONFIG.
+    @rem Implement CORE-6332 : Get rid of FileSystemCacheThreshold parameter
+    @rem new boolean setting UseFileSystemCache overrides legacy FileSystemCacheThreshold,
+    @rem FileSystemCacheThreshold will be removed in the next major Firebird release.
+
+    @rem Minimal build of FB 4.x that allows to query for actual config parameters via SQL:
+    set FB4_BUILD_WITH_RDB_CONF=2260
+
+    set run_cmd="!fbc!\fbsvcmgr !host!/!port!:service_mgr user !usr! password !pwd! info_server_version"
+    cmd /c !run_cmd!  1>!tmpclg! 2>!tmperr!
+    call :catch_err run_cmd !tmperr! n/a nofbvers
+
+    for /f "tokens=1-3 delims= " %%a in ('findstr /i /c:version !tmpclg!') do (
+      @rem Server version: WI-V2.5.9.27150 Firebird 2.5
+      @rem    `       2            3
+
+      @rem WI-V2.5.9.27150 ;  WI-T3.0.0.NNNNN etc
+      set fbb=%%c
+
+      @rem OS: WI or LI (Windows / Linux);
+      set fbo=!fbb:~0,2!
+    )
+    echo fbb=!fbb!
+    echo !fbb! | findstr /i /c:"V2.5" /c:"T2.5" > nul
+    if NOT errorlevel 1 (
+        set fbv=25
+    ) else (
+        echo !fbb! | findstr /i /c:"V3." /c:"T3." > nul
+        if NOT errorlevel 1 (
+            set fbv=30
+        ) else (
+            echo !fbb! | findstr /i /c:"V4." /c:"T4."
+            if NOT errorlevel 1 (
+                set fbv=40
+            ) else (
+                call :sho "Could not get FB major version from string !fbb!" %log4tmp%
+                goto :final
+            )
+        )
+    )
+
+    for /f "delims=. tokens=4" %%b in ("!fbb!") do (
+        @rem WI-V2.5.9.27150
+        @rem   ^   ^ ^   ^
+        @rem |-1-| 2 3 |-4-|
+        @rem Number of build: 27150 etc
+        set /a fb_build_no=%%b
+    )
+
+    set check_fs_via_sql=0
+    if !fbv! GTR 40 (
+       @rem Future major FB versions: config must be always checked via SQL:
+       set check_fs_via_sql=1
+    ) else if !fbv! GEQ 40 (
+       if !fb_build_no! GEQ !FB4_BUILD_WITH_RDB_CONF! (
+           set check_fs_via_sql=1
+       )
+    )
+    
+    if .!check_fs_via_sql!.==.0. (
+
+        @rem FB <= 3.x or 4.x but build less than !FB4_BUILD_WITH_RDB_CONF!
+        @rem Check filesystemcache usage can be done only when host=localhost/127.0.0.1,
+        @rem by obtaining content of local firebird.conf
+        
+        @rem do NOT put space between !host! and PIPE character here:
+        echo !host!| findstr /i /b /e /c:"localhost" /c:"127.0.0.1" >nul
+
+        if NOT errorlevel 1 (
+            call :sho "Test is launched on LOCAL machine. We can obtain changed params from firebird.conf" !log4tmp!
+            set fp=!fbc!\
+            if .%fbv%.==.25. (
+                @rem E:\FB25.TMPINSTANCE\bin ==> E:\FB25.TMPINSTANCE
+                for %%m in ("!fp:~0,-1!") do set fp=%%~dpm
+            )
+            @rem Remove trailing backslash:
+            set fp=!fp:~0,-1!
+
+            findstr /r /c:"^^[^^#;]" !fp!\firebird.conf | findstr /i /c:"=" | findstr /i /c:"FileSystemCacheThreshold" >!tmpclg!
+            if NOT errorlevel 1 (
+                for /f "tokens=2 delims==" %%a in (!tmpclg!) do (
+                    @rem 3.x+: this can be as 'pure' number but also with one of suffixes: 'k', 'm' or 'g'
+                    @rem Each of these suffixes must be replaced with apropriate number multiplier: 1024, 1048576 and 1073741824.
+                    @rem Arithmetic expression (multiplication) will be passed then to ISQL for evaluating value of FileSystemCacheThreshold.
+                    @rem Value of DefaultDbCachePages will be taken from mon$database for test DB.
+
+                    set fs_thresh=%%a
+                    echo !fs_thresh! | findstr /i /c:"k">nul
+                    if NOT errorlevel 1 (
+                        set fs_thresh=!fs_thresh:K=!*1024
+                    )
+                    echo !fs_thresh! | findstr /i /c:"m">nul
+                    if NOT errorlevel 1 (
+                        set fs_thresh=!fs_thresh:M=!*1048576
+                    )
+                    echo !fs_thresh! | findstr /i /c:"g">nul
+                    if NOT errorlevel 1 (
+                        set fs_thresh=!fs_thresh:G=!*1073741824
+                    )
+                )
+            ) else (
+                set fs_thresh=65536
+            )
+
+            (
+                echo set list on;
+                echo select mon$page_buffers as DefaultDbCachePages,!fs_thresh! as FileSystemCacheThreshold, sign(!fs_thresh! - mon$page_buffers^) as test_can_run
+                echo from mon$database;
+            ) >!tmpsql!
+
+            set run_isql=!fbc!\isql.exe %dbconn% %dbauth% -i !tmpsql! -q -nod
+            cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+
+            call :catch_err run_isql !tmperr! !tmpsql! n/a
+            @rem                1       2        3      4
+
+            for /f "tokens=1-2" %%a in (!tmpclg!) do (
+                set pname=%%a
+                set pchk=!pname:FILESYSTEMCACHETHRESHOLD=!
+                if not .!pname!.==.!pchk!. (
+                    set fs_thresh=%%b
+                )
+                set pchk=!pname:DEFAULTDBCACHEPAGES=!
+                if not .!pname!.==.!pchk!. (
+                    set db_pages=%%b
+                )
+                set pchk=!pname:TEST_CAN_RUN=!
+                if not .!pname!.==.!pchk!. (
+                    set test_can_run=%%b
+                )
+            )
+
+            if not .!test_can_run!.==.1. (
+                call :sho "Parameter FileSystemCacheThreshold = !fs_thresh! must have value be GREATER than DefaultDbCachePages=!db_pages!. Test can NOT run." %log4tmp%
+                call :final
+            ) else (
+                call :sho "Value of DefaultDbCachePages = !db_pages! is less than FileSystemCacheThreshold = !fs_thresh!. Check PASSED, test can run." %log4tmp%
+            )
+
+            findstr /r /c:"^^[^^#;]" !fp!\firebird.conf | findstr /i /c:"=" | sort >!tmpclg!
+            if NOT errorlevel 1 (
+                @rem ###################################################################
+                @rem ###                  f i r e b i r d . c o n f                  ###
+                @rem ###################################################################
+                call :sho "Changed parameters in !fp!\firebird.conf:" !log4tmp!
+                for /f "tokens=*" %%a in (!tmpclg!) do (
+                    echo.     %%a
+                    echo.     %%a >> !log4tmp!
+                )
+            ) else (
+                call :sho "All parameters in !fp!\firebird.conf are commented out." !log4tmp!
+            )
+            
+        ) else (
+            call :sho "Test uses REMOTE Firebird instance, content of firebird.conf is unavaliable." !log4tmp!
+        )
+
+    ) else (
+
+        @rem FB > 4.x (future) or FB = 4.x and build >= !FB4_BUILD_WITH_RDB_CONF!
+        call :sho "Test is launched on FB major version that allows to obtain config parameters via SQL." !log4tmp!
+        (
+            echo "set list on;"
+            echo "select UseFileSystemCache"
+            echo "       ,FileSystemCacheThreshold"
+            echo "       ,DefaultDbCachePages"
+            echo "       ,iif(UseFileSystemCache = 1, 1, iif(UseFileSystemCache=0, -1, sign(FileSystemCacheThreshold - DefaultDbCachePages) ) ) as test_can_run"
+            echo "from ("
+            echo "  select"
+            echo "     coalesce(  iif(  lower(UseFileSystemCache) in ( lower('true'), lower('yes'), lower('y'), '1' )"
+            echo "                     ,1"
+            echo "                     ,iif(  lower(UseFileSystemCache) in ( lower('false'), lower('no'), lower('n'), '0' )"
+            echo "                           ,0"
+            echo "                           ,null"
+            echo "                         )"
+            echo "                   )"
+            echo "               ,-1"
+            echo "             ) as UseFileSystemCache"
+            echo "    ,cast(iif(UseFileSystemCache is null, coalesce(FileSystemCacheThreshold, -1), -1) as bigint ) as FileSystemCacheThreshold"
+            echo "    ,cast(DefaultDbCachePages as bigint) as DefaultDbCachePages"
+            echo "  from ("
+            echo "    select"
+            echo "         max( iif( lower(g.rdb$config_name) = lower('UseFileSystemCache'), iif(g.rdb$config_is_set,  g.rdb$config_value, null), null) ) as UseFileSystemCache"
+            echo "        ,max( iif( lower(g.rdb$config_name) = lower('FileSystemCacheThreshold'), iif(g.rdb$config_is_set,  g.rdb$config_value, null), null) ) as FileSystemCacheThreshold"
+            echo "        ,max( iif( lower(g.rdb$config_name) = lower('DefaultDbCachePages'), g.rdb$config_value, '') ) as DefaultDbCachePages"
+            echo "    from rdb$config g"
+            echo "    where lower(g.rdb$config_name) in ( lower('UseFileSystemCache'), lower('FileSystemCacheThreshold'), lower('DefaultDbCachePages') )"
+            echo "  )"
+            echo ");"
+        ) >!tmpsql!
+        call :remove_enclosing_quotes !tmpsql!
+
+        set run_isql=!fbc!\isql.exe %dbconn% %dbauth% -i !tmpsql! -q -nod
+        call :sho "!run_isql! 1^>%tmpclg% 2^>%tmperr%" %log4tmp%
+        cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+
+        (
+            for /f "delims=" %%a in ('type !tmpsql!') do echo RUNSQL: %%a
+            echo %time%. Got:
+            for /f "delims=" %%a in ('type !tmpclg!') do echo STDOUT: %%a
+            for /f "delims=" %%a in ('type !tmperr!') do echo STDERR: %%a
+        ) >>%log4tmp% 2>&1
+
+        call :catch_err run_isql !tmperr! !tmpsql! mis_rdb_conf
+        @rem                1       2        3         4
+
+        for /f "tokens=1-2" %%a in (!tmpclg!) do (
+            set pname=%%a
+            set pchk=!pname:USEFILESYSTEMCACHE=!
+            if not .!pname!.==.!pchk!. (
+                set use_fscache=%%b
+            )
+            set pchk=!pname:FILESYSTEMCACHETHRESHOLD=!
+            if not .!pname!.==.!pchk!. (
+                set fs_thresh=%%b
+            )
+            set pchk=!pname:DEFAULTDBCACHEPAGES=!
+            if not .!pname!.==.!pchk!. (
+                set db_pages=%%b
+            )
+            set pchk=!pname:TEST_CAN_RUN=!
+            if not .!pname!.==.!pchk!. (
+                set test_can_run=%%b
+            )
+        )
+        if not .!use_fscache!.==.. if not .!fs_thresh!.==.. if not .!db_pages!.==.. (
+            if .!use_fscache!.==.1. (
+                call :sho "FileSystem cache will be used anyway, regardless of 'FileSystemCacheThreshold' value. Check PASSED, test can run." %log4tmp%
+            ) else (
+                if .!use_fscache!.==.0. (
+                    call :sho "FileSystem cache was explicitly DISABLED: parameter UseFileSystemCache = false. You have to replace this value with 'true'. Test can NOT run." %log4tmp%
+                    call :final
+                )
+
+                @rem here we can occur only when use_fscache = -1, i.e. parameter UseFileSystemCache is commented
+                if .!fs_thresh!.==.-1. (
+                    call :sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out. You have to remove uncomment one of them. Test can NOT run." %log4tmp%
+                    call :final
+                ) else (
+                    if not .!test_can_run!.==.1. (
+                        call :sho "Parameter FileSystemCacheThreshold = !fs_thresh! must have value be GREATER than DefaultDbCachePages=!db_pages!. Test can NOT run." %log4tmp%
+                        call :final
+                    ) else (
+                        call :sho "Value of DefaultDbCachePages = !db_pages! is less than FileSystemCacheThreshold = !fs_thresh!. Check PASSED, test can run." %log4tmp%
+                    )
+                )
+            )
+        ) else (
+            call :sho "Could not obtain value for at least one of following parameters: UseFileSystemCache, FileSystemCacheThreshold, DefaultDbCachePages" %log4tmp%
+            call :sho "Perhaps SQL query became wrong. Test code needs to be corrected." %log4tmp%
+            call :final
+        )
+
+        (
+            echo "set width config_param_name 35;"
+            echo "set width config_param_value 50;"
+            echo "set width config_param_source 20;"
+            echo "select"
+            echo "     rdb$config_name config_param_name"
+            echo "    ,iif(trim(rdb$config_value)='','[empty]',rdb$config_value) config_param_value"
+            @rem echo "    ,iif(trim(rdb$config_default)='', '[empty]', rdb$config_default) config_param_default"
+            echo "    ,rdb$config_source config_param_source"
+            echo "from rdb$config"
+            echo "where rdb$config_is_set"
+            echo "order by config_param_name;"
+        ) >!tmpsql!
+        call :remove_enclosing_quotes !tmpsql!
+
+        set run_isql=!fbc!\isql.exe %dbconn% %dbauth% -pag 999999 -i !tmpsql! -q -nod
+        cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+        call :catch_err run_isql !tmperr! !tmpsql! n/a
+        @rem                1       2        3      4
+
+        call :sho "Changed parameters in !fp!\firebird.conf:" !log4tmp!
+        for /f "tokens=*" %%a in (!tmpclg!) do (
+            echo.     %%a
+            echo.     %%a >> !log4tmp!
+        )
+
+    )
+    @rem check_fs_via_sql = 0 | 1
+
+    @rem do NOT put space between !host! and PIPE character here:
+    echo !host!| findstr /i /b /e /c:"localhost" /c:"127.0.0.1" >nul
+    if NOT errorlevel 1 (
+        set msg=OS environment variable 'FIREBIRD_TMP'
+        if NOT .%FIREBIRD_TMP%.==.. (
+            call :sho "!msg!: %FIREBIRD_TMP%. GTT data will be stored in this folder." !log4tmp!
+        ) else (
+            call :sho "!msg!: undefined. GTT data will be stored in the system TEMP folder." !log4tmp!
+        )
+    )
+    for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
+        del %%f
+    )
+
+    endlocal
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :chk_db_access
     setlocal
+
+    call :sho "Internal routine: chk_db_access." %log4tmp%
 
     @rem PUBL: tmpdir, fbc, %dbconn% %dbauth%, %log4tmp%
 
@@ -2912,12 +3232,12 @@ goto:eof
     ) >>%log4tmp% 2>&1
 
     call :catch_err run_isql !tmperr! !tmpsql! db_cant_write 1
-    call :sho "Success. GTT can be created in the folder defined by FIREBIRD_TMP. Database is in READ-WRITE mode." %log4tmp%
-
     @rem                1       2        3         4         5 (1 = do abort from this script).
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
         del %%f
     )
+    call :sho "Success. GTT can be created in the folder defined by FIREBIRD_TMP. Database allows WRITE operations." %log4tmp%
+
 goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
@@ -3820,10 +4140,10 @@ goto:eof
 
     @rem Server version: WI-V2.5.9.27150 Firebird 2.5
     for /f "tokens=3" %%a in (!tmpclg!) do (
-        @rem WI-V2.5.9.27150
-        @rem |-1-| 2 3 |-4-|
         set fb_vers=%%a
         for /f "delims=. tokens=4" %%b in ("!fb_vers!") do (
+            @rem WI-V2.5.9.27150
+            @rem |-1-| 2 3 |-4-|
             @rem Number of build: 27150 etc
             set /a fb_build_no=%%b
         )
@@ -5914,7 +6234,9 @@ goto:eof
         echo ### ATTENTION ###
         echo.
         if not .%add_label%.==.. (
+          if /i not .%add_label%.==.n/a. (
           call :!add_label!
+        )
         )
         echo.
         echo Command: !runcmd!
@@ -6149,6 +6471,14 @@ goto:eof
     echo.
     echo Check database attributes. Also ensure that FB service has sufficient rights on the
     echo directory that is specified by FIREBIRD_TMP environment variable on server side.
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:mis_rdb_conf
+    echo FAILED attempt to get FB config via SQL. Perhaps something wrong with FB version parsing.
+    echo You have to check that this FB instance actually has table RDB$CONFIG with all existing
+    echo config parameters and their values.
 goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#

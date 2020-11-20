@@ -771,6 +771,248 @@ EOF
 }
 # end of db_build
 
+#  -------------- c h k  F S  C a c h e U s a g e -------------
+
+chk_FSCacheUsage() {
+    sho "Routine $FUNCNAME: start." $log4all
+
+    #chk_FSCacheUsage $fb $bld_no $log4all
+
+    fb_major=$1
+    fb_bldno=$2
+    log4all=$3
+
+    local tmp_sql=$tmpdir/tmp_fscache.sql
+    local tmp_log=$tmpdir/tmp_fscache.log
+    local tmp_err=$tmpdir/tmp_fscache.err
+    local run_isql
+
+    # commit was 12.11.2020 23:34
+    # next day build number was 2260
+    # https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
+    # Reworked Config: correct work with 64-bit integer in 32-bit code, refactor config values checks and defaults,
+    # remove some type casts.
+    # Introduce new virtual table RDB$CONFIG.
+    # Implement CORE-6332 : Get rid of FileSystemCacheThreshold parameter
+    # new boolean setting UseFileSystemCache overrides legacy FileSystemCacheThreshold,
+    # FileSystemCacheThreshold will be removed in the next major Firebird release.
+
+    # Minimal build of FB 4.x that allows to query for actual config parameters via SQL:
+    local FB4_BUILD_WITH_RDB_CONF=2260
+
+    local check_fs_via_sql=0
+    if [[ $fb_major -gt 40 ]]; then
+       # Future major FB versions: config must be always checked via SQL:
+       check_fs_via_sql=1
+    elif [[ $fb_major -ge 40 ]]; then
+       if [[ $fb_bldno -ge $FB4_BUILD_WITH_RDB_CONF ]]; then
+           check_fs_via_sql=1
+       fi
+    fi
+    
+    if [[ $check_fs_via_sql -eq 0 ]]; then
+        if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+            fb_home_dir="$(dirname "$fbc")"
+            # This if FB 2.5 or 3.0: we have to check FileSystemCache
+            awk '$1=$1' $fb_home_dir/firebird.conf | grep "^[^#]" | grep -i "FileSystemCacheThreshold" >$tmp_log
+            while read line ; do
+                arr=($line)
+                col=${arr[0]}
+                val=${arr[2]}
+                if [[ "${col^^}" == "FILESYSTEMCACHETHRESHOLD" ]]; then
+                   fs_thresh=$val
+                fi
+            done<$tmp_log
+            if [[ -n "$fs_thresh" ]]; then
+                if [[ "${fs_thresh^^}" == *"K"* ]]; then
+                    fs_thresh=$(echo "$fs_thresh" | sed -r 's/[Kk]+//g')*1024
+                elif [[ "${fs_thresh^^}" == *"M"* ]]; then
+                    fs_thresh=$(echo "$fs_thresh" | sed -r 's/[Mm]+//g')*1024*1024
+                elif [[ "${fs_thresh^^}" == *"G"* ]]; then
+                    fs_thresh=$(echo "$fs_thresh" | sed -r 's/[Gg]+//g')*1024*1024*1024
+                fi
+                # Result: fs_trhesh = value of FileSystemCacheThreshold without suffixes K,M or G.
+                # Will be evaluated as arithmetic expression if parameter contains 'k'/'m'/'g'.
+                # Now we can make SQL script for evaluating actual value in BYTES.
+            else
+                fs_thresh=65536 # default value
+            fi
+		cat <<-EOF >$tmp_sql
+		    set list on;
+		    select mon\$page_buffers as DefaultDbCachePages,$fs_thresh as FileSystemCacheThreshold, sign($fs_thresh - mon\$page_buffers) as test_can_run
+		    from mon\$database;
+		EOF
+
+	    run_isql="$isql_name $dbconn $dbauth -i $tmp_sql -nod"
+	    display_intention "Compare FileSystemCacheThreshold and page buffers for current database." "$run_isql" "$tmp_log" "$tmp_err"
+	    # cat $tmp_sql >>$log4all
+	    $run_isql 1>$tmp_log 2>$tmp_err
+	    cat $tmp_err>>$log4all
+	    catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+
+	    fs_thresh=0
+	    db_pages=0
+	    test_can_run=0
+    	    while read line ; do
+                arr=($line)
+                col=${arr[0]}
+                val=${arr[1]}
+                if [[ "$col" == "FILESYSTEMCACHETHRESHOLD" ]]; then
+                    fs_thresh=$val
+                fi
+                if [[ "$col" == "DEFAULTDBCACHEPAGES" ]]; then
+                    db_pages=$val
+                fi
+                if [[ "$col" == "TEST_CAN_RUN" ]]; then
+                    test_can_run=$val
+                fi
+    	    done < <( awk '$1=$1' $tmp_log )
+
+            if [[ $test_can_run -ne 1 ]]; then
+                sho "Parameter FileSystemCacheThreshold = $fs_thresh must have value be GREATER than DefaultDbCachePages = $db_pages. Test can NOT run." $log4all
+                exit 1
+            else
+                sho "Value of DefaultDbCachePages = $db_pages is less than FileSystemCacheThreshold = $fs_thresh. Check PASSED, test can run." $log4all
+            fi
+
+            awk '$1=$1' $fb_home_dir/firebird.conf | grep "^[^#]" | sort >$tmp_log
+            if [[ $? -eq 0 ]]; then
+                sho "Changed parameters in $fb_home_dir/firebird.conf:" $log4all
+                cat $tmp_log
+                cat $tmp_log>>$log4all
+            else
+                sho "All parameters in $fb_home_dir/firebird.conf are commented out." $log4all
+            fi
+            
+        fi # [ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]
+    else
+        sho "Test is launched on FB major version that allows to obtain config parameters via SQL." $log4all
+	cat <<-"EOF" >$tmp_sql
+            set list on;
+            select UseFileSystemCache
+                   ,FileSystemCacheThreshold
+                   ,DefaultDbCachePages
+                   ,iif(UseFileSystemCache = 1, 1, iif(UseFileSystemCache=0, -1, sign(FileSystemCacheThreshold - DefaultDbCachePages) ) ) as test_can_run
+            from (
+              select
+                 coalesce(  iif(  lower(UseFileSystemCache) in ( lower('true'), lower('yes'), lower('y'), '1' )
+                                 ,1
+                                 ,iif(  lower(UseFileSystemCache) in ( lower('false'), lower('no'), lower('n'), '0' )
+                                       ,0
+                                       ,null
+                                     )
+                               )
+                           ,-1
+                         ) as UseFileSystemCache
+                ,cast(iif(UseFileSystemCache is null, coalesce(FileSystemCacheThreshold, -1), -1) as bigint ) as FileSystemCacheThreshold
+                ,cast(DefaultDbCachePages as bigint) as DefaultDbCachePages
+              from (
+                select
+                     max( iif( lower(g.rdb$config_name) = lower('UseFileSystemCache'), iif(g.rdb$config_is_set,  g.rdb$config_value, null), null) ) as UseFileSystemCache
+                    ,max( iif( lower(g.rdb$config_name) = lower('FileSystemCacheThreshold'), iif(g.rdb$config_is_set,  g.rdb$config_value, null), null) ) as FileSystemCacheThreshold
+                    ,max( iif( lower(g.rdb$config_name) = lower('DefaultDbCachePages'), g.rdb$config_value, '') ) as DefaultDbCachePages
+                from rdb$config g
+                where lower(g.rdb$config_name) in ( lower('UseFileSystemCache'), lower('FileSystemCacheThreshold'), lower('DefaultDbCachePages') )
+              )
+            );
+	EOF
+	run_isql="$isql_name $dbconn $dbauth -i $tmp_sql -nod"
+	display_intention "Obtain config parameters vis SQL: UseFileSystemCache, FileSystemCacheThreshold and DefaultDbCachePages." "$run_isql" "$tmp_log" "$tmp_err"
+	# cat $tmp_sql >>$log4all
+	$run_isql 1>$tmp_log 2>$tmp_err
+	cat $tmp_err>>$log4all
+	catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+
+	use_fscache=0
+	fs_thresh=0
+	db_pages=0
+	test_can_run=0
+
+        while read line ; do
+            arr=($line)
+            col=${arr[0]}
+            val=${arr[1]}
+            if [[ "$col" == "USEFILESYSTEMCACHE" ]]; then
+                use_fscache=${val}
+            fi
+            if [[ "$col" == "FILESYSTEMCACHETHRESHOLD" ]]; then
+                fs_thresh=$val
+            fi
+            if [[ "$col" == "DEFAULTDBCACHEPAGES" ]]; then
+                db_pages=$val
+            fi
+            if [[ "$col" == "TEST_CAN_RUN" ]]; then
+                test_can_run=$val
+            fi
+        done < <( awk '$1=$1' $tmp_log )
+
+        if [[ -n "$use_fscache" && -n "$fs_thresh" && -n "$db_pages" ]]; then
+            if [[ $use_fscache -eq 1 ]]; then
+                sho "FileSystem cache will be used anyway, regardless of 'FileSystemCacheThreshold' value. Check PASSED, test can run." $log4all
+            else
+                if [[ $use_fscache -eq 0 ]]; then
+                    sho "FileSystem cache was explicitly DISABLED: parameter UseFileSystemCache = false. You have to replace this value with 'true'. Test can NOT run." $log4all
+                    exit 1
+                fi
+
+                # here we can occur only when use_fscache = -1, i.e. parameter UseFileSystemCache is commented
+                if [[ $fs_thresh -eq -1 ]]; then
+                    sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out. You have to remove uncomment one of them. Test can NOT run." $log4all
+                    exit 1
+                else
+                    if [[ $test_can_run -ne 1 ]]; then
+                        sho "Parameter FileSystemCacheThreshold = $fs_thresh must have value be GREATER than DefaultDbCachePages=$db_pages. Test can NOT run." $log4all
+                        exit 1
+                    else
+                        sho "Value of DefaultDbCachePages = $db_pages is less than FileSystemCacheThreshold = $fs_thresh. Check PASSED, test can run." $log4all
+                    fi
+                fi
+            fi
+        else
+            sho "Could not obtain value for at least one of following parameters: UseFileSystemCache, FileSystemCacheThreshold, DefaultDbCachePages." $log4all
+            sho "Perhaps SQL query became wrong. Test code needs to be corrected." $log4all
+            exit 1
+        fi
+        
+	cat <<-"EOF" >$tmp_sql
+            set width config_param_name 35;
+            set width config_param_value 50;
+            set width config_param_source 20;
+            select
+                 rdb$config_name config_param_name
+                ,iif(trim(rdb$config_value)='','[empty]',rdb$config_value) config_param_value
+                ,rdb$config_source config_param_source
+            from rdb$config
+            where rdb$config_is_set
+            order by config_param_name;
+	EOF
+	
+	run_isql="$isql_name $dbconn $dbauth -i $tmp_sql -nod"
+	display_intention "Changed FB config parameters:" "$run_isql" "$tmp_log" "$tmp_err"
+	$run_isql 1>$tmp_log 2>$tmp_err
+	cat $tmp_err>>$log4all
+	catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+	cat $tmp_log
+	cat $tmp_log >> $log4all
+	
+    fi
+    # check_fs_via_sql = 0 | 1
+    rm -f $tmp_sql $tmp_log $tmp_err
+
+    if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+        if [ -z "$FIREBIRD_TMP" ]; then
+            sho "Variable 'FIREBIRD_TMP' undefined, GTT data will be stored in the /tmp folder" $log4all
+        else
+            sho "Value of 'FIREBIRD_TMP': $FIREBIRD_TMP, GTT data will be stored in this folder" $log4all
+        fi
+    else
+        sho "Test uses REMOTE Firebird instance, value of 'FIREBIRD_TMP' is unavaliable" $log4all
+    fi
+
+    sho "Routine $FUNCNAME: finish." $log4all
+}
+# end of chk_FSCacheUsage
+
 #  -------------- s h o w    D B   a n d   t e s t   p a r a m s  -----------------
 
 show_db_and_test_params() {
@@ -1059,43 +1301,6 @@ show_db_and_test_params() {
   #####################################################################################
   ###   s h o w     p a r a m s     f r o m      o l t p N N _ c o n f i g . w i n  ###
   #####################################################################################
-  
-  if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
-    fb_home_dir="$(dirname "$fbc")"
-
-    echo "Changed parameters of $fb_home_dir/firebird.conf:" >>$tmp_show_log
-    sed -e 's/^[ \t]*//' $fb_home_dir/firebird.conf | grep "^[^#;]" | sort > $tmp_show_cfg
-    cat $tmp_show_cfg | sed -e 's/^/    /' >> $tmp_show_log
-
-    # /opt/firebird/bin/fbsvcmgr localhost/3333:service_mgr user sysdba password masterkey info_get_env
-    # Server root: /opt/firebird/
-
-    if grep -q -i "DefaultDbCachePages" $tmp_show_cfg; then
-        if ! grep -q -i "FileSystemCacheThreshold" $tmp_show_cfg ; then
-            cat <<- EOF >>$tmp_show_log
-
-### A C H T U N G ### YOU MUST DEFINE PARAMETER 'FileSystemCacheThreshold'
-
-It is strongly recommended to add parameter 'FileSystemCacheThreshold' into your Firebird config file.
-Please add it and assign value NOT LESS than number of pages that is specified for 'DefaultDbCachePages'.
-Script is now terminated.
-EOF
-            cat $tmp_show_log
-            cat $tmp_show_log>>$log4all
-            rm -f $tmp_show_log $tmp_show_cfg
-            exit 1
-        fi
-    fi
-
-    if [ -z "$FIREBIRD_TMP" ]; then
-      echo Variable \'FIREBIRD_TMP\' undefined, GTT data will be stored in the \'/tmp\'. >>$tmp_show_log
-    else
-      echo Value of \'FIREBIRD_TMP\': $FIREBIRD_TMP, GTT data will be stored in this folder. >>$tmp_show_log
-    fi
-  else
-      echo Test uses REMOTE Firebird instance, content of firebird.conf is unavaliable.>>$tmp_show_log
-  fi
-  #^-- [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]
   cat $tmp_show_log
   cat $tmp_show_log>>$log4all
   rm -f $tmp_show_log $tmp_show_cfg
@@ -1345,7 +1550,7 @@ prepare_before_adding_init_data() {
   
   # LI-T3.0.0.31394 Firebird 3.0 Beta 1
   #[[ $fbb == *"Firebird 3"* ]] && echo alter database set linger to 15\;commit\;select rdb\$linger from rdb$database\; >>$tmpsql
-  if [ $fbb == *"Firebird 3"* ]; then
+  if [[ ${fbb} != *"Firebird 2."* ]]; then
      cat <<-"EOF" >>$tmpsql
        alter database set linger to 15;
        commit;
@@ -2970,8 +3175,12 @@ fi
 while read a b c d
 do
   fbb=$c
-  # prefix: 'LI'
+
+  # OS where Firebird is running ($host not always must be local on LInux, it can be on Windows!): 'LI' or 'WI'
   fbo=$(echo -n $fbb | cut -c1-2)
+
+  # Exact build number: LI-V2.5.9.27119 --> 27119
+  bld_no=$(echo -n $fbb | cut -d"." -f4)
 done<$tmplog
 # output server version: fbb=|LI-V2.5.9.27119|
 
@@ -3250,6 +3459,21 @@ else
     fi # $db_build_finished_ok = 0 or 1
 
 fi # grep "Error while trying to open" $tmperr ==> true or false
+
+# check FB config:
+# * 4.0: 
+#   if build >= 2260 then
+#        get content of RDB$CONFIG table for any server IP, and check current value of UseFileSystemCache.
+#        If UseFileSystemCache was not set then check FileSystemCacheThreshold and compare with cache buffers
+#        that are set for !dbnm!
+#   else
+#      same as for 2.5 and 3.0 (see below)
+# * 2.5 and 3.0: [ DO IT ONLY IF !host! is 'localhost' or '127.0.0.1' ]: get content of firebird.conf and extract
+#        value of FileSystemCacheThreshold from it. Compare this value with DefaultDBCachePages for !dbnm!.
+# If FileSystem cache can not be used - ABEND.
+# 18.11.2020
+chk_FSCacheUsage $fb $bld_no $log4all
+
 
 # ********************
 # *** COMMON BLOCK ***
@@ -3681,7 +3905,7 @@ do
     sho "Launching session $i" $log4all
 
     bash ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${conn_pool_support} ${file_name_this_host_info}&
-    #                            1      2      3     4      5                   6                   7                8                  9
+    #                                 1      2      3     4      5                   6                   7                8                  9
 done
 
 sho "Completed script $0" $log4all

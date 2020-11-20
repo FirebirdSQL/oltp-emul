@@ -1393,6 +1393,37 @@ if .1.==.0. (
                 echo     ^<li^>^<a href="#hardwareinfo"^>Hardware and OS info^</a^> ^</li^>
             )
 
+            set get_fbconf_via_sql=0
+            if !fb! GTR 40 (
+                set get_fbconf_via_sql=1
+            ) else if !fb! EQU 40 (
+                for /f "delims=. tokens=4" %%b in ("!build!") do (
+                    @rem WI-V2.5.9.27150
+                    @rem   ^   ^ ^   ^
+                    @rem |-1-| 2 3 |-4-|
+                    @rem Number of build: 27150 etc
+                    set /a fb_build_no=%%b
+                )
+
+                @rem commit was 12.11.2020 23:34
+                @rem next day build number was 2260
+                @rem https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
+                @rem Reworked Config: correct work with 64-bit integer in 32-bit code, refactor config values checks and defaults,
+                @rem remove some type casts.
+                @rem Introduce new virtual table RDB$CONFIG.
+                @rem Implement CORE-6332 : Get rid of FileSystemCacheThreshold parameter
+                @rem new boolean setting UseFileSystemCache overrides legacy FileSystemCacheThreshold,
+                @rem FileSystemCacheThreshold will be removed in the next major Firebird release.
+
+                @rem Minimal build of FB 4.x that allows to query for actual config parameters via SQL:
+                if !fb_build_no! GEQ 2260 (
+                    set get_fbconf_via_sql=1
+                )
+            )
+            if .!get_fbconf_via_sql!.==.1. (
+                echo     ^<li^>^<a href="#fbconf"^>Firebird configuration^</a^> ^</li^>
+            )
+
             echo     ^<li^>^<a href="#testsettings"^>Test configuration^</a^> ^</li^>
             echo     ^<li^>^<a href="#testfinishinfo"^>Test Finish details^</a^> ^</li^>
             echo     ^<li^>^<a href="#testworkload"^>Test workload details^</a^> ^</li^>
@@ -1499,7 +1530,39 @@ if .1.==.0. (
 
     @rem RRRRRRRRRRRRRRRRRRR
 
-    del !tmp_file! 2>nul
+    if .%make_html%.==.1. if .!get_fbconf_via_sql!.==.1. (
+        @rem 17.11.2020: obtain actual config parameters from RDB$CONFIG table.
+        @rem Avaliable only in FB 4.0 since build 2260:
+
+        set msg=Firebird configuration
+        call :sho "SID=%sid%. !msg!" %log4all%
+        echo !htm_sect! ^<a name="fbconf"^> !msg! ^</a^> !htm_secc! >> %htm_file%
+
+        (
+            echo "set width param_name 35;"
+            echo "set width param_value 40;"
+            echo "set width param_default 40;"
+            echo "set width param_source 20; -- 'firebird.conf' or 'databases.conf'"
+            echo "select"
+            echo "     rdb$config_name param_name"
+            echo "    ,iif(trim(rdb$config_value)='', '[empty]',rdb$config_value) param_value"
+            echo "    ,iif(trim(rdb$config_default)='', '[empty]', rdb$config_default) param_default"
+            echo "    ,cast(iif(rdb$config_is_set, '[ X ]', '     ') as varchar(5)) as "is set ?""
+            echo "    ,rdb$config_source param_source"
+            echo "from rdb$config"
+            echo "order by param_name"
+            echo ";"
+        ) > %rpt% 
+        call :remove_enclosing_quotes !rpt!
+
+        set run_repo=%fbc%\isql %dbconn% -n -pag 9999 -i %rpt% %dbauth% 
+
+        @rem -- not needed for text file -- %run_repo% 1>>%log4all% 2>&1
+        call :add_html_table fbc tmpdir dbconn dbauth rpt htm_file
+
+        @rem del %rpt% 2>nul
+
+    )
 
     set msg=Output test configuration
     call :sho "SID=%sid%. !msg!" %log4all%
@@ -4640,8 +4703,6 @@ pause
     @rem 3.0: OUTPUT message field count
     for /f "tokens=1 delims=:" %%a in ('findstr /n /c:"OUTPUT message " /c:"OUTPUT SQLDA" %tmp_sqlda%') do set out_line=%%a
 
-    @rem -- %fbc%\isql %dbconn% %dbauth% -i %sql_temp% | findstr /i /c:"alias:" 1>%sql_log%
-
     findstr /i /c:"alias" %tmp_sqlda% 1>%sql_log%
 
     @rem 2.5:
@@ -4840,54 +4901,61 @@ pause
               @rem when we write such cell into %mp_chart_data%:
               set cbak=!cell!
 
-              @rem set left_char=!cell:~0,1!
-              set righ_char=!cell:~-1!
-              @rem if "!left_char!"==" " set cutspaces=1
-              @rem if "!left_char!"=="	" set cutspaces=1
-              if "!righ_char!"==" " set cutspaces=1
-              if "!righ_char!"=="	" set cutspaces=1
-              if .!cutspaces!.==.1. (
-                  set cell=!cell:^|=$PIPE$OPERATOR$!
-                  set cell=!cell:%%=$PERCENT$SIGN$!
-                  set cell=!cell:^&=$AMPERSAND$!
-                  set cell=!cell:^>=$GREATER$THEN$!
-                  set cell=!cell:^<=$LESS$THEN$!
+              if not "!cell!"=="" (
+                  @rem set left_char=!cell:~0,1!
+                  set righ_char=!cell:~-1!
+                  
+                  @rem SPACE here:
+                  if "!righ_char!"==" " set cutspaces=1
 
-                  @rem set cell=!cell:^&=^&amp;!
-                  @rem set cell=!cell:^<=^&lt;!
-                  @rem set cell=!cell:^>=^&gt;!
+                  @rem TAB here:
+                  if "!righ_char!"=="	" set cutspaces=1
 
-                  call :trim cell !cell!
+                  if .!cutspaces!.==.1. (
+                      set cell=!cell:^|=$PIPE$OPERATOR$!
+                      set cell=!cell:%%=$PERCENT$SIGN$!
+                      set cell=!cell:^&=$AMPERSAND$!
+                      set cell=!cell:^>=$GREATER$THEN$!
+                      set cell=!cell:^<=$LESS$THEN$!
 
-                  set cell=!cell:$PIPE$OPERATOR$=^|!
-                  set cell=!cell:$PERCENT$SIGN$=%%!
-                  set cell=!cell:^&=$AMPERSAND$!
-                  set cell=!cell:$GREATER$THEN$=^>!
-                  set cell=!cell:$LESS$THEN$=^<!
-              )
+                      @rem set cell=!cell:^&=^&amp;!
+                      @rem set cell=!cell:^<=^&lt;!
+                      @rem set cell=!cell:^>=^&gt;!
 
+                      call :trim cell !cell!
 
-              set ccss=!cell:$css$error$=!
-
-              if not !ccss!==!cell! (
-                  @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
-                  @rem Otherwise handling of such rows in :remove_enclosing_quotes -> :trim
-                  @rem will produce line without part of text.
-                  @rem TODO: check and try to fix this later.
-                  set cell=^<span class="error"^>!ccss!^</span^>
-              ) else (
-                  set ccss=!cell:$css$warning$=!
-                  if not !ccss!==!cell! (
-                      @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
-                      set cell=^<span class="warning"^>!ccss!^</span^>
-                  ) else (
-                      set ccss=!cell:$css$success$=!
-                      @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
-                      if not !ccss!==!cell! set cell=^<span class="success"^>!ccss!^</span^>
+                      @rem added 17.11.2020: if cell is empty then replacing will change it content to '$PIPE$OPERATOR$=' !!
+                      if not .!cell!.==.. (
+                          set cell=!cell:$PIPE$OPERATOR$=^|!
+                          set cell=!cell:$PERCENT$SIGN$=%%!
+                          set cell=!cell:^&=$AMPERSAND$!
+                          set cell=!cell:$GREATER$THEN$=^>!
+                          set cell=!cell:$LESS$THEN$=^<!
+                      )
                   )
               )
+    
+              if not .!cell!.==.. (
+                  set ccss=!cell:$css$error$=!
 
-
+                  if not !ccss!==!cell! (
+                      @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                      @rem Otherwise handling of such rows in :remove_enclosing_quotes -> :trim
+                      @rem will produce line without part of text.
+                      @rem TODO: check and try to fix this later.
+                      set cell=^<span class="error"^>!ccss!^</span^>
+                  ) else (
+                      set ccss=!cell:$css$warning$=!
+                      if not !ccss!==!cell! (
+                          @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                          set cell=^<span class="warning"^>!ccss!^</span^>
+                      ) else (
+                          set ccss=!cell:$css$success$=!
+                          @rem 21.10.2020 DO NOT enclose into double quotes, use ^< and ^> here!
+                          if not !ccss!==!cell! set cell=^<span class="success"^>!ccss!^</span^>
+                      )
+                  )
+              )
 
           ) 
 
@@ -5162,6 +5230,7 @@ pause
 
 goto:eof
 @rem ^
+
 @rem end of ':add_html_table' subroutine
 
 @rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+

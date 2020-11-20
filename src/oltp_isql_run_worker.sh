@@ -921,8 +921,9 @@ add_html_table() {
 # end of: add_html_table()
 # -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
-
-#.......................................... m a i n     p a r t ................................
+############################################################
+###                  m a i n    p a r t                  ###
+############################################################
 
 export shname=$(cd `dirname "${BASH_SOURCE[0]}"` && pwd)/`basename "${BASH_SOURCE[0]}"`
 export shdir=$(cd "$(dirname "$0")" && pwd)
@@ -1699,6 +1700,21 @@ do
 	        <td>
 	        <ol>
 	            $( [[ $gather_hardware_info -eq 1 ]] && echo "<li><a href="#hardwareinfo">Hardware and OS info</a></li>"  )
+	EOF
+	if [[ $fb -ge 40 ]]; then
+            # since 12.11.2020 23:34
+            # https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
+            # Reworked Config: correct work with 64-bit integer in 32-bit code, refactor config values...
+            # Introduce new virtual table RDB$CONFIG.
+            # Implement CORE-6332 : Get rid of FileSystemCacheThreshold parameter
+            # new boolean setting UseFileSystemCache overrides legacy FileSystemCacheThreshold,
+            # FileSystemCacheThreshold will be removed in the next major Firebird release.	
+		cat <<- EOF >>$phtm
+	            <li><a href="#fbconf">Firebird configuration</a></li>
+		EOF
+	fi
+
+	cat <<- EOF >>$phtm
 	            <li><a href="#testsettings">Test configuration</a></li>
 	            <li><a href="#testfinishinfo">Test Finish details</a></li>
 	            <li><a href="#testworkload">Test workload details</a></li>
@@ -1950,7 +1966,34 @@ do
     fi
     # end of $gather_hardware_info = 1 | 0
 
-#\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+    #\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
+
+    if [ $make_html -eq 1 ]; then
+        if [[ $fb -ge 40 ]]; then
+            msg="Firebird configuration"
+		cat <<-EOF >$psql
+			set width param_name 35;
+			set width param_value 40;
+			set width param_default 40;
+			set width param_source 20; -- 'firebird.conf' or 'databases.conf'
+			select
+			     rdb\$config_name param_name
+			    ,iif(trim(rdb\$config_value)='', '[empty]',rdb\$config_value) param_value
+			    ,iif(trim(rdb\$config_default)='', '[empty]', rdb\$config_default) param_default
+			    ,cast(iif(rdb\$config_is_set, '[ X ]', '     ') as varchar(5)) as "is set ?"
+			    ,rdb\$config_source param_source
+			from rdb\$config
+			order by param_name;
+		EOF
+	    #$isql_name $dbconn -nod -pag 99999 -i $psql $dbauth 1>$tmpauxlog 2>&1
+		cat <<- EOF >>$phtm
+			$htm_sect <a name="fbconf"> $msg </a> $htm_secc
+		EOF
+	    add_html_table $psql $phtm
+        fi
+    fi
+
+    #///////////////////////////////////////////////
 
     rpt_name="Server and database settinfs"
     rm -f $tmpauxlog
