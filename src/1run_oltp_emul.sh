@@ -287,6 +287,10 @@ adjust_sweep_attrib()
 
 adjust_fw_attrib()
 {
+    local required_fw=${1:-$create_with_fw}
+
+    sho "Routine $FUNCNAME: start." $log4all
+
     local tmpclg=$tmpdir/tmp_adjust_fw.log
     local tmperr=$tmpdir/tmp_adjust_fw.err
     local msg
@@ -296,9 +300,8 @@ adjust_fw_attrib()
     else
         fbspref="$fbc/fbsvcmgr service_mgr "
     fi
-    run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
-    msg="Adjusting FORCED WRITES attribute to config parameter 'create_with_fw': $create_with_fw"
-    #sho "$msg" $log4all
+    run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$required_fw"
+    msg="Changing FORCED WRITES attribute to '$required_fw'"
     display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
     $run_fbs 1>$tmpclg 2>$tmperr
     catch_err $tmperr "Check whether database exists, is online and has read_write access."
@@ -309,6 +312,8 @@ adjust_fw_attrib()
     cat $tmpclg
     cat $tmpclg>>$log4all
     rm -f $tmpclg $tmperr
+
+    sho "Routine $FUNCNAME: finish." $log4all
 
 }  # end of adjust_fw_attrib
 
@@ -327,14 +332,26 @@ adjust_grants() {
     local tmpsql
     local run_isql 
     local fname="tmp_adjust_grants"
+    local conn_as_locksmith
+    
     if [[ ${fb} -ne "25" ]]; then
 
         tmpsql=$tmpdir/sql/$fname.sql
         tmpclg=$tmpdir/sql/$fname.log
         tmperr=$tmpdir/sql/$fname.err
 
-        # If FB = 3.x+ then we create non-privileged users in all cases except mon_unit_perf=0.
+        # FB = 3.x+: we create non-privileged users in all cases except:
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        # mon_unit_perf = 0 AND mon_query_role is undefined AND mon_usr_prefix is undefined
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         # Working as NON_dba is much closer to the real-world applications when doing common business tasks as SYSDBA.
+        # ### CAUTION ###
+        # This logic must be duplicated in oltp_isql_run_worker.sh scenario
+        conn_as_locksmith=0
+        if [[ $mon_unit_perf -eq 0 && -z "${mon_query_role}" && -z "${mon_usr_prefix}" ]]; then
+            conn_as_locksmith=1
+        fi
+
 
         sho "Drop temporary non-privileged USERS and ROLE which could be created for reducing affect of mon\$ data gathering." $log4all
 	cat <<-EOF >$tmpsql
@@ -347,14 +364,14 @@ adjust_grants() {
         display_intention "Run script for drop grants." "$run_isql" "$tmpclg" "$tmperr"
         $run_isql 1>$tmpclg 2>$tmperr
         catch_err $tmperr "Could not drop grants."
-        if [[ $mon_unit_perf -eq 0 ]]; then
-		####################################################################
-		### ::: NB ::: mon_unit_perf = 0 --> all sessions work as SYSDBA ###
-		####################################################################
-		# !!!CAUTION!!! This logic is duplicated in oltp_isql_run_worker.sh
-		sho "NOTE. config parameter mon_unit_perf = 0. All sessions can work as '$usr'" $log4all
+        if [[ $conn_as_locksmith -eq 1 ]]; then
+		sho "NOTE. All sessions will run as '$usr'" $log4all
         else
             if [[ -n "${mon_query_role}" && -n "${mon_usr_prefix}" ]]; then
+
+                #########################################################
+                ###   O L T P _ A D J U S T  _  G R A N T S . S Q L   ###
+                #########################################################
 
                 run_isql="$isql_name $dbconn -q -nod $dbauth -i $shdir/oltp_adjust_grants.sql"
                 sho "Create temporary ROLE '${mon_query_role}' and non-privileged USERS with mask '${mon_usr_prefix}' for querying  mon\$ tables." $log4all
@@ -366,6 +383,9 @@ adjust_grants() {
                 display_intention "Step-2: update grants by applying generated DDL." "$run_isql" "$tmpclg" "$tmperr"
                 $run_isql 1>$tmpclg 2>$tmperr
                 catch_err $tmperr "Could not apply generated SQL."
+                
+                # Result: temp users with names like: 'TMP$OLTP$USER_nnnn' have been created.
+
             else
                 sho "At least one of config parameters: 'mon_query_role', 'mon_usr_prefix' - is UNDEFINED." $log4all
                 if [[ $mon_unit_perf -eq 1 ]]; then
@@ -373,7 +393,7 @@ adjust_grants() {
                 fi
             fi
         fi
-
+        # -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-
         rm -f $tmpsql $tmpclg $tmperr
     else
         sho "SKIP: no sense to create temporary role and users in FB 2.5 because feature was not implemented here."  $log4all
@@ -387,6 +407,8 @@ adjust_grants() {
 # -------------------------------  d b _ c r e a t e -----------------------------------
 
 db_create() {
+
+  local fb=$1
   echo
   sho "Routine $FUNCNAME: start." $log4all
 
@@ -410,19 +432,19 @@ db_create() {
       show version;
       set list on;
       select 
-          m.mon\$database_name
-         ,m.mon\$creation_date
-         ,m.mon\$page_size
-         ,a.mon\$attachment_id
-         ,a.mon\$remote_protocol
-         ,a.mon\$remote_address
+          m.mon\$database_name as db_name
+         ,m.mon\$creation_date as created_at
+         ,m.mon\$page_size as pg_size
+         ,a.mon\$remote_protocol as remote_protocol
+         ,a.mon\$remote_address as remote_address
+         ,rdb\$get_context('SYSTEM','ENGINE_VERSION') as engine_vers
       from mon\$attachments a cross join mon\$database m
       where a.mon\$attachment_id = current_connection;
       exit;
 	EOF
 
   run_isql="$isql_name -q -i $tmpsql"
-  display_intention "Attempt to CREATE database." "$run_isql" "$tmpclg" "$tmperr"
+  display_intention "Attempt to CREATE database for fb=$fb." "$run_isql" "$tmpclg" "$tmperr"
   $run_isql 1>$tmplog 2>$tmperr
   catch_err $tmperr "Ensure that FB is running. Verify that parameter 'dbnm' is VALID: $dbnm"
 
@@ -433,26 +455,10 @@ db_create() {
      fbspref="$fbc/fbsvcmgr service_mgr "
   fi
 
-  adjust_sweep_attrib
-  adjust_fw_attrib
+  # disabled 01.12.2020, not needed here!
+  #adjust_sweep_attrib
+  #adjust_fw_attrib
   
-#  if [ $create_with_fw == async ]; then
-#     echo Changing attribute FW to OFF.
-#     run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_async"
-#     echo Command:
-#     echo $run_fbs
-#     $run_fbs 1>>$tmplog 2>>$tmperr
-#     catch_err $tmperr "Can not change DB forced writes attribute."
-#  fi
-#  if [ $create_with_sweep != -1 ]; then
-#     echo Changing attribute sweep interval to $create_with_sweep.
-#     run_fbs="$fbspref action_properties dbname $dbnm prp_sweep_interval $create_with_sweep"
-#     echo Command:
-#     echo $run_fbs
-#     $run_fbs 1>>$tmplog 2>>$tmperr
-#     catch_err $tmperr "Can not change DB sweep interval attribute."
-#  fi
-
   run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
   $run_fbs | grep -i "$dbnm\|creation date\|attributes\|forced\|sweep" 1>>$tmplog 2>>$tmperr
 
@@ -468,6 +474,110 @@ db_create() {
   rm -f $tmperr $tmpsql $tmplog
 
 } # end of db_create
+
+# ------------------- c h k _ D B _ a c c e s s -----------------
+chk_db_access()
+{
+  echo
+  sho "Routine $FUNCNAME: start." $log4all
+
+  local tmperr=$tmpdir/$FUNCNAME.err
+  local tmpsql=$tmpdir/$FUNCNAME.sql
+  local tmpclg=$tmpdir/$FUNCNAME.log
+
+	cat <<-EOF >$tmpsql
+		-- We check here that Firebird account has enough rights to WRITE into GTT files.
+		-- These files are created in the folder that is defined by 1st existent variable:
+		-- 1) FIREBIRD_TMP;
+		-- 2.1) (Windows): TEMP, TMP, USERPROFILE, Windows directory - see Windows API function GetTempPath:
+		--      https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-gettemppatha
+		-- 2.2) (POSIX) /tmp
+		--    Place where GTT data must be stored can be explicitly specified in a Firebird daemon starter script
+		--    by assigning some existing folder to variable FIREBIRD_TMP.
+		--    When OS loader 'systemd' is used then form of such variable assignment is:
+		--    Environment="FIREBIRD_TMP=/var/my_folder_for_gtt"
+		--    Name of Firebird loader script depends on mode in which DBMS will work, namely: is it Classic or others.
+		--    It can be found in the folder '/usr/lib/systemd/system/' (RH/CentOS) or '/lib/systemd/system/' (Ubuntu/Debian)
+		--    and has following name:
+		--    * xinetd.service - if Firebird works in Classic mode or
+		--    * firebird-superserver.service - if Firebird works in Super or SuperClassic mode.
+		-- ------------------------------------------------------------------------------------
+		-- When Firebird process has no rights to that directory, test will fail with message:
+		-- #####################################################
+		-- Statement failed, SQLSTATE = 08001
+		-- I/O error during "open O_CREAT" operation for file ""
+		-- -Error while trying to create file
+		-- -No such file or directory
+		-- #####################################################
+		-- See also:
+		-- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1176238&msg=18172438
+		set echo on;
+		set bail on;
+		recreate GLOBAL TEMPORARY table tmp\$$rndname(id int, s varchar(36) unique using index tmp_s_unq_$rndname );
+		commit;
+		set count on;
+		insert into tmp\$$rndname(id, s) select rand()*1000, uuid_to_char(gen_uuid()) from rdb\$types;
+		set list on;
+		select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
+		commit;
+		drop table tmp\$$rndname;
+		set echo off;
+		-- At this point one may be sure that FB really has enough rights to create files for GTT data.
+		commit;
+		-- Sequence g_stop_test serves as 'stop-flag' for every ISQL attachment.
+		-- It must be always set to ZERO before test launch.
+		-- Here we forcedly set this sequence to 0 and, at the same time, check that DB is not read-only.
+		-- Added 07.08.2020:
+		set term ^;
+		execute block returns( gen_stop_before_restart bigint, gen_stop_after_restart bigint) as
+		begin
+		   gen_stop_before_restart = gen_id(g_stop_test,0);
+		   -- DISABLED 07.08.2020:
+		   -- alter sequence g_stop_test restart with 0; -- DOES NOT WORK since 4.0.0.2131:
+		   -- gen_id(,0) will return -1 instead of 0.
+		   gen_stop_after_restart = gen_id( g_stop_test, -gen_id(g_stop_test, 0) );
+		   suspend;
+		end^
+		set term ;^
+		commit;
+		quit;
+	EOF
+	run_isql="$isql_name $dbconn -i $tmpsql -q -nod -c 256 $dbauth"
+	display_intention "Check whether 'firebird' account has enough rights to folder where GTT data will be stored." "$run_isql" "$tmpclg" "$tmperr"
+	$run_isql 1>$tmpclg 2>$tmperr
+	if [ -s $tmperr ];then
+		cat <<- EOF
+		##########################################################################
+		DBMS account ('firebird') has no sufficient rights to read/write into GTT.
+		Check that folder defined by variable FIREBIRD_TMP actually exists and can
+		be accessed by 'firebird' account. If no such variable was defined then
+		check rights to the system folder /tmp.
+		##########################################################################
+		
+		EOF
+		echo Content of .SQL script '$tmpsql':
+		grep . $tmpsql
+		echo
+		echo Content of STDOUT file '$tmpclg':
+		grep . $tmpclg
+		echo
+		echo Content of STDERR file '$tmperr':
+		grep . $tmperr
+		echo
+		pause Press any key to FINISH this script. . .
+		exit 1
+	else
+		echo All fine: no errors. Check STDOUT:
+		echo ==================================
+		grep . $tmpclg
+		echo ==================================
+	fi
+
+  sho "Routine $FUNCNAME: finish." $log4all
+  rm -f $tmperr $tmpsql $tmpclg
+  echo
+
+} # end of chk_db_access
 
 # ------------------- i n j e c t   a c t u a l   s e t t i n g s   f r o m    c o n f i g ---------------
 
@@ -561,6 +671,34 @@ cat <<-EOF >>$tmpsql
     begin
 EOF
 
+# Following parameters from config are written here into the SETTINGS table:
+##################################
+# working_mode
+# enable_mon_query
+# unit_selection_method
+# enable_reserves_when_add_invoice
+# order_for_our_firm_percent
+# build_with_split_heavy_tabs
+# build_with_qd_compound_ordr
+# build_with_separ_qdistr_idx
+# used_in_replication
+# separate_workers
+# workers_count
+# update_conflict_percent
+# connect_str
+# mon_unit_list
+# halt_test_on_errors
+# qmism_verify_bitset
+# recalc_idx_min_interval
+# warm_time
+# test_intervals
+# tmp_worker_role_name
+# tmp_worker_user_prefix
+# tmp_worker_user_pswd
+# use_es, host, port, usr, pwd // 20.11.2020
+# mon_usr_passwd // 22.11.2020
+# conn_pool_support // 12.12.2020
+# resetting_support // 12.12.2020
 
 inject_actual_setting $tmpsql $fb init working_mode upper\(\'$working_mode\'\)
 inject_actual_setting $tmpsql $fb common enable_mon_query \'$mon_unit_perf\'
@@ -615,6 +753,26 @@ inject_actual_setting $tmpsql $fb common test_intervals  \'$test_intervals\' 1
 # ------------------------
 inject_actual_setting $tmpsql $fb init tmp_worker_role_name upper\(\'${mon_query_role}\'\) 1
 inject_actual_setting $tmpsql $fb init tmp_worker_user_prefix upper\(\'${mon_usr_prefix}\'\) 1
+# 22.11.2020: add password for temporary created users. DO NOT apply UPPER here! :-)
+inject_actual_setting $tmpsql $fb init tmp_worker_user_pswd \'$mon_usr_passwd\' 1
+
+# Added 20.11.2020. Config parameter 'use_es'
+# ::: NOTE ::: settings.working_mode for this parameter must be 'COMMON', not 'INIT'
+inject_actual_setting $tmpsql $fb common use_es \'$use_es\' 1
+
+# Following parameters must be saved because they will be substituted into EDS statements when use_es=2:
+inject_actual_setting $tmpsql $fb init host \'$host\' 1
+inject_actual_setting $tmpsql $fb init port \'$port\' 1
+inject_actual_setting $tmpsql $fb init usr \'$usr\' 1
+inject_actual_setting $tmpsql $fb init pwd \'$pwd\' 1
+
+# 22.11.2020: add password for temporary created users.
+inject_actual_setting $tmpsql $fb init tmp_worker_user_pswd \'$mon_usr_passwd\' 1
+
+# Added 12.12.2020: save to DB info about suport External Connections Pool and 'RESETTING' system variable.
+# This will be used further for generating proper code of DB-level triggers:
+inject_actual_setting $tmpsql $fb init conn_pool_support \'$conn_pool_support\' 1
+inject_actual_setting $tmpsql $fb init resetting_support \'$resetting_support\' 1
 
 cat <<- EOF >>$tmpsql
     end
@@ -632,7 +790,10 @@ EOF
 
 # -------------------------------  d b _ b u i l d  -----------------------------------
 
-db_build() {
+make_db_objects() {
+
+  local fb=$1
+  
   echo
   sho "Routine $FUNCNAME: start." $log4all
   
@@ -659,6 +820,10 @@ db_build() {
 	in "$shdir/oltp$(($vers_family))_DDL.sql";
 	-- business-level units:
 	in "$shdir/oltp$(($vers_family))_sp.sql";
+	
+        -- #######################
+        -- invoke oltp_common.sql
+        -- #######################
 	-- reports and other units which are the same for ant FB version:
 	in "$shdir/oltp_common_sp.sql"; 
 EOF
@@ -692,17 +857,18 @@ EOF
     #:::   S y n c h r o n i z e    t a b l e    'S E T T I N G S'    w i t h    c o n f i g    :::
     #::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
     echo
-    sho "Adjusting SETTINGS table with config, step-1: generate temporary SQL script." $log4all
+    sho "Adjusting SETTINGS table with config." $log4all
+    sho "Step-1: generate temporary SQL script." $log4all
     sync_settings_with_conf $fb $bld
 
     # result: file $bld now contains SQL script with 'UPDATE SESSTINGS' statements. We have to apply it.
 
     run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
-    display_intention "Adjusting SETTINGS table with config, step-2: apply temporary script" "$run_isql" "$log" "$err"
+    display_intention "Step-2: apply temporary script" "$run_isql" "$log" "$err"
     echo Command: $run_isql
 
     $run_isql 1>>$log 2>$err
-    catch_err $err "Check SQL script at line that was specified in error message."
+    catch_err $err "Check line that was specified in error message."
 
 
     local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$vers_family.tmp
@@ -769,7 +935,7 @@ EOF
     # 02.11.18: moved pause code when wait_after_create=1 to common block in main part, see below
 
 }
-# end of db_build
+# end of make_db_objects
 
 #  -------------- c h k  F S  C a c h e U s a g e -------------
 
@@ -785,14 +951,38 @@ chk_FSCacheUsage() {
     local tmp_sql=$tmpdir/tmp_fscache.sql
     local tmp_log=$tmpdir/tmp_fscache.log
     local tmp_err=$tmpdir/tmp_fscache.err
-    local run_isql
 
+    local run_isql
+    local fb_home_dir
+
+    # Get current OS family. Outcome examples: #ID="centos" ; #ID="ubuntu" ;     #ID="debian"
+    local os_family=$(cat /etc/*release* | grep -m1 -i "^id=")
+    
+    if [[ -n "${clu}" && ( $os_family == *"ubuntu"* || $os_family == *"debian"* ) ]]; then
+        if [[ "$fb_major" == "25" ]]; then
+            fb_home_dir=/etc/firebird/2.5
+        elif [[ "$fb_major" == "30" ]]; then
+            fb_home_dir=/etc/firebird/3.0
+        elif [[ "$fb_major" == "40" ]]; then
+            fb_home_dir=/etc/firebird/4.0
+        else
+            fb_home_dir=UNKNOWN_FB_HOME_DIR
+        fi
+    else
+        fb_home_dir="$(dirname "$fbc")"
+    fi
+    sho "Detected OS family: $os_family. Expected directory with firebird.conf: $fb_home_dir" $log4all
+    if [[ ! -s "$fb_home_dir/firebird.conf" ]]; then
+        sho "::: WARNING/ERROR ::: Could NOT find FB configuration file in $fb_home_dir" $log4all
+        sho "Values of 'DefaultDBCachePages' and 'FilySystemCacheThreshold' will not be defined properly." $log4all
+    fi
+
+    # Introduce new virtual table RDB$CONFIG.
     # commit was 12.11.2020 23:34
     # next day build number was 2260
     # https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
     # Reworked Config: correct work with 64-bit integer in 32-bit code, refactor config values checks and defaults,
     # remove some type casts.
-    # Introduce new virtual table RDB$CONFIG.
     # Implement CORE-6332 : Get rid of FileSystemCacheThreshold parameter
     # new boolean setting UseFileSystemCache overrides legacy FileSystemCacheThreshold,
     # FileSystemCacheThreshold will be removed in the next major Firebird release.
@@ -812,7 +1002,6 @@ chk_FSCacheUsage() {
     
     if [[ $check_fs_via_sql -eq 0 ]]; then
         if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
-            fb_home_dir="$(dirname "$fbc")"
             # This if FB 2.5 or 3.0: we have to check FileSystemCache
             awk '$1=$1' $fb_home_dir/firebird.conf | grep "^[^#]" | grep -i "FileSystemCacheThreshold" >$tmp_log
             while read line ; do
@@ -987,7 +1176,7 @@ chk_FSCacheUsage() {
             order by config_param_name;
 	EOF
 	
-	run_isql="$isql_name $dbconn $dbauth -i $tmp_sql -nod"
+	run_isql="$isql_name $dbconn $dbauth -i $tmp_sql -nod -pag 99999"
 	display_intention "Changed FB config parameters:" "$run_isql" "$tmp_log" "$tmp_err"
 	$run_isql 1>$tmp_log 2>$tmp_err
 	cat $tmp_err>>$log4all
@@ -1010,6 +1199,7 @@ chk_FSCacheUsage() {
     fi
 
     sho "Routine $FUNCNAME: finish." $log4all
+    
 }
 # end of chk_FSCacheUsage
 
@@ -1250,7 +1440,7 @@ show_db_and_test_params() {
 	set count on;
 	set echo on;
 	-- set stat on;
-	create or alter view v_pool_info as
+	create or alter view tmp$view$pool_info as
 	select 
 	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as int) as pool_size,
 	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT') as int) as pool_idle,
@@ -1258,9 +1448,11 @@ show_db_and_test_params() {
 	  cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as int) as pool_lifetime
 	from rdb$database;
 	commit;
-	select 'Before clear connections pool' as msg, v.* from v_pool_info v;
+	select 'Before clear connections pool' as msg, v.* from tmp$view$pool_info v;
 	ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-        select 'After clear connections pool' as msg, v.* from v_pool_info v;
+        select 'After clear connections pool' as msg, v.* from tmp$view$pool_info v;
+        commit;
+        drop view tmp$view$pool_info;
 	set echo off;
 	set stat off;
 	set count off;
@@ -1295,16 +1487,7 @@ show_db_and_test_params() {
   cat $tmp_show_log | sed -e 's/^/    /'>>$log4all
   catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
 
-  rm -f $tmp_show_sql $tmp_show_err $tmp_show_log
-
-  # 18.09.2018
-  #####################################################################################
-  ###   s h o w     p a r a m s     f r o m      o l t p N N _ c o n f i g . w i n  ###
-  #####################################################################################
-  cat $tmp_show_log
-  cat $tmp_show_log>>$log4all
-  rm -f $tmp_show_log $tmp_show_cfg
-  echo
+  rm -f $tmp_show_sql $tmp_show_err $tmp_show_log $tmp_show_cfg
 
   sho "Routine $FUNCNAME: finish." $log4all
 
@@ -1322,15 +1505,49 @@ create_results_storage_fbk() {
   local tmplog=$tmpdir/tmp_make_results_storage.log
   local tmperr=$tmpdir/tmp_make_results_storage.err
 
-  # do NOT put tmpfdb into tmpdir! Access problem will be when try to restore it for 'firebird' account
-  local tmpfdb=$(dirname "$results_storage_fbk")/tmp_results_storage.tmp
+  local tmpfdb=$(dirname "$dbnm")/tmp_results_storage.$RANDOM.tmp
   local run_cmd
 
-  sho "Routine $FUNCNAME: start." $log4all
   if [[ -s $results_storage_fbk ]]; then
-      sho "Backup of results storage already EXISTS, skip its recreation." $log4all
+      sho "Backup of results storage already EXISTS, skip its recreation. Check access rights." $log4all
+      if [ $EUID -eq 0 ];  then
+        sho "Current user has root privilege. Access rights to $results_storage_fbk can be SKIPPED.." $log4all
+      else
+        sho "Check access rights to $results_storage_fbk." $log4all
+	if [[ $(stat --format '%U' "$results_storage_fbk") == "firebird" ]]; then
+		cat <<-EOF >$tmplog
+		System user 'firebird' is the owner of $results_storage_fbk.
+		Backup using FB Services API to this file will be possible.
+		EOF
+	    cat $tmplog
+	    cat $tmplog >> $log4all
+	    rm -f $tmplog
+        else
+	    # If the owner of $results_storage_fbk is different than firebird' then
+	    # attempt to make backup to this file will fail with:
+    	    # gbak: ERROR:cannot open backup file ....fbk
+	    # gbak: ERROR:    Exiting before completion due to errors
+	    # gbak:Exiting before completion due to errors
+		cat <<-EOF >$tmperr
+		ACCESS PROBLEM possible.
+
+		Owner of $results_storage_fbk is: '$(stat --format '%U' "$results_storage_fbk")'.
+		Error can raise when test will try to backup resultst to $results_storage_fbk.
+		
+		Either this file must be removed or its owner must to be changed to 'firebird'.
+
+		EOF
+	    cat $tmperr
+	    cat $tmperr >> $log4all
+	    rm -f $tmperr
+  	    exit 1
+        fi
+      fi # $EUIR -eq 0 ==> true / false
+
       rm -f $tmpfdb
-      run_cmd="$fbc/gbak -c -v -user ${usr} -pas ${pwd} $results_storage_fbk $host/$port:$tmpfdb"
+      # NB: directory of $results_storage_fbk must be avaliable for 'firebird' system user
+      # because we make backup using FB services:
+      run_cmd="$fbc/gbak -se $host/$port:service_mgr -c -v -user ${usr} -pas ${pwd} $results_storage_fbk $tmpfdb"
       display_intention "Check ability to restore from results storage backup." "$run_cmd" "$tmplog" "$tmperr"
       eval "$run_cmd" 1>$tmplog 2>$tmperr
       catch_err $tmperr "Could not restore from $results_storage_fbk. Make sure it was created in apropriate FB major version."
@@ -1343,24 +1560,44 @@ create_results_storage_fbk() {
 	cat <<-EOF >$tmpsql
 		create database '$host/$port:$tmpfdb' user '${usr}' password '$pwd';
 	EOF
+
+	# .DDL for new database that will store results and further backed up to $results_storage_fbk
+	#################################################
 	cat $shdir/oltp_results_storage_DDL.sql >>$tmpsql
-    run_cmd="$isql_name -q -c 256 -i $tmpsql"
+	#################################################
+	
+    run_cmd="$isql_name -q -i $tmpsql"
     display_intention "Generating new storage DB for tests run results." "$run_cmd" "$tmplog" "$tmperr"
 
     eval "$run_cmd" 1>$tmplog 2>$tmperr
     catch_err $tmperr "Could not create DB for storing results of tests."
-
     run_cmd="$fbc/gfix -w async -user ${usr} -pas ${pwd} $host/$port:$tmpfdb"
     display_intention "Change FW of storage results to OFF." "$run_cmd" "$tmplog" "$tmperr"
     eval "$run_cmd" 1>$tmplog 2>$tmperr
     catch_err $tmperr "Could not create DB for storing results of tests."
 
-    run_cmd="$fbc/gbak -b -v -user ${usr} -pas ${pwd} $host/$port:$tmpfdb $results_storage_fbk"
+    # NB: directory of $results_storage_fbk must be avaliable for 'firebird' system user
+    # because we make backup using FB services:
+    run_cmd="$fbc/gbak -se $host/$port:service_mgr -b -v -user ${usr} -pas ${pwd} $tmpfdb $results_storage_fbk"
     display_intention "Back up just created results storage." "$run_cmd" "$tmplog" "$tmperr"
     eval "$run_cmd" 1>$tmplog 2>$tmperr
     catch_err $tmperr "Could not make backup of $tmpfdb. Perhaps access problems."
   fi
-  rm -f $tmpsql $tmpfdb $tmplog $tmperr
+
+cat <<-EOF >$tmpsql
+    set bail on;
+    set echo on;
+    connect '$host/$port:$tmpfdb' user '${usr}' password '$pwd';
+    select mon\$database_name from mon\$database;
+    commit;
+    drop database;
+EOF
+ 
+  run_cmd="$isql_name -q -i $tmpsql"
+  echo $run_cmd
+  eval "$run_cmd" 1>$tmplog 2>$tmperr
+  catch_err $tmperr "Could not drop temporsry database '$host/$port:$tmpfdb' that used to check ability to use results storage."
+  rm -f $tmpsql $tmplog $tmperr
   sho "Routine $FUNCNAME: finish." $log4all
 
 }
@@ -2746,7 +2983,7 @@ launch_preparing() {
   local tmpchk=$tmpdir/$prf.sql
   local tmpclg=$tmpdir/$prf.log
   local tmperr=$tmpdir/$prf.err
-  local run_isql="$isql_name $dbconn -i $tmpchk $dbauth"
+  local run_isql="$isql_name $dbconn -nod -i $tmpchk $dbauth"
   
   rm -f $tmpchk $tmpclg
   echo Add record for checking work to be stopped on timeout.
@@ -2774,7 +3011,8 @@ launch_preparing() {
 				where g.unit in ( 'perf_watch_interval',
 		                          'sp_halt_on_error',
 		                          'dump_dirty_data_semaphore',
-		                          'dump_dirty_data_progress'
+		                          'dump_dirty_data_progress',
+		                          'crash_watch_interval'
 		                        );
 				when any do
 				begin
@@ -2796,6 +3034,24 @@ launch_preparing() {
 		                      dts_beg, dts_end, elapsed_ms)
 		              values( 'dump_dirty_data_semaphore', '',    'by $0',
 		                      null, null, -1);
+
+		-- 18.12.2020: add info for time interval which must be used when we watch FB crashes
+		-- after test finish:
+		insert into perf_log( unit,
+		                      info,
+		                      exc_info,
+		                      dts_beg,
+		                      dts_end,
+		                      elapsed_ms)
+		              values( 'crash_watch_interval',
+		                      'active',
+		                      'by $0',
+		                      current_timestamp,
+                 		      dateadd( $warm_time + $test_time minute to current_timestamp),
+		                      -1 -- skip this record from being displayed in srv_mon_perf_detailed
+		                    );
+		commit;
+
 		alter sequence g_success_counter restart with 0;
 		commit;
 
@@ -2876,10 +3132,135 @@ gen_temp_sh_for_stop()
 
 } # create_temp_sh_for_stop
 
+#------------------------------------------------------------------------------------------------------------
 
-#######################################################################
-# ----------------------------   M A I N   ----------------------------
-#######################################################################
+chk_conn_pool_support() {
+    sho "Routine $FUNCNAME: start." $log4all
+
+    local rndname="${dbnm%.*}.${RANDOM}.${RANDOM}.tmp"
+    local prf=tmp_chk_pool
+    local tmpsql=$tmpdir/$prf.sql
+    local tmpclg=$tmpdir/$prf.log
+    local tmperr=$tmpdir/$prf.err
+    
+	cat <<-EOF >$tmpsql
+    	    -- DO NOT BECAUSE WE HAVE TO DROP THIS DB AFTER! -- echo set bail on;
+    	    create database '$host/$port:$rndname' user '$usr' password '$pwd';
+	EOF
+
+	cat <<-"EOF" >>$tmpsql
+    	    set list on;
+    	    set count on; -- do not remove: 'records affected' will be checked below
+    	    select cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as int) as pool_size,
+                cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT') as int) as pool_idle,
+                cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT') as int) as pool_active,
+                cast(rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as int) as pool_lifetime
+    	    from rdb$database;
+    	    commit;
+    	    set term ^;
+    	    create or alter trigger tmp_trg_test_resetting inactive on disconnect as
+    	    begin
+             if (resetting) then
+                 begin
+                 end
+    	    end ^
+    	    set term ;^
+    	    commit;
+    	    ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
+    	    drop database; -- ###################### DROP TEMPORARY DATABASE ###################
+	EOF
+
+    run_isql="$isql_name -q -i $tmpsql"
+
+    $run_isql 1>$tmpclg 2>$tmperr
+    
+    if grep -q -i "SQLSTATE = 08001" $tmperr && grep -q -i "I/O error" $tmperr ; then
+        sho "Failed to create temporary database. Check access rights for '$tmpdir'" $log4all
+        sho "Perhaps you may need to run: chown firebird $tmpdir ?" $log4all
+        cat $tmperr
+        cat $tmperr>>$log4all
+        rm -f $tmpsql $tmperr $tmpclg
+        exit 1
+    fi
+    #Statement failed, SQLSTATE = 08001
+    #I/O error during "open O_CREAT" operation for file "/var/tmp/data/oltp_40.3423.3112.tmp"
+    #-Error while trying to create file
+    #-Permission denied
+
+    # If current FB instance does NOT support connection pool then .sql will fail with:
+    # ===
+    #   Statement failed, SQLSTATE = 42000
+    #   Dynamic SQL Error
+    #   -SQL error code = -104
+    #   -Token unknown - line ..., column ...
+    #   -CONNECTIONS
+    # ===
+    
+    if grep -q -i "SQLSTATE = 42000" $tmperr && grep -q -i "Token unknown" $tmperr ; then
+        sho "This build does not support CONNECTIONS POOL." $log4all
+        eval "$1=0"
+        eval "$2=0"
+        #conn_pool_support=0
+        #resetting_support=0
+    else
+	if grep -q -E -i "pool_size[[:space:]]+[[:digit:]]+" $tmpclg; then
+    	    while read line ; do
+        	arr=($line)
+        	col=${arr[0]}
+        	val=${arr[1]}
+        	if [[ "${col^^}" == "POOL_SIZE" ]]; then
+                    pool_size=$val
+        	elif [[ "${col^^}" == "POOL_LIFETIME" ]]; then
+                    pool_lifetime=$val
+        	fi
+    	    done < <(grep . $tmpclg)
+    	    if [[ $pool_size == "0" ]]; then
+    		sho "External connections pool is supported but now DISABLED." $log4all
+    	    else
+    		sho "External connections pool ENABLED: ExtConnPoolSize = $pool_size, ExtConnPoolLifeTime = $pool_lifetime" $log4all
+        	sho "Final report will have statistics about external connections pool usage." $log4all
+            fi
+            
+            eval "$1=1"
+            #conn_pool_support=1
+            
+            # added 12.12.2020: HQbird currently does not suppoer 'RESETTING' system variable!
+            # If current FB instance does not support 'resetting' system variable then
+            # STDERR file will be like this:
+            #     Statement failed, SQLSTATE = 42S22
+            #     unsuccessful metadata update
+            #     -CREATE OR ALTER TRIGGER TMP_TRG_TEST_RESETTING failed
+            #     -Dynamic SQL Error
+            #     -SQL error code = -206
+            #     -Column unknown
+            #     -RESETTING
+            
+            if grep -q -i "SQLSTATE = 42S22" $tmperr && grep -q -i "Column unknown" $tmperr ; then
+                sho "This FB instance does NOT support 'RESETTING' system variable. DB-level triggers will not refer to it." $log4all
+        	eval "$2=0"
+                #resetting_support=0
+            else
+                sho "This FB instance supports 'RESETTING'. DB-level triggers will refer to it for logging ALTER SESSION RESET event." $log4tmp
+        	eval "$2=1"
+                #resetting_support=1
+            fi
+        else    
+            sho "Result: UNKNOWN. Check SQL script !tmpsql!" $log4all
+	    echo Script is now terminated.
+	    exit 1
+	fi
+    fi
+
+    rm -f $tmpsql $tmpclg $tmperr
+        
+    sho "Routine $FUNCNAME: finish." $log4all
+
+}
+# end of chk_conn_pool_support
+
+############################################################
+###                  m a i n    p a r t                  ###
+############################################################
 
 
 [ -z $1 ] && msg_noarg && exit 1
@@ -3010,6 +3391,7 @@ vars=(
     warm_time
     working_mode
     actions_todo_before_reconnect
+    use_es
 )
 
 for i in ${vars[@]}; do
@@ -3062,21 +3444,53 @@ if [ $mon_unit_perf -eq 2 ]; then
 fi
 
 if [[ ! "$fb" == "25" ]]; then
-    if [[ -n "${mon_query_role}" && -z "${mon_usr_prefix}" || -z "${mon_query_role}" && -n "${mon_usr_prefix}"  ]]; then
-        sho "CONFIGURATION ISSUE. Parameters 'mon_query_role' and  'mon_usr_prefix' must be either both defined or both commented." $log4all
+    #if [[ -n "${mon_query_role}" && -z "${mon_usr_prefix}" || -z "${mon_query_role}" && -n "${mon_usr_prefix}"  ]]; then
+    if [[ -n "${mon_usr_prefix}" && -n "${mon_usr_passwd}" && -n "${mon_query_role}" ]]; then
+        :
+    elif [[ -z "${mon_usr_prefix}" && -z "${mon_usr_passwd}" && -z "${mon_query_role}" ]]; then
+        :
+    else
+        sho "CONFIGURATION ISSUE. Parameters 'mon_usr_prefix', 'mon_usr_passwd' and 'mon_query_role' must be either all defined or all commented out." $log4all
         pause Press any key to FINISH this script. . .
         exit 1
     fi
-
-    if [[ mon_unit_perf -gt 0 && ( -z "${mon_usr_prefix}" || -z "${mon_query_role}" )  ]]; then
-        # 22.08.2020 temply(?) disabled
-        #export mon_usr_prefix=tmp_oltp_emul_user_
-        #export mon_query_role=tmp_oltp_emul_worker
-        #echo -e "Test will work with monitoring tables but config parameters 'mon_query_role' and/or  'mon_usr_prefix' are commented."
-        #echo -e "We have to apply default values to them: mon_usr_prefix='$mon_usr_prefix' and mon_query_role='$mon_query_role'"
-        sho "Config parameter 'mon_unit_perf' is $mon_unit_perf but one of parameters: 'mon_usr_prefix', 'mon_query_role' is undefined." $log4all
-        sho "Monitoring data will be gathered on behalf of SYSDBA." $log4all
+    
+    if [[ -n "${mon_usr_prefix}" && "${mon_usr_prefix: -1}" != "_" ]]; then
+        sho "CONFIGURATION ISSUE. Parameter 'mon_usr_prefix'=${mon_usr_prefix} must end with an underscore character (_)" $log4all
+        pause Press any key to FINISH this batch. . .
+        exit 1
     fi
+    if [[ $use_es -eq 2 && $separate_workers -eq 1 ]]; then
+        if [[ -z "${mon_usr_prefix}" || -z "${mon_usr_passwd}" || -z "${mon_query_role}" ]]; then
+		cat <<-EOF >$log4tmp
+                CONFIGURATION ISSUE.
+                Parameter 'use_es' has value 2. This means that dynamic SQL (execute statement '...')
+                will be supplied with an extra option: ON EXTERNAL DATASOURCE, which leads to creation of a new connection
+                each time when this dynamic SQL executes.
+                Parameter 'separate_workers' has value 1. This means that every launcing ISQL session must work only with
+                data that was created by this session (i.e. within 'sandbox').
+                When statement is executed via EDS, the only way to provide it with number of working ISQL is name of user
+                who launched htis ISQL (and such name must end with unique numeric suffix).
+                
+                Following config parameters must be defined in that case:
+                'mon_query_role', 'mon_usr_prefix' and 'mon_usr_passwd'.
+                
+                Note that parameter 'mon_usr_prefix' must end with an underscore character (_) for proper extract number
+                of currently working ISQL session.
+                ----------------------------------------------------------------------------------------------------------
+                UNCOMMENT following parameters and assign them non-empty values. It can be defaults:
+            	    mon_query_role = tmp$oemul$worker
+            	    mon_usr_prefix = tmp$oemul$user_
+            	    mon_usr_passwd = #0Ltp-Emu1
+		EOF
+		cat $log4tmp
+		cat $log4tmp >> $log4all
+		rm -f $log4tmp
+		pause Press any key to FINISH this batch. . .
+		exit 1
+        fi
+    fi
+
 fi
 
 if [[ $host = "localhost" || $host = "127.0.0.1" ]]; then
@@ -3208,6 +3622,42 @@ fi
 
 rm -f $tmpchk $tmpclg $tmpadj
 
+###################################################
+
+# ==BEFORE== creating database we have to check whether current FB instance
+# does support CONNECTIONS POOL feature.
+# If yes then we can/have to make ALTER CONNECTIONS POOL CLEAR ALL
+# in order to drop infinite attachments that remians in FB 2.5 even
+# after last detach; this is BY DESIGN in FB 2.5, it is not considered ad bug.
+
+# ::: NOTE :::
+# Values of 'conn_pool_support' and 'resetting_support' will be written further
+# to the SETTINGS table in order to have ability to 'know' about these features
+# within PSQL. See routine 'sync_settings_with_conf'.
+
+conn_pool_support=2
+resetting_support=2
+
+chk_conn_pool_support conn_pool_support resetting_support
+
+if [[ $use_es -eq 2 && $conn_pool_support -eq 0 ]]; then
+	cat <<-EOF>$log4tmp
+		ATTENTION.  EXTERNAL CONNECTIONS POOL NOT SUPPORTED ###
+		Configuration parameter 'use_es' has value 2 which must be used
+		only when Firebird instance supports External connections pool.
+
+		Firebird instance on $host/$port DOES NOT support this.
+		You have to change value of 'use_es' parameter to 0.
+	EOF
+	cat $log4tmp
+	cat $log4tmp>>$log4all
+	rm -f $log4tmp
+	pause Press any key to FINISH this script. . .
+	exit 1
+fi
+
+###################################################
+
 rndname=$RANDOM
 
 cat <<-EOF >>$tmpchk
@@ -3331,10 +3781,13 @@ if grep -q -i $missing_db_pattern $tmperr; then
     fi
 
     #........................  c r e a t e    d a t a b a s e  ..............
-    db_create
+    db_create $fb
+
+    #..........  t e m p - l y    c h a n g e    F W    t o    O F F ........
+    adjust_fw_attrib async
 
     # ....................... b u i l d    d b    o b j e c t s .............
-    db_build
+    make_db_objects $fb
 
     rebuild_was_invoked=1
 else
@@ -3343,12 +3796,16 @@ else
 
     [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database EXISTS and its state is ONLINE."
 
+    #..........  t e m p - l y    c h a n g e    F W    t o    O F F ........
+    adjust_fw_attrib async
+
+
     # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
     ########################################################################################################
     db_build_finished_ok=0
     if [ -s $tmperr ];then
         #echo Script that checks whether DB building process was completed without errors is NOT EMPTY.
-	sho "At leat one ERROR found while checking result of previous DB building process." $log4all
+	sho "At least one ERROR found while checking result of previous DB building process." $log4all
         sho "Name of script: $tmpclg" $log4all
         sho "Name of errlog: $tmperr" $log4all
         cat $tmperr
@@ -3360,78 +3817,10 @@ else
         if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then
             db_build_finished_ok=1
         fi
-
-	cat <<-EOF >$tmpchk
-		-- We check here that Firebird account has enough rights to WRITE into GTT files.
-		-- These files are created in the folder that is defined by 1st existent variable:
-		-- 1) FIREBIRD_TMP;
-		-- 2.1) (Windows): TEMP, TMP, USERPROFILE, Windows directory - see Windows API function GetTempPath:
-		--      https://docs.microsoft.com/en-us/windows/desktop/api/fileapi/nf-fileapi-gettemppatha
-		-- 2.2) (POSIX) /tmp
-		--    Place where GTT data must be stored can be explicitly specified in a Firebird daemon starter script
-		--    by assigning some existing folder to variable FIREBIRD_TMP.
-		--    When OS loader 'systemd' is used then form of such variable assignment is:
-		--    Environment="FIREBIRD_TMP=/var/my_folder_for_gtt"
-		--    Name of Firebird loader script depends on mode in which DBMS will work, namely: is it Classic or others.
-		--    It can be found in the folder '/usr/lib/systemd/system/' (RH/CentOS) or '/lib/systemd/system/' (Ubuntu/Debian)
-		--    and has following name:
-		--    * xinetd.service - if Firebird works in Classic mode or
-		--    * firebird-superserver.service - if Firebird works in Super or SuperClassic mode.
-		-- ------------------------------------------------------------------------------------
-		-- When Firebird process has no rights to that directory, test will fail with message:
-		-- #####################################################
-		-- Statement failed, SQLSTATE = 08001
-		-- I/O error during "open O_CREAT" operation for file ""
-		-- -Error while trying to create file
-		-- -No such file or directory
-		-- #####################################################
-		-- See also:
-		-- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1176238&msg=18172438
-		set echo on;
-		set bail on;
-		recreate GLOBAL TEMPORARY table tmp\$$rndname(id int, s varchar(36) unique using index tmp_s_unq_$rndname );
-		commit;
-		set count on;
-		insert into tmp\$$rndname(id, s) select rand()*1000, uuid_to_char(gen_uuid()) from rdb\$types;
-		set list on;
-		select min(id) as id_min, max(id) as id_max, count(*) as cnt from tmp\$$rndname;
-		commit;
-		drop table tmp\$$rndname;
-		set echo off;
-		-- At this point one may be sure that FB really has enough rights to create files for GTT data.
-		commit;
-		quit;
-	EOF
-	run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
-	display_intention "Check whether 'firebird' account has enough rights to folder where GTT data will be stored." "$run_isql" "$tmpclg" "$tmperr"
-	$run_isql 1>$tmpclg 2>$tmperr
-	if [ -s $tmperr ];then
-		cat <<- EOF
-		##########################################################################
-		DBMS account ('firebird') has no sufficient rights to read/write into GTT.
-		Check that folder defined by variable FIREBIRD_TMP actually exists and can
-		be accessed by 'firebird' account. If no such variable was defined then
-		check rights to the system folder /tmp.
-		##########################################################################
-		
-		EOF
-		echo Content of .SQL script '$tmpchk':
-		grep . $tmpchk
-		echo
-		echo Content of STDOUT file '$tmpclg':
-		grep . $tmpclg
-		echo
-		echo Content of STDERR file '$tmperr':
-		grep . $tmperr
-		echo
-		pause Press any key to FINISH this script. . .
-		exit 1
-	else
-		echo All fine: no errors. Check STDOUT:
-		echo ==================================
-		grep . $tmpclg
-		echo ==================================
-	fi
+        
+        # Try to create GTT and add several rows in it (check that FIREBIRD_TMP points to valid and accessible folder).
+        # Try to restart generator g_stop_test with 0.
+        chk_db_access
     fi
 
     echo db_build_finished_ok=\|$db_build_finished_ok\|
@@ -3448,12 +3837,10 @@ else
             echo -e '################################################################################'
             pause
         fi
-
+        
         # ....................... b u i l d    d b    o b j e c t s .............
-        db_build
+        make_db_objects $fb
 
-        #else # $db_build_finished_ok = 1
-        # moved below, common block
         rebuild_was_invoked=1
 
     fi # $db_build_finished_ok = 0 or 1
@@ -3479,76 +3866,37 @@ chk_FSCacheUsage $fb $bld_no $log4all
 # *** COMMON BLOCK ***
 # ********************
 
+if [[ $rebuild_was_invoked -eq 0 ]]; then
+    # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    # :::   S y n c h r o n i z e    t a b l e    'S E T T I N G S'    w i t h    c o n f i g    :::
+    # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-# /////////////////////////// check whether connections pool is supported /////////////////
-cat <<-EOF >$tmpchk
-    set bail off;
-    set heading off;
-    set list off;
-    select current_timestamp || ' - point before clear connections pool' as msg from rdb\$database;
-    set echo on;
-    ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;
-    set echo off;
-    select current_timestamp || ' - point after clear connections pool' as msg from rdb\$database;
-EOF
+    rm -f $tmpchk
+    sho "Synchronize SETTINGS table with current config: generate temporary SQL script." $log4all
+    sync_settings_with_conf $fb $tmpchk
 
-# for STANDARD build of Firebird (which does NOT support connection pool)
-# last statement will issue:
-# ===
-#   Statement failed, SQLSTATE = 42000
-#   Dynamic SQL Error
-#   -SQL error code = -104
-#   -Token unknown - line ..., column ...
-#   -CONNECTIONS
-# ==
+	cat <<-"EOF" >>$tmpchk
+	    -- 02.01.2019: delete all records in mon_cache_memory table
+	    -- that could remain there after interrupted previous run:
+	    set list on;
+	    select 'ZAP table mon_cache_memory, start at ' || cast('now' as timestamp) as msg from rdb$database;
+	    commit;
+	    set transaction NO wait;
+	    set count on;
+	    delete from mon_cache_memory;
+	    set count off;
+	    commit;
+	    select 'ZAP table mon_cache_memory, finish at ' || cast('now' as timestamp) as msg from rdb$database;
+	    set list off;
+	EOF
 
-run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
-display_intention "Check whether this FB has support connections pool." "$run_isql" "$tmpclg" "$tmperr"
-$run_isql 1>$tmpclg 2>$tmperr
+    run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
+    display_intention "Apply generated SQL for synchronize settings with current config." "$run_isql" "$tmpclg" "$tmperr"
 
-conn_pool_support=0
-if grep -q -i "SQLSTATE = 42000" $tmperr && grep -q -i "Token unknown" $tmperr ; then
-    sho "This build does not support CONNECTIONS POOL." $log4all
-    tail -15 $tmperr
-else
-    conn_pool_support=1
-    catch_err $tmperr "At least one error occured when querying connections pool data at '$host/$port:$dbnm'" 0
-    tail -15 $tmpclg | grep -i "connections pool"
-    sho "This build DOES support connections pool." $log4all
+    $run_isql 1>$tmpclg 2>$tmperr
+    catch_err $tmperr "Table SETTINGS was not synchronized with current config values."
+    grep -i "msg " $tmpclg
 fi
-# //////////////////////////////////////////////////////////////////////////////////////////
-
-
-# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# :::   S y n c h r o n i z e    t a b l e    'S E T T I N G S'    w i t h    c o n f i g    :::
-# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-rm -f $tmpchk
-sho "Synchronize SETTINGS table with current config: generate temporary SQL script." $log4all
-sync_settings_with_conf $fb $tmpchk
-
-
-cat <<-"EOF" >>$tmpchk
-    -- 02.01.2019: delete all records in mon_cache_memory table
-    -- that could remain there after interrupted previous run:
-    set list on;
-    select 'ZAP table mon_cache_memory, start at ' || cast('now' as timestamp) as msg from rdb$database;
-    commit;
-    set transaction NO wait;
-    set count on;
-    delete from mon_cache_memory;
-    set count off;
-    commit;
-    select 'ZAP table mon_cache_memory, finish at ' || cast('now' as timestamp) as msg from rdb$database;
-    set list off;
-EOF
-
-run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $tmpchk"
-display_intention "Apply generated SQL for synchronize settings with current config." "$run_isql" "$tmpclg" "$tmperr"
-
-$run_isql 1>$tmpclg 2>$tmperr
-catch_err $tmperr "Table SETTINGS was not synchronized with current config values."
-grep -i "msg " $tmpclg
 
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 # :::   A d j u s t     D D L    f o r     's e p a r a t e _ w o r k e r s'     s e t t i n g   + :::
@@ -3559,7 +3907,7 @@ grep -i "msg " $tmpclg
 # 1. GENERATE temporary script "$tmpadj" which will contain dynamically generated DDL statements
 #    for PERF_SPLIT_nn tables
 
-run_isql="$isql_name $dbconn -q -nod -n -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
+run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
 display_intention "Update DDL to current value of 'separate_workers', step-1: generate SQL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpadj 2>$tmperr
 # ::: NB ::: 30.09.2019
@@ -3576,6 +3924,10 @@ run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpadj"
 display_intention "Update DDL to current value of 'separate_workers', step-2: apply generated SQL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects remains unchanged. Check script $tmpadj"
+
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+# :::   A d j u s t     D D L    f o r     'u s e d _ i n _ r e p l i c a t i o n'     s e t t i n g   :::
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 # ------------------------------
 # Adjust DDL of tables with current value of 'used_in_replication' parameter:
@@ -3633,13 +3985,33 @@ if [ -s "$sleep_ddl" ]; then
         display_intention "Attempt to apply SQL script '$sleep_ddl' that defines UDF for pauses in execution." "$run_isql" "$tmpclg" "$tmperr"
         $run_isql 1>$tmpclg 2>$tmperr
 	if [ -s "$tmperr" ]; then
+
+            # Get current OS family. Outcome examples: #ID="centos" ; #ID="ubuntu" ;     #ID="debian"
+            os_family=$(cat /etc/*release* | grep -m1 -i "^id=")
+            if [[ -n "${clu}" && ( $os_family == *"ubuntu"* || $os_family == *"debian"* ) ]]; then
 		cat <<- EOF >>$tmperr
 		
-		Ensure that firebird.conf contains parameter UDFAccess which points to
-		the folder where UDF binary exists, e.g.:  UDFAccess =  Restrict UDF
+		Ensure that /etc/firebird/${fb:0:1}.${fb:1:1}/firebird.conf contains parameter
+		'UdfAccess' which points to the folder where UDF binary exists.
+		Note that this folder must be specified as absolute path rather than relative, e.g.:
+		
+		UdfAccess =  Restrict /usr/lib/firebird/${fb:0:1}.${fb:1:1}/UDF
+		
 		EOF
+            else
+		cat <<- EOF >>$tmperr
+		
+		Ensure that $fbc/firebird.conf contains parameter 'UdfAccess' which points to
+		the folder where UDF binary exists, e.g.:
+		
+		UdfAccess =  Restrict UDF
+		
+		EOF
+            fi
+	    cat $tmperr >>$log4all
 	fi
-        catch_err $tmperr "Could not create/update UDF for sleep. Check file $sleep_ddl"
+        catch_err $tmperr "Could not create/update UDF for sleep. Check messages above and file $sleep_ddl"
+
         if grep -q "multiplier_for_sleep_arg" $tmpclg; then
             #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
             #:::   a d j u s t     m u l t i p l i e r    t o    i n p u t     f o r   g e t    d e l a y   i n   s e c o n d s  :::
@@ -3666,6 +4038,70 @@ else
 fi
 
 
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+# :::   A d j u s t     D D L    f o r     'u s e _ e s'    s e t t i n g:                     :::
+# :::   enable EDS calls when use_es=2, disable when use_es=1, dont change anything otherwise  :::
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+# 20.11.2020
+
+if [[ "$fb" != "25" ]]; then
+
+    sho "Adjust DDL with current 'use_es' value. Step-1: generating auxiliary script." $log4all
+    if [[ $use_es -eq 0 ]]; then
+        sho "Code that uses ES[/EDS] will be replaced back to static PSQL." $log4all
+    elif [[ $use_es -eq 1 ]]; then
+        sho "Static PSQL and code with ES/EDS will be replaced to ES-only." $log4all
+    else
+        sho "Static PSQL and code with ES will be replaced with ES/EDS blocks." $log4all
+    fi
+
+    # NOTE: here we can be sure that 'use_es' can be 2 *only* if External Pool is supported by current FB instance!
+    run_isql="$isql_name $dbconn $dbauth -q -nod -i $shdir/oltp_adjust_eds_calls.sql"
+    display_intention "Step-1: generating SQL script with necessary statements. Please wait." "$run_isql" "$tmpadj" "$tmperr"
+    $run_isql 1>$tmpadj 2>$tmperr
+    catch_err $tmperr "Could not generate SQL script for current value of 'use_es'=$use_es. Check STDERR log $tmperr"
+
+
+    run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpadj"
+    display_intention "Step-2: applying auxiliary script." "$run_isql" "$tmpclg" "$tmperr"
+
+    $run_isql 1>$tmpclg 2>$tmperr
+    catch_err $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
+
+    sho "Completed. Source code has been adjusted according to 'use_es' config parameter." $log4all
+
+    #-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=
+
+    if [[ $use_es -eq 2 ]]; then
+        msg="Creating PERF_EDS_SPLIT_nn tables for logging Ext. Connections Pool events."
+    else
+        msg="Drop all PERF_EDS_SPLIT_nn tables that might be created for logging Ext. Connections Pool events."
+    fi
+    sho "$msg" $log4all
+
+    run_isql="$isql_name $dbconn $dbauth -q -nod -i $shdir/oltp_adjust_eds_perf.sql"
+    display_intention "Step-1: generating SQL script with necessary statements. Please wait." "$run_isql" "$tmpadj" "$tmperr"
+    $run_isql 1>$tmpadj 2>$tmperr
+    catch_err $tmperr "Could not generate SQL script for add/drop PERF_EDS_SPLIT_nn tables. Check STDERR log $tmperr"
+
+    sho "Step-2: applying auxiliary script." $log4all
+    run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpadj"
+    display_intention "Step-2: applying auxiliary script." "$run_isql" "$tmpclg" "$tmperr"
+    $run_isql 1>$tmpclg 2>$tmperr
+    catch_err $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
+
+    if [[ $use_es -eq 2 ]]; then
+        sho "Completed. Logging of Ext. Pool events will be splitted on several PERF_EDS_SPLIT_nn tables." $log4all
+     else
+        sho "Completed. Objects for logging Ext. Pool events have been dropped." $log4all
+    fi
+
+    rm -f $tmpadj $tmpclg $tmperr
+
+fi
+# fb <> 25 --> adjust code with 'use_es' and activate DB-level triggers
+
+
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 # :::   A D D    R O L E     a n d    N O N - P R I V I L E G E D     U S E R S     F O R    M O N$    :::
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -3673,8 +4109,114 @@ fi
 adjust_grants $mon_unit_perf
 
 
+# 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
+#    all working ISQL sessions by adding single character + LF into this file.
+# 2. If $use_external_to_stop is UNDEFINED, create temp shell script in $tmpdir with name '1stoptest.tmp.sh'
+#    and display message about ability to stop test by running this temp script.
+####################
+gen_temp_sh_for_stop
+####################
+
+
+#=#+#=#+#=#+#=#+#=#+#  A C T I V A T E    D B - L E V E L    T R I G G E R S  #=#+#=#+#=#+##=#+#=#+#=
+rm -f $tmpchk
+cat <<-EOF >$tmpchk
+    -- Must be performed at the final stage of test preparing.
+    -- No output should be issued during this script work.
+    set bail on;
+    alter trigger trg_connect active;
+    set term ^;
+    execute block as
+    begin
+        -- conn_pool_support=$conn_pool_support ; use_es=$use_es
+EOF
+
+if [[ $conn_pool_support -eq 1 ]]; then
+	cat <<-EOF >>$tmpchk
+	    if (
+                exists(select * from rdb\$triggers where rdb\$trigger_name = upper('TRG_DISCONNECT') )
+                and exists(select * from rdb\$relations where rdb\$relation_name = upper('PERF_EDS') )
+                ) then
+            begin
+	        execute statement 'alter trigger trg_disconnect $( [[ $use_es -eq 2 ]] && echo "active" || echo "inactive" )';
+	EOF
+else
+	cat <<-"EOF" >>$tmpchk
+            if ( exists( select * from rdb$triggers where rdb$trigger_name = upper('TRG_DISCONNECT')  )
+                ) then
+            begin
+                execute statement 'alter trigger trg_disconnect inactive';
+	EOF
+fi
+
+cat <<-"EOF" >>$tmpchk
+        end
+    end
+    ^
+    set term ;^
+    commit;
+    set list on;
+    set count on;
+    select g.rdb$trigger_name as "Trigger name", iif(g.rdb$trigger_inactive=1, '### INACTIVE ###', 'OK, active') as "Status"
+    from rdb$triggers g
+    where
+        g.rdb$trigger_type in (
+             8195 --  'on transaction commit'
+            ,8196 -- 'on transaction rollback'
+            ,8194 -- 'on transaction start'
+            ,8193 -- 'on disconnect'
+            ,8192 -- 'on connect'
+        ) and
+        g.rdb$system_flag is distinct from 1 ;
+    -- select m.mon$forced_writes,m.mon$sweep_interval from mon$database m;
+EOF
+
+run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpchk"
+display_intention "Change state of DB-level triggers." "$run_isql" "$tmpclg" "$tmperr"
+
+$run_isql 1>$tmpclg 2>$tmperr
+catch_err $tmperr "Could not apply script for changing DB-level triggers. Check STDERR log $tmperr"
+
+sho "Completed." $log4all
+grep . $tmpclg
+grep . $tmpclg>>$log4all
+
+rm -f $tmpchk $tmpclg $tmperr
+
+
+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#
+
+#if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+adjust_sweep_attrib
+adjust_fw_attrib
+#fi
+
+# ...................... c r e a t e _ r e s u l t s _ s t o r a g e   ............
+
+# 28.04.2020. Check and create (if needed) database for storing settings and performance results 
+# for each subsequent test run. Database will be immediately backed up after creation.
+# See config parameter 'results_storage_fbk' for explanations.
+if [[ -z ${results_storage_fbk+x} ]]; then
+    sho "Parameter results_storage_fbk is undefined, skip creation of separate DB for storing test results." $log4all
+else
+    create_results_storage_fbk $results_storage_fbk $log4all
+fi
+
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+# :::   c h e c k    u p c o m i n g     t e s t     s e t t i n g s   :::
+# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+# 08.11.2018: SP sys_get_db_arch that shows current FB instance architercute (CS/SC/SS) uses
+# ES/EDS in order to detect whether FB runs as Classic server or no. This ES/EDS can remain
+# after its finish 'infinite attachment',i.e. it will exist even after parent connection make
+# detach from DB (quit) -- and this will be so if current build is experimental 2.5 with support
+# of  CONNECTIONS POOL.
+# We have to run "ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;" statement in tha case.
+
+show_db_and_test_params $conn_pool_support $log4all
+
 if [ $rebuild_was_invoked -eq 1 ]; then
-    # 02.11.18: moved here from db_build
+    # 02.11.18: moved here from make_db_objects
     if [[ $wait_after_create = 1 && $can_stop = 1 ]]; then
       sho "Database has been created SUCCESSFULLY and is ready for initial documents filling." $log4all
       echo
@@ -3684,7 +4226,6 @@ if [ $rebuild_was_invoked -eq 1 ]; then
       pause
     fi
 fi
-
 
 
 # get number of currently existed documents and update value of $init_docs if need:
@@ -3722,39 +4263,12 @@ if [ $init_docs -gt 0 ]; then
     # 4. Run just generated SQL: add new documents until their count less than $init_docs parameter:
     srv_frq=20 # frequency of service procedures call (srv_make_invnt_saldo, srv_make_money_saldo, srv_recalc_idx_stat)
 
-    # 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
-    #    all working ISQL sessions by adding single character + LF into this file.
-    # 2. If $use_external_to_stop is UNDEFINED, create temp shell script in $tmpdir with name '1stoptest.tmp.sh'
-    #    and display message about ability to stop test by running this temp script.
-    ####################
-    gen_temp_sh_for_stop
-    ####################
-
     ###############################################
     add_init_docs $tmpsql $tmplog $srv_frq $log4all
     ###############################################
 
-    # Adjusting FW to config parameter 'create_with_fw'
+    adjust_sweep_attrib
     adjust_fw_attrib
-
-    #if [[ $is_embed == 0 ]]; then
-    #    fbspref="$fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd "
-    #else
-    #    fbspref="$fbc/fbsvcmgr service_mgr "
-    #fi
-    #run_fbs="$fbspref action_properties dbname $dbnm prp_write_mode prp_wm_$create_with_fw"
-    #msg="Adjusting FW to config parameter 'create_with_fw' value: $create_with_fw"
-    #sho "$msg" $log4all
-    #display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
-    #$run_fbs 1>$tmpclg 2>$tmperr
-    #catch_err $tmperr "Check whether database exists, is online and has read_write access."
-
-    sho "Check attributes line from DB header info:" $log4all
-    run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
-    $run_fbs | grep -i attributes 1>>$tmpclg 2>&1
-    cat $tmpclg
-    cat $tmpclg>>$log4all
-    rm -f $tmpclg
 
     sho "FINISH initial data population." $log4all
     if [[ $wait_for_copy = 1 && $can_stop = 1 ]]; then
@@ -3769,35 +4283,6 @@ if [ $init_docs -gt 0 ]; then
 
 fi # $init_docs -gt 0
 
-if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
-    adjust_sweep_attrib
-    adjust_fw_attrib
-fi
-
-# ...................... c r e a t e _ r e s u l t s _ s t o r a g e   ............
-
-# 28.04.2020. Check and create (if needed) database for storing settings and performance results 
-# for each subsequent test run. Database will be immediately backed up after creation.
-# See config parameter 'results_storage_fbk' for explanations.
-if [[ -z ${results_storage_fbk+x} ]]; then
-    sho "Parameter results_storage_fbk is undefined, skip creation of separate DB for storing test results." $log4all
-else
-    create_results_storage_fbk $results_storage_fbk $log4all
-fi
-
-
-# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-# :::   c h e c k    u p c o m i n g     t e s t     s e t t i n g s   :::
-# ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-
-# 08.11.2018: SP sys_get_db_arch that shows current FB instance architercute (CS/SC/SS) uses
-# ES/EDS in order to detect whether FB runs as Classic server or no. This ES/EDS can remain
-# after its finish 'infinite attachment',i.e. it will exist even after parent connection make
-# detach from DB (quit) -- and this will be so if current build is experimental 2.5 with support
-# of  CONNECTIONS POOL.
-# We have to run "ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL;" statement in tha case.
-
-show_db_and_test_params $conn_pool_support $log4all
 
 ##############################################################
 #               w o r k i n g     p h a s e
@@ -3874,10 +4359,11 @@ echo $msg
 echo $msg>>$log4all
 echo>>$log4all
 
+
 if [ 1 -eq 0 ]; then
     echo "./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info AMP"
 
-    pause ... :::DEBUG::: stop_before_launch_single_isql...
+    #pause ... :::DEBUG::: stop_before_launch_single_isql...
 
     bash ./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info
 
@@ -3894,7 +4380,7 @@ fi
 #echo 6: ${file_name_with_test_params} 
 #echo 7: ${fbb} 
 #echo 8: ${file_name_this_host_info}
-#exit
+#exi
 
 for i in `seq $winq`
 do
