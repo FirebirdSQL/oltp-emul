@@ -30,6 +30,7 @@ create or alter procedure srv_gen_sql_make_oltp_worker returns( " " varchar(8192
     declare v_sessions_count smallint = null;
     declare i smallint;
     declare v_tmp_user_prefix varchar(31);
+    declare v_tmp_user_pswd varchar(31);
     declare v_tmp_worker_user varchar(31);
     declare v_tmp_worker_role varchar(31);
 begin
@@ -47,27 +48,35 @@ begin
         -- These values were added into SETTINGS in the routine 'sync_settings_with_conf'.
         select
              min(iif( s.mcode = upper('tmp_worker_user_prefix'), nullif(s.svalue, ''), null ))
+            ,min(iif( s.mcode = upper('tmp_worker_user_pswd'), nullif(s.svalue, ''), null ))
             ,min(iif( s.mcode = upper('tmp_worker_role_name'), nullif(s.svalue, ''), null ))
             ,min( cast( iif(s.mcode = upper('WORKERS_COUNT'), s.svalue, null) as int ))
         from settings s
-        where s.mcode in ( upper('tmp_worker_user_prefix'), upper('tmp_worker_role_name'), upper('WORKERS_COUNT') )
-        into v_tmp_user_prefix, v_tmp_worker_role, v_sessions_count;
+        where s.mcode in (  upper('tmp_worker_user_prefix')
+                           ,upper('tmp_worker_user_pswd')
+                           ,upper('tmp_worker_role_name')
+                           ,upper('WORKERS_COUNT')
+                         )
+        into
+             v_tmp_user_prefix
+            ,v_tmp_user_pswd
+            ,v_tmp_worker_role
+            ,v_sessions_count;
 
-        " " = '-- Found in SETTINGS table: tmp_worker_user_prefix='
-              || coalesce(v_tmp_user_prefix, '[null]')
+        " " = '-- Found in SETTINGS table:'
+              || ' tmp_worker_user_prefix=' || coalesce(v_tmp_user_prefix, '[null]')
+              || ', tmp_worker_user_passwd=' || coalesce(v_tmp_user_pswd, '[null]')
               || ', tmp_worker_role_name=' || coalesce(v_tmp_worker_role, '[null]')
               || ', sessions_count=' || coalesce(v_sessions_count, '[null]')
         ;
         suspend;
 
+        if ( v_tmp_user_prefix is null or v_tmp_user_pswd is null or v_tmp_worker_role is null ) then
+            exception ex_record_not_found 'At least one of mandatory values not found: ''tmp_worker_user_prefix'' or ''tmp_worker_user_pswd'' or ''tmp_worker_role_name''.';
 
         -- Value in SETTINGS table is updated every time with required number of ISQL sessions.
         -- This is done always before test run, see .bat:
         -- call :inject_actual_setting %fb% common workers_count '%winq%'
-        --select cast(s.svalue as int)
-        --from settings s
-        --where s.mcode = upper('WORKERS_COUNT')
-        --into v_sessions_count;
 
         if ( v_tmp_user_prefix > '' ) then
             begin
@@ -76,12 +85,12 @@ begin
                 while ( i <= v_sessions_count) do
                 begin
                     v_tmp_worker_user = v_tmp_user_prefix || lpad(i, 4, '0');
-                    " " = 'create or alter user ' || v_tmp_worker_user || ' password ''123'' revoke admin role;' ;
+                    " " = 'create or alter user ' || coalesce(v_tmp_worker_user,'[null]') || ' password ''' || coalesce(v_tmp_user_pswd,'[null]') || ''' revoke admin role;' ;
                     suspend;
                     -- ::: NB ::: 22.08.2020
                     -- DO NOT DELETE/CHANGE TAG '#OLTP_EMUL#'! IT IS USED IN SP SRV_DROP_OLTP_WORKER
                     -- FOR SEARCH AND DROP OLD TEMPORARY CREATED USERS/ROLE!
-                    " " = 'comment on user '|| v_tmp_worker_user 
+                    " " = 'comment on user '|| coalesce(v_tmp_worker_user, '[null]')
                           || ' is ''#OLTP_EMUL# temporary non-privileged user, created to gather monitoring'
                           || ' data using role "' || v_tmp_worker_role || '" and its grants.'
                           || ' See config parameters "tmp_worker_user_prefix" and "tmp_worker_role_name".'';'
@@ -204,7 +213,7 @@ begin
     end
     -- engine NOT starting with '2.5'
 end
-^ -- srv_gen_sql_make_oltp_worker 
+^ -- srv_gen_sql_make_oltp_worker
 set term ;^
 commit;
 
@@ -220,7 +229,7 @@ set transaction no wait;
 execute procedure srv_drop_oltp_worker;
 commit;
 
--- This issues SQL code for create role and users:
+-- This produces SQL code for create role and users:
 -- @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
 select * from srv_gen_sql_make_oltp_worker;
 -- @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@

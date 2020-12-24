@@ -17,6 +17,8 @@ recreate table results_perf_trace_pivot(id int);
 recreate table results_perf_stat_per_units(id int);
 recreate table results_perf_stat_per_tables(id int);
 recreate table results_reports(id int);
+recreate table results_crash_data(id int);
+recreate table results_crash_list(id int);
 commit;
 
 recreate global temporary table tmp$field_names(
@@ -304,10 +306,38 @@ recreate table results_reports(
     id bigint not null
     ,run_id bigint not null
     ,txt varchar(2048) character set utf8 -- deprecated: use only when no compressor presents; 22.08.2020 FB 2.5, 3.x, 4.x: max size = 8190
-    ,zip2b64 varchar(80) -- recommended: raw_text -> compress -> base64
+    ,zip2b64 varchar(80) -- field for storing html-reports: plain_html -> compress -> base64 --> generate SQL INSERT statements for each line of base64 text
     ,constraint res_reports_pk primary key(id)
     ,constraint res_reports_fk foreign key(run_id) references results_overall on delete cascade
 );
+
+-- 18.12.2020: table for storing 'head' info about dumps if FB crash detected.
+-- NOTE: stack traces will be stored in 'detailed' table results_crash_data
+recreate table results_crash_list(
+    id bigint not null
+    ,run_id bigint not null
+    ,dumpname varchar(255)
+    ,dumpsize bigint
+    ,dumptime timestamp
+    ,crashed_binary varchar(255) -- name of binary that crashed: '/opt/fb40/bin/firebird' etc
+    ,stack_trace_validation_result varchar(255) -- additional info about problems with gathering stack-trace (missed/invalid .debug package; truncated dump etc)
+    ,stack_trace_size bigint
+    ,constraint res_crash_list_pk primary key(id)
+    ,constraint res_crash_list_fk foreign key(run_id) references results_overall on delete cascade
+);
+
+-- table for storing stack traces. Child table for 'results_crash_list'
+recreate table results_crash_data(
+    id bigint not null
+    ,run_id bigint not null
+    ,crash_id bigint not null -- references to results_crash_list.id
+    ,txt2b64 varchar(80) -- deprecated: use only when no compressor presents: result of converting plain text to base64
+    ,zip2b64 varchar(80) -- field for storing stack-trace: plain_text -> compress -> base64 --> generate SQL INSERT statements for each line of base64 text
+    ,constraint res_crash_data_pk primary key(id)
+    ,constraint res_crash_data_fk foreign key(crash_id) references results_crash_list on delete cascade
+);
+
+
 
 commit;
 
@@ -388,6 +418,18 @@ end
 ^
 
 create or alter trigger trg_results_reports_bi for results_reports active before insert as
+begin
+    new.id = coalesce(new.id, gen_id(g_results,1));
+end
+^
+
+create or alter trigger trg_results_crash_data_bi for results_crash_data active before insert as
+begin
+    new.id = coalesce(new.id, gen_id(g_results,1));
+end
+^
+
+create or alter trigger trg_results_crash_list_bi for results_crash_list active before insert as
 begin
     new.id = coalesce(new.id, gen_id(g_results,1));
 end

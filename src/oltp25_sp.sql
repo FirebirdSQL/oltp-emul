@@ -122,6 +122,14 @@ begin
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
 
+    -- check that all needed context variables EXIST, otherwise terminate test:
+    execute procedure sp_check_ctx(
+         'USER_SESSION', 'C_SUPPLIER_DOC_MAX_ROWS'
+        ,'USER_SESSION', 'C_CUSTOMER_DOC_MAX_ROWS'
+        ,'USER_SESSION', 'C_SUPPLIER_DOC_MAX_QTY'
+        ,'USER_SESSION', 'C_CUSTOMER_DOC_MAX_QTY'
+    );
+
     select result from fn_oper_order_by_customer into fn_oper_order_by_customer;
     select result from fn_oper_retail_reserve  into fn_oper_retail_reserve ;
     select result from fn_oper_order_for_supplier into fn_oper_order_for_supplier;
@@ -218,7 +226,7 @@ begin
         and r.mode containing 'new_doc' 
     into v_snd_optype_id, v_storno_sub;
 
-    v_info = 'view='||v_source_for_random_id||', rows='||v_doc_rows||', oper='||a_optype_id;
+    v_info = 'view='||trim(v_source_for_random_id)||', rows='||v_doc_rows||', oper='||a_optype_id;
 
     delete from tmp$shopping_cart where 1=1;
     row_cnt = 0;
@@ -3496,7 +3504,7 @@ end
 --------------------------------------------------------------------------------
 
 
-create or alter procedure tmp_aggregate_perf_data_autogen( a_ignore_stop_flag dm_sign = 0 )
+create or alter procedure tmp_aggregate_perf_log_autogen( a_ignore_stop_flag dm_sign = 0 )
 returns (
     msg dm_info
 ) as

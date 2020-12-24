@@ -1103,6 +1103,8 @@ recreate table perf_estimated(
     ,minute_since_test_start int
     ,success_count numeric(12,2)
     ,worker_id dm_ids
+    ,pool_active int -- not needed in 2.5 but required in 3.x+; see sp_add_perf_log in oltp_common.sql
+    ,pool_idle int -- not needed in 2.5 but required in 3.x+
     ,att_id int default current_connection
     ,dts timestamp default 'now'
     ,constraint pk_perf_estimated primary key(id)
@@ -1332,58 +1334,10 @@ end
 
 ^ -- fn_is_validation_trouble
 
-create or alter procedure fn_halt_sign(a_gdscode int) returns (result smallint)
-as
-    declare v_halt_on_severe_error dm_name;
+create or alter procedure fn_halt_sign(a_gdscode int) returns (result smallint) as
 begin
-    result = 0;
-    -- refactored 13.08.2014 - see setting 'HALT_TEST_ON_ERRORS' (oltp_main_filling.sql)
-    v_halt_on_severe_error = rdb$get_context('USER_SESSION', 'HALT_TEST_ON_ERRORS');
-
-    if ( a_gdscode  = 0 ) then result =1; -- 3.x SC & CS trouble, core-4565!
-
-    -- 'arith_except' (Arithmetic exception, numeric overflow, or string truncation):
-    -- all these errors must be fixed by increasing of field size or check source code.
-    -- Particularly, string truncation of 'v_call' variable (when it was modified by
-    -- debug code in sp_make_qty_storno and sp_kill_qstorno_ret_qs2qd) was actual reason
-    -- of "performance regression" in 4.0 since 16-jul-2016: variable of unicode_fss type
-    -- does not allow to fit more chars than declared len, even if all chars are ascii (1 byte).
-    -- See also letter from hvlad 06-jan-2017 01:59
-    if ( a_gdscode = 335544321 ) then result = 1;
-
-    if ( result = 0 and v_halt_on_severe_error containing 'CK'  ) then
-        result = iif( a_gdscode
-                      in ( 335544347 -- not_valid    Validation error for column @1, value "@2".
-                          ,335544558 -- check_constraint    Operation violates CHECK constraint @1 on view or table @2.
-                         )
-                     ,1
-                     ,0
-                    );
-     if (result = 0 and v_halt_on_severe_error containing 'PK' ) then
-         result = iif( a_gdscode
-                       in ( 335544665 -- unique_key_violation (violation of PRIMARY or UNIQUE KEY constraint "T1_XY" on table "T1")
-                           ,335544349 -- no_dup (attempt to store duplicate value (visible to active transactions) in unique index "T2_XY") - without UNQ constraint
-                          )
-                      ,1
-                      ,0
-                     );
-     if (result = 0 and v_halt_on_severe_error containing 'FK' ) then
-         result = iif( a_gdscode
-                       in ( 335544466 -- violation of FOREIGN KEY constraint @1 on table @2
-                           ,335544838 -- Foreign key reference target does not exist (when attempt to ins/upd in DETAIL table FK-field with value for which parent ID has been changed or deleted - even in uncommitted concurrent Tx)
-                           ,335544839 -- Foreign key references are present for the record  (when attempt to upd/del in PARENT table PK-field and rows in DETAIL (no-cascaded!) exists for old value)
-                          )
-                      ,1
-                      ,0
-                     );
-
-    if ( result = 0 and v_halt_on_severe_error containing 'ST'  ) then
-        result = iif( a_gdscode = 335544842, 1, 0); -- trouble in 3.0 SC only: this error appears at the TOP of stack and this prevent following job f Tx
-
-    suspend; -- 1 ==> force test to be stopped itself
-
+    suspend; -- STUB! Actual code see in oltp_common_sp.sql 
 end
-
 ^ -- fn_halt_sign
 
 create or alter procedure fn_remote_process returns (result varchar(255)) as
@@ -2073,119 +2027,14 @@ commit;
 set term ^;
 
 create or alter procedure sp_flush_tmpperf_in_auton_tx(
-    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context(...,'LOG_PERF_STARTED_BY')
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context(..., 'LOG_PERF_STARTED_BY')
     a_context_rows_cnt int, -- how many 'records' with context vars need to be processed
     a_gdscode int default null
-)
-as
-    declare i smallint;
-    declare v_id dm_idb;
-    declare v_curr_tx int;
-    declare v_exc_unit char(1); -- type of column perf_log.exc_unit;
-    declare v_stack dm_stack;
-    declare v_dbkey dm_dbkey;
-    declare v_remote_addr dm_ip;
-    declare v_dts_beg timestamp; -- 08.10.2018
+) as
 begin
-    -- Flushes all data from context variables with names 'PERF_LOG_xxx'
-    -- which have been set in sp_f`lush_perf_log_on_abend for saving uncommitted
-    -- data in tmp$perf_log in case of error. Frees namespace USER_SESSION from
-    -- all such vars (allowing them to store values from other records in tmp$perf_log)
-    -- Called only from sp_abend_flush_perf_log
-    v_curr_tx = current_transaction;
-    select result from fn_remote_address into v_remote_addr; -- out from loop (seems that recalc on every iteration + cost of savepoint when call this fn)
-
-    -- 13.08.2014: we have to get full call_stack in AUTONOMOUS trn!
-    -- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1109867&msg=16422273
-    in autonomous transaction do -- *****  A U T O N O M O U S    T x, due to call fn_get_stack *****
-    begin
-        v_dts_beg = cast('now' as timestamp);
-        i=0;
-        while (i < a_context_rows_cnt) do
-        begin
-            v_exc_unit =  rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI');
-            if ( v_exc_unit = '#'
-                 or a_starter is null -- 21.04.2019 not yet fixed ...
-               ) then -- ==> call from unit <U> where exception occured (not from callers of <U>)
-                select result from fn_get_stack( (select result from fn_halt_sign(:a_gdscode)) ) into v_stack;
-            else
-                v_stack = null;
-
-            insert into v_perf_log( -- current unit: sp_flush_tmpperf_in_auton_tx
-                id,
-                unit,
-                fb_gdscode,
-                info,
-                exc_unit,
-                exc_info,
-                dts_beg,
-                dts_end,
-                elapsed_ms,
-                aux1,
-                aux2,
-                trn_id,
-                ip,
-                stack
-            )
-            values(
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_UNIT'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_GDS'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_INFO'),
-                :v_exc_unit,
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XNFO'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_BEG'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_END'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_MS'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX1'),
-                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX2'),
-                :v_curr_tx,
-                :v_remote_addr,
-                :v_stack
-            );
-
-            -- free space for new context vars which can be set on later iteration:
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID', null);    -- 1
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_UNIT', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_GDS', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_INFO', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI', null);  -- 5
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XNFO', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_BEG', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_END', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_MS', null);
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX1', null);  -- 10
-            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX2', null);
-    
-            i = i + 1;
-        end -- while (i < a_context_rows_cnt)
-
-        -- 11.01.2015: decided to profile this;
-        -- upd 08.10.2018: replace with V_perf_log (reduce lock contention)
-        insert into v_perf_log(
-             unit
-            ,info
-            ,dts_beg
-            ,dts_end
-            ,trn_id
-            ,ip
-            ,aux1
-            ,stack
-        ) values(
-             't$perf-abend:' || coalesce(:a_starter, 'unknown')    -- unit -- ?? 21.04.2019, not yet fixed ...
-            ,'gds='|| :a_gdscode||', saved ' ||:i||' rows in ATx'  -- info
-            ,:v_dts_beg                                            -- dts_beg
-            ,'now'                                                 -- dts_end
-            ,:v_curr_tx                                            -- trn_id
-            ,:v_remote_addr                                        -- IP
-            ,:i                                                    -- aux1
-            ,iif( :a_starter is null, ( select result from fn_get_stack( 1 ) ), null) -- ?? 21.04.2019, not yet fixed ...
-         );
-
-    end -- in autonom. tx
+  -- STUB! Actual code see in oltp_common_sp.sql
 end
-
-^ -- sp_flush_tmpperf_in_auton_tx
+^
 
 -- NB: commit MUST be here for FB 2.5!
 -- All even runs (2,4,6,...) of script containing procedures which references
@@ -2547,52 +2396,12 @@ create or alter procedure sp_check_ctx(
     ctx_varname_09 dm_ctxnv = '',
     ctx_nmspace_10 dm_ctxns = '',
     ctx_varname_10 dm_ctxnv = ''
-)
-as
-  declare msg varchar(512) = '';
+) as
 begin
-    -- Check for each non-empty pair that corresponding context variable
-    -- EXISTS in it's namespace. Raises exception and pass to it list of pairs
-    -- which does not exists.
-
-    if (ctx_nmspace_01>'' and rdb$get_context( upper(ctx_nmspace_01), upper(ctx_varname_01) ) is null  ) then
-        msg = msg||upper(ctx_nmspace_01)||':'||coalesce(upper(ctx_varname_01),'''null''');
-    
-    if (ctx_nmspace_02>'' and rdb$get_context( upper(ctx_nmspace_02), upper(ctx_varname_02) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_02)||':'||coalesce(upper(ctx_varname_02),'''null''');
-    
-    if (ctx_nmspace_03>'' and rdb$get_context( upper(ctx_nmspace_03), upper(ctx_varname_03) ) is null  ) then
-       msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_03)||':'||coalesce(upper(ctx_varname_03),'''null''');
-    
-    if (ctx_nmspace_04>'' and rdb$get_context( upper(ctx_nmspace_04), upper(ctx_varname_04) ) is null  ) then
-       msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_04)||':'||coalesce(upper(ctx_varname_04),'''null''');
-    
-    if (ctx_nmspace_05>'' and rdb$get_context( upper(ctx_nmspace_05), upper(ctx_varname_05) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_05)||':'||coalesce(upper(ctx_varname_05),'''null''');
-    
-    if (ctx_nmspace_06>'' and rdb$get_context( upper(ctx_nmspace_06), upper(ctx_varname_06) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_06)||':'||coalesce(upper(ctx_varname_06),'''null''');
-    
-    if (ctx_nmspace_07>'' and rdb$get_context( upper(ctx_nmspace_07), upper(ctx_varname_07) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_07)||':'||coalesce(upper(ctx_varname_07),'''null''');
-    
-    if (ctx_nmspace_08>'' and rdb$get_context( upper(ctx_nmspace_08), upper(ctx_varname_08) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_08)||':'||coalesce(upper(ctx_varname_08),'''null''');
-    
-    if (ctx_nmspace_09>'' and rdb$get_context( upper(ctx_nmspace_09), upper(ctx_varname_09) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_09)||':'||coalesce(upper(ctx_varname_09),'''null''');
-    
-    if (ctx_nmspace_10>'' and rdb$get_context( upper(ctx_nmspace_10), upper(ctx_varname_10) ) is null  ) then
-        msg = msg||iif(msg='', '', '; ')||upper(ctx_nmspace_10)||':'||coalesce(upper(ctx_varname_10),'''null''');
-
-    if (msg<>'') then
-    begin
-        execute procedure sp_add_to_abend_log( left( msg, 255 ) );
-        exception ex_context_var_not_found; -- using( msg );
-    end
+    -- STUB! Actual code see in oltp_common_sp.sql
 end -- sp_check_ctx
-
 ^
+
 set term ;^
 commit;
 
@@ -8047,12 +7856,8 @@ returns (
     src varchar(32760))
 as
 begin
-    -- redirector in 2.5; NB! this SP is called from 'oltp_split_heavy_tabs_1.sql'
-    for
-        select src from sys_get_proc_ddl( :a_func, :a_mode, :a_include_setterm )
-        into src
-    do
-        suspend;
+    -- NOT needed in FB 2.5.
+    suspend;
 end
 
 ^ -- sys_get_func_ddl

@@ -14,6 +14,16 @@ select 'oltp30_common.sql start at ' || current_timestamp as msg from rdb$databa
 set list off;
 commit;
 
+-- 14.12.2020: this table is used for check whether gdscode of currently raising exception requires test to be terminated or no.
+recreate table fb_severe_errors (
+    fb_gdscode int
+     -- value of test config 'halt_test_on_errors' parameter that must lead to termination;
+     -- Defautl is 'ANY': terminate test job regardless of this parameter if currently
+     -- raising exception has gdscode = <fb_gdscode>:
+    ,stop_if_halt_list dm_setting_value default 'ANY'
+    ,fb_descr dm_info
+    ,constraint fb_severe_errors_pk primary key(fb_gdscode)
+);
 
 
 --##################### restored 25.03.2019 #################################
@@ -102,7 +112,7 @@ select
     ,max(e.success_count) / nullif(avg(e.success_count), 0) max_to_avg_ratio
     ,count(e.success_count) rows_aggregated
      -- how many ISQL sessions were actually in work:
-    ,count(distinct e.worker_id) distinct_workers
+    ,avg(distinct e.worker_id) distinct_workers
 from v_perf_estimated e
 where e.minute_since_test_start>0
 group by e.minute_since_test_start
@@ -112,22 +122,9 @@ group by e.minute_since_test_start
 
 -- 06.10.2020
 create or alter view z_severe_errors as
-/*
-1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
-2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
-   Auto removing of .err files which did contain "string truncation" error was the main reason
-   why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
-*/
-select 0 as fb_gdscode, 'Unidentified error in PSQL code: gdscode=0 within WHEN block when exception raised.' as fb_descr from rdb$database union all
-select 335544321, 'string truncation: attempt to assign too long text into string variable.' from rdb$database union all
-select 335544347, 'not_valid: validation error for column.' from rdb$database union all
-select 335544558, 'check_constraint: operation violates CHECK constraint on view or table.' from rdb$database union all
-select 335544665, 'unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint'  from rdb$database union all
-select 335544349, 'no_dup: operation violates unique index' from rdb$database union all
-select 335544466, 'foreign_key: violation of FOREIGN KEY constraint "@1" on table "@2".'  from rdb$database union all
-select 335544838, 'foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table' from rdb$database union all
-select 335544839, 'foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause' from rdb$database
+select fb_gdscode, fb_descr from fb_severe_errors -- this table is filled in 'oltp_main_filling.sql'
 ;
+
 --------------------------------------------------------
 create or alter view z_severe_gds_occured as
 select
@@ -345,68 +342,355 @@ rows 1;
 commit;
 
 ------------------------------------------------------
+create or alter view v_current_privileges as
+-- 22.11.2020. Auxiliary for debug: view privileges for current_role and current_user
+-- See src\jrd\grant.epp:
+--    switch (UPPER7(privileges[0]))
+--    {
+--    case 'S':
+--        priv |= SCL_select;
+--        break;
+--    case 'I':
+--        priv |= SCL_insert;
+--        break;
+--    case 'U':
+--        priv |= SCL_update;
+--        break;
+--    case 'D':
+--        priv |= SCL_delete;
+--        break;
+--    case 'R':
+--        priv |= SCL_references;
+--        break;
+--    case 'X':
+--        priv |= SCL_execute;
+--        break;
+--    case 'G':
+--        priv |= SCL_usage;
+--        break;
+--    case 'C':
+--        priv |= SCL_create;
+--        break;
+--    case 'L':
+--        priv |= SCL_alter;
+--        break;
+--    case 'O':
+--        priv |= SCL_drop;
+--        break;
+--    }
 
+select
+     g.rdb$user as who_is_granted
+    ,g.rdb$relation_name as obj_name
+    ,decode( g.rdb$object_type
+             ,0,'table'
+             ,1,'view'
+             ,2,'trigger'
+             ,5,'procedure'
+             ,7,'exception'
+             ,9,'domain'
+             ,11,'charset'
+             ,13,'role'
+             ,14,'generator'
+             ,15,'function'
+             ,16,'blob filt'
+             ,18,'package'
+             ,22,'systable'
+             ,cast(g.rdb$object_type as varchar(10))
+           ) as obj_type
+    ,rpad(lpad(max(iif(g.rdb$privilege='S','*',' ')),4,' '),7,' ') as "select"
+    ,rpad(lpad(max(iif(g.rdb$privilege='I','*',' ')),4,' '),7,' ') as "insert"
+    ,rpad(lpad(max(iif(g.rdb$privilege='U','*',' ')),4,' '),7,' ') as "update"
+    ,rpad(lpad(max(iif(g.rdb$privilege='D','*',' ')),4,' '),7,' ') as "delete"
+    ,rpad(lpad(max(iif(g.rdb$privilege='G','*',' ')),4,' '),7,' ') as "usage"
+    ,rpad(lpad(max(iif(g.rdb$privilege='X','*',' ')),4,' '),7,' ') as "exec"
+    ,rpad(lpad(max(iif(g.rdb$privilege='R','*',' ')),4,' '),7,' ') as "refer"
+    ,rpad(lpad(max(iif(g.rdb$privilege='C','*',' ')),4,' '),7,' ') as "create"
+    ,rpad(lpad(max(iif(g.rdb$privilege='L','*',' ')),4,' '),7,' ') as "alter"
+    ,rpad(lpad(max(iif(g.rdb$privilege='O','*',' ')),4,' '),7,' ') as "drop"
+    ,rpad(lpad(max(iif(g.rdb$privilege='M','*',' ')),4,' '),7,' ') as "member"
+from rdb$user_privileges g
+where g.rdb$user in( current_user, current_role )
+group by 1,2,3
+;
+--------------------------------------------------
 
 set term ^;
 
-create or alter procedure sp_cache_rules_for_distr( a_table dm_dbobj )
-returns(
-    mode dm_name,
-    snd_optype_id  bigint,
-    rcv_optype_id  bigint,
-    rows_to_multiply int
-)
+create or alter procedure fn_halt_sign(a_gdscode int) returns (result smallint)
 as
-    declare v_ctx_prefix type of dm_ctxnv;
-    declare v_stt varchar(255);
-    declare i int;
-    declare v_mode dm_name;
-    declare v_snd_optype_id type of dm_idb;
-    declare v_rcv_optype_id type of dm_idb;
-    declare v_rows_to_multiply int;
+    declare v_halt_on_severe_error dm_name;
 begin
-    if ( upper(coalesce(a_table,'')) not in ( upper('QDISTR'), upper('PDISTR') ) )
+    result = 0;
+    -- Searches in the table FB_SEVERE_ERRORS record which match to :a_gdscode and meets to current value of 
+    -- config parameter 'HALT_TEST_ON_ERRORS' ( list of mnemonas for different severe errors: PK/FK/check violations).
+    -- If current :a_gdscode found field FB_SEVERE_ERRORS.stop_if_halt_list either 'ANY' or can be found in the mnemonas
+    -- list <HALT_TEST_ON_ERRORS> then returns 1, which means that test must be terminated.
+    if (
+        exists( select * 
+                from fb_severe_errors e
+                where
+                    e.fb_gdscode = :a_gdscode and -- primary key
+                    (
+                        e.stop_if_halt_list  = 'ANY'
+                        or
+                        rdb$get_context('USER_SESSION', 'HALT_TEST_ON_ERRORS') containing e.stop_if_halt_list
+                    )
+              )
+       )
     then
-      exception ex_bad_argument; --  'argument @1 passed to unit @2 is invalid';
+        result = 1;
 
-    -- cache records from rules_for_Qdistr and rules_for_Pdistr in context variables
-    -- for fast output of them (without database access)
+    suspend; -- 1 ==> force test to be stopped itself
 
-    v_ctx_prefix = 'MEM_TABLE_'||upper(a_table)||'_'; -- 'MEM_TABLE_QDISTR' or 'MEM_TABLE_PDISTR'
-    v_stt='select mode, snd_optype_id, rcv_optype_id' || iif( upper(a_table)=upper('QDISTR'),', storno_sub',', rows_to_multiply ' )
-          ||' from rules_for_'||a_table;
-    if ( rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') is null ) then
-    begin
-        i = 1;
-        for
-            execute statement( v_stt )
-            into v_mode, v_snd_optype_id, v_rcv_optype_id, v_rows_to_multiply
-        do begin
-            rdb$set_context(
-            'USER_SESSION'
-            ,v_ctx_prefix||i
-            ,rpad( v_mode ,80,' ')
-             || coalesce( cast(v_snd_optype_id as char(18)), rpad('', 18,' ') )
-             || coalesce( cast(v_rcv_optype_id as char(18)), rpad('', 18,' ') )
-             || coalesce( cast(v_rows_to_multiply as char(10)), rpad('', 10,' ') )
-            );
-            rdb$set_context('USER_SESSION', v_ctx_prefix||'CNT', i);
-            i = i+1;
-        end
-    end
-    i = 1;
-    while ( i <= cast(rdb$get_context('USER_SESSION', v_ctx_prefix||'CNT') as int) )
-    do begin
-        mode = trim( substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 1 for 80 ) );
-        snd_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 81 for 18 )), '') as dm_idb);
-        rcv_optype_id = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 99 for 18 )), '') as dm_idb);
-        rows_to_multiply = cast( nullif(trim(substring( rdb$get_context('USER_SESSION', v_ctx_prefix||i) from 117 for 10 )), '') as int);
-        suspend;
-        i = i+1;
-    end
 end
 
-^ -- sp_cache_rules_for_distr
+^ -- fn_halt_sign
+
+create or alter procedure sp_flush_tmpperf_in_auton_tx(
+    a_starter dm_unit,  -- name of module which STARTED job, = rdb$get_context(..., 'LOG_PERF_STARTED_BY')
+    a_context_rows_cnt int, -- how many 'records' with context vars need to be processed
+    a_gdscode int default null
+)
+as
+    declare i smallint;
+    declare v_id dm_idb;
+    declare v_curr_tx int;
+    declare v_exc_unit char(1); -- type of column perf_log.exc_unit;
+    declare v_stack dm_stack;
+    declare v_dbkey dm_dbkey;
+    declare v_dts_beg timestamp; -- 08.10.2018
+begin
+    -- Flushes all data from context variables with names 'PERF_LOG_xxx'
+    -- which have been set in sp_f`lush_perf_log_on_ABEND for saving uncommitted
+    -- data in tmp$perf_log in case of error. Frees namespace USER_SESSION from
+    -- all such vars (allowing them to store values from other records in tmp$perf_log)
+    -- Called only from sp_abend_flush_perf_log
+    v_curr_tx = current_transaction;
+
+    -- 13.08.2014: we have to get full call_stack in AUTONOMOUS trn!
+    -- sql.ru/forum/actualutils.aspx?action=gotomsg&tid=1109867&msg=16422273
+    in autonomous transaction do -- *****  A U T O N O M O U S    T x, due to call fn_get_stack *****
+    begin
+        v_dts_beg = cast('now' as timestamp);
+        i=0;
+        while (i < a_context_rows_cnt) do
+        begin
+            v_exc_unit =  rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI');
+            if ( v_exc_unit = '#' ) then -- ==> call from unit <U> where exception occured (not from callers of <U>)
+                
+                select result from fn_get_stack( (select result from fn_halt_sign(:a_gdscode)) ) into v_stack;
+            else
+                v_stack = null;
+
+	        -- NB-1. Do NOT use here v_perf_log. Though it will be aggregated 
+	        -- in SP srv_aggregate_perf_data, table perf_agg does not contain
+	        -- fields STACK, INFO etc!
+	        -- NB-2. DO NOT USE HERE POSTPROCESSING RELATED TO USE_ES = 1 or 2!
+            insert into perf_log( -- current unit: sp_flush_tmpperf_in_auton_tx
+                id
+                ,unit
+                ,fb_gdscode
+                ,info
+                ,exc_unit
+                ,exc_info
+                ,dts_beg
+                ,dts_end
+                ,elapsed_ms
+                ,aux1
+                ,aux2
+                ,trn_id
+                ,ip
+                ,stack
+            )
+            values(
+                rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_UNIT')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_GDS')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_INFO')
+                ,:v_exc_unit
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XNFO')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_BEG')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_END')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_MS')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX1')
+                ,rdb$get_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX2')
+                ,:v_curr_tx
+                ,rdb$get_context('SYSTEM','CLIENT_ADDRESS')
+                ,:v_stack
+            );
+
+            -- free space for new context vars which can be set on later iteration:
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_ID', null);    -- 1
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_UNIT', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_GDS', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_INFO', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XUNI', null);  -- 5
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_XNFO', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_BEG', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_END', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_MS', null);
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX1', null);  -- 10
+            rdb$set_context('USER_SESSION', 'PERF_LOG_'|| :i ||'_AUX2', null);
+
+            i = i + 1;
+        end -- while (i < a_context_rows_cnt)
+
+        /*****************
+        -- disabled 13.12.2020
+        -- 11.01.2015: decided to profile this;
+        -- NB-1. Do NOT use here v_perf_log. Though it will be aggregated 
+        -- in SP srv_aggregate_perf_data, table perf_agg does not contain
+        -- fields STACK, INFO etc!
+        -- NB-2. DO NOT USE HERE POSTPROCESSING RELATED TO USE_ES = 1 or 2!
+        insert into perf_log(
+             unit
+            ,info
+            ,dts_beg
+            ,dts_end
+            ,trn_id
+            ,ip
+            ,aux1
+            ,stack
+        ) values(
+             't$perf-abend:' || coalesce(:a_starter, 'unknown')    -- unit -- ?? 21.04.2019, not yet fixed ...
+            ,'gds='|| coalesce(:a_gdscode, '[null]') ||', saved ' ||:i||' rows in auton. tx'  -- info
+            ,:v_dts_beg                                            -- dts_beg
+            ,'now'                                                 -- dts_end
+            ,:v_curr_tx                                            -- trn_id
+            ,:rdb$get_context('SYSTEM','CLIENT_ADDRESS')           -- IP
+            ,:i                                                    -- aux1
+            ,iif( :a_starter is null, ( select result from fn_get_stack( 1 ) ), null) -- ?? 21.04.2019, not yet fixed ...
+         );
+         *************/
+
+    end -- in autonom. tx
+end
+^ -- sp_flush_tmpperf_in_auton_tx
+
+create or alter procedure sp_check_ctx(
+    ctx_nmspace_01 dm_ctxns,
+    ctx_varname_01 dm_ctxnv,
+    ctx_nmspace_02 dm_ctxns = '',
+    ctx_varname_02 dm_ctxnv = '',
+    ctx_nmspace_03 dm_ctxns = '',
+    ctx_varname_03 dm_ctxnv = '',
+    ctx_nmspace_04 dm_ctxns = '',
+    ctx_varname_04 dm_ctxnv = '',
+    ctx_nmspace_05 dm_ctxns = '',
+    ctx_varname_05 dm_ctxnv = '',
+    ctx_nmspace_06 dm_ctxns = '',
+    ctx_varname_06 dm_ctxnv = '',
+    ctx_nmspace_07 dm_ctxns = '',
+    ctx_varname_07 dm_ctxnv = '',
+    ctx_nmspace_08 dm_ctxns = '',
+    ctx_varname_08 dm_ctxnv = '',
+    ctx_nmspace_09 dm_ctxns = '',
+    ctx_varname_09 dm_ctxnv = '',
+    ctx_nmspace_10 dm_ctxns = '',
+    ctx_varname_10 dm_ctxnv = ''
+)
+as
+    declare msg dm_info = '';
+    declare txt dm_info;
+begin
+    -- Check for each non-empty pair that corresponding context variable
+    -- EXISTS in it's namespace. TERMINATES test if one of them does not exist.
+
+    if (ctx_nmspace_01>'' and rdb$get_context( upper(ctx_nmspace_01), upper(ctx_varname_01) ) is null ) then
+        msg = 'UNDEFINED: ' || upper(ctx_nmspace_01)||':'||coalesce(upper(ctx_varname_01),'[null]');
+    
+    if (ctx_nmspace_02>'' and rdb$get_context( upper(ctx_nmspace_02), upper(ctx_varname_02) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_02) || ':' || coalesce(upper(ctx_varname_02),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    if (ctx_nmspace_03>'' and rdb$get_context( upper(ctx_nmspace_03), upper(ctx_varname_03) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_03) || ':' || coalesce(upper(ctx_varname_03),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_04>'' and rdb$get_context( upper(ctx_nmspace_04), upper(ctx_varname_04) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_04) || ':' || coalesce(upper(ctx_varname_04),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_05>'' and rdb$get_context( upper(ctx_nmspace_05), upper(ctx_varname_05) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_05) || ':' || coalesce(upper(ctx_varname_05),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_06>'' and rdb$get_context( upper(ctx_nmspace_06), upper(ctx_varname_06) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_06) || ':' || coalesce(upper(ctx_varname_06),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+   
+    if (ctx_nmspace_07>'' and rdb$get_context( upper(ctx_nmspace_07), upper(ctx_varname_07) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_07) || ':' || coalesce(upper(ctx_varname_07),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_08>'' and rdb$get_context( upper(ctx_nmspace_08), upper(ctx_varname_08) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_08) || ':' || coalesce(upper(ctx_varname_08),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_09>'' and rdb$get_context( upper(ctx_nmspace_09), upper(ctx_varname_09) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_09) || ':' || coalesce(upper(ctx_varname_09),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+    
+    if (ctx_nmspace_10>'' and rdb$get_context( upper(ctx_nmspace_10), upper(ctx_varname_10) ) is null ) then
+        begin
+            txt = upper(ctx_nmspace_10) || ':' || coalesce(upper(ctx_varname_10),'[null]');
+            if ( char_length(msg) + char_length(txt) < 252 ) then
+            begin
+                    msg = msg||iif(msg='', '', '; ') || txt;
+            end
+        end
+
+    if (msg<>'') then
+    begin
+        -- 13.12.2020: we have to STOP any further work if context variable not defined (5th arg = 1).
+        -- Possible reason of this: TRG_CONNECT remains INACTIVE, one need to check logic of '1run_oltp_emul.bat ' batch.
+        execute procedure sp_add_to_abend_log( msg, null, '', 'sp_check_ctx', 1 );
+        
+        exception ex_context_var_not_found; -- using( msg );
+
+    end
+end -- sp_check_ctx
+^
 
 create or alter procedure sp_rules_for_qdistr
 returns(
@@ -416,7 +700,8 @@ returns(
     storno_sub smallint
 ) as
 begin
-    -- 29.03.2019
+    -- 29.03.2019: instead of multiple queries to tiny table 'rules_for_qdistr'
+    -- Purpose: remove DB access always where it can be done.
     mode = 'new_doc_only';   snd_optype_id = NULL; rcv_optype_id = 1000; storno_sub = NULL; suspend;
     mode = 'distr+new_doc';  snd_optype_id = 1000; rcv_optype_id = 1200; storno_sub = 1;    suspend;
     mode = 'distr+new_doc';  snd_optype_id = 1200; rcv_optype_id = 2000; storno_sub = 1;    suspend;
@@ -424,17 +709,6 @@ begin
     mode = 'mult_rows_only'; snd_optype_id = 2000; rcv_optype_id = 3300; storno_sub = NULL; suspend;
     mode = 'distr+new_doc';  snd_optype_id = 2100; rcv_optype_id = 3300; storno_sub = 1;    suspend;
     mode = 'new_doc_only';   snd_optype_id = 3300; rcv_optype_id = 3400; storno_sub = NULL; suspend;
-
-    /****************
-    for
-        select p.mode,p.snd_optype_id, p.rcv_optype_id,
-              p.rows_to_multiply -- 28.07.2014
-        from sp_cache_rules_for_distr('QDISTR') p
-        into mode, snd_optype_id, rcv_optype_id,
-            storno_sub -- 28.07.2014
-    do
-        suspend;
-    ***************/
 end
 
 ^ -- sp_rules_for_qdistr
@@ -448,20 +722,12 @@ returns(
 )
 as
 begin
-    -- 29.03.2019
+    -- 29.03.2019: instead of multiple queries to tiny table 'rules_for_pdistr'
+    -- Purpose: remove DB access always where it can be done.
     mode = ''; snd_optype_id = 5000; rcv_optype_id = 3400; rows_to_multiply = 10; suspend;
     mode = ''; snd_optype_id = 3400; rcv_optype_id = 5000; rows_to_multiply = 10; suspend;
     mode = ''; snd_optype_id = 4000; rcv_optype_id = 2100; rows_to_multiply = 10; suspend;
     mode = ''; snd_optype_id = 2100; rcv_optype_id = 4000; rows_to_multiply = 10; suspend;
-
-    /*****************
-    for
-        select p.snd_optype_id, p.rcv_optype_id, p.rows_to_multiply
-        from sp_cache_rules_for_distr('PDISTR') p
-        into snd_optype_id, rcv_optype_id, rows_to_multiply
-    do
-        suspend;
-     ***************/
 end
 
 ^ -- sp_rules_for_pdistr
@@ -487,8 +753,9 @@ create or alter procedure sp_add_perf_log (
     declare v_gen_inc_iter_pf int; -- increments from 1  up to c_gen_inc_step_pf and then restarts again from 1
     declare v_gen_inc_last_pf dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_pf)
     declare v_pf_new_id dm_idb;
-    declare v_curr_success_bop_cnt bigint;
-    declare v_bop_finish_sign smallint = 0;
+    declare v_curr_phase_lasts_minutes int;
+    declare v_top_unit_finish smallint = 0;
+    declare v_business_actions_success_cnt bigint;
 
     declare v_fb_gdscode int;
     declare v_trn_id dm_idb;
@@ -502,7 +769,11 @@ create or alter procedure sp_add_perf_log (
     declare v_dts_end timestamp;
     declare v_aux1 double precision;
     declare v_aux2 double precision;
-
+    declare v_pool_active int = 0;
+    declare v_pool_idle int = 0;
+    declare v_worker_id int;
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
 begin
     -- Registration of all STARTs and FINISHes (both normal and failed)
     -- for all application SPs and some service units:
@@ -535,7 +806,7 @@ begin
             values(
                  :a_unit,
                  :a_info,
-                 rdb$get_context('SYSTEM','CLIENT_ADDRESS'), -- 3.0: fn_remote_address(),
+                 rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
                  :v_curr_tx,
                  :v_dts
             );
@@ -575,7 +846,7 @@ begin
                     )
                 ) then
             begin
-                v_bop_finish_sign = 1;
+                v_top_unit_finish = 1;
                 -- # ----------------------------------------------------------------------------------------------------
                 -- # i n c r e m e n t    n u m b e r    o f     f i n i s h e d    b u s i n e s     o p e r a t i o n s
                 -- # ----------------------------------------------------------------------------------------------------
@@ -643,23 +914,159 @@ begin
                     v_pf_new_id = v_gen_inc_last_pf - ( c_gen_inc_step_pf - v_gen_inc_iter_pf );
                     v_gen_inc_iter_pf = v_gen_inc_iter_pf + 1;
 
+                    --    id          dm_idb not null /* dm_idb = bigint */,
+                    --    unit        dm_unit /* dm_unit = varchar(80) */,
+                    --    exc_unit    char(1),
+                    --    fb_gdscode  integer,
+                    --    trn_id      bigint default current_transaction,
+                    --    att_id      integer default current_connection,
+                    --    elapsed_ms  bigint,
+                    --    info        dm_info /* dm_info = varchar(255) */,
+                    --    exc_info    dm_info /* dm_info = varchar(255) */,
+                    --    stack       dm_stack /* dm_stack = varchar(512) */,
+                    --    ip          dm_ip /* dm_ip = varchar(255) */,
+                    --    dts_beg     timestamp default 'now',
+                    --    dts_end     timestamp,
+                    --    aux1        double precision,
+                    --    aux2        double precision,
+                    --    dump_trn    bigint default current_transaction
 
+                    -- Add record into VIEW, which will put it in apropriate
+                    -- PERF_SPLIT_nn table (see its t`rigger):
+
+                    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+                    v_sttm=
+                    q'{ execute block (
+                             v_pf_new_id bigint = ?
+                            ,v_unit dm_unit = ?
+                            ,v_exc_unit char(1) = ?
+                            ,v_fb_gdscode int = ?
+                            ,v_trn_id bigint = ?
+                            ,v_att_id bigint = ?
+                            ,v_elapsed_ms bigint = ?
+                            ,v_info dm_info = ?
+                            ,v_exc_info dm_info = ?
+                            ,v_stack dm_stack = ?
+                            ,v_ip dm_ip = ?
+                            ,v_dts_beg timestamp = ?
+                            ,v_dts_end timestamp = ?
+                            ,v_aux1 double precision = ?
+                            ,v_aux2 double precision = ?
+                        ) as
+                        begin
+                            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                            -- NOTE: we have to log timestamp of point just BEFORE query that
+                            -- will work: datediff between this point and next firing of
+                            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                            -- of IDLE state for this connect in the Ext. Conn. Pool.
+                            execute procedure sp_perf_eds_logging('B');
+
+                            insert into v_perf_log --#EDS#TAG#
+                            (
+                                id
+                                ,unit
+                                ,exc_unit
+                                ,fb_gdscode
+                                ,trn_id
+                                ,att_id
+                                ,elapsed_ms
+                                ,info
+                                ,exc_info
+                                ,stack
+                                ,ip
+                                ,dts_beg
+                                ,dts_end
+                                ,aux1
+                                ,aux2
+                            ) values (
+                                :v_pf_new_id
+                                ,:v_unit
+                                ,:v_exc_unit
+                                ,:v_fb_gdscode
+                                ,:v_trn_id
+                                ,:v_att_id
+                                ,:v_elapsed_ms
+                                ,:v_info
+                                ,:v_exc_info
+                                ,:v_stack
+                                ,:v_ip
+                                ,:v_dts_beg
+                                ,:v_dts_end
+                                ,:v_aux1
+                                ,:v_aux2
+                            );
+
+                            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                            -- for connect, so there we have TWO events: 'I' and 'A').
+                            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                        end
+                    }';
+                    execute statement (v_sttm)
+                    (
+                        :v_pf_new_id
+                        ,:v_unit
+                        ,:v_exc_unit
+                        ,:v_fb_gdscode
+                        ,:v_trn_id
+                        ,:v_att_id
+                        ,:v_elapsed_ms
+                        ,:v_info
+                        ,:v_exc_info
+                        ,:v_stack
+                        ,:v_ip
+                        ,:v_dts_beg
+                        ,:v_dts_end
+                        ,:v_aux1
+                        ,:v_aux2
+                    )
+                    -- 20.11.2020
+                    -- If config parameter USE_ES is 2 then following line will be
+                    -- replaced with uncommented code for run as ES/EDS.
+                    -- Host and port will be taken from apropriate config parameters.
+                    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+                    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+                    ;
+                    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+                    -- #ACTIVATE#IF#USE_ES_NEQ_2#BEG#
                     insert into v_perf_log( -- current unit: sp_add_perf_log
                         id
-                        ,unit, exc_unit
-                        ,fb_gdscode, trn_id, att_id, elapsed_ms
-                        ,info, exc_info, stack
-                        ,ip, dts_beg, dts_end
-                        ,aux1, aux2
+                        ,unit
+                        ,exc_unit
+                        ,fb_gdscode
+                        ,trn_id
+                        ,att_id
+                        ,elapsed_ms
+                        ,info
+                        ,exc_info
+                        ,stack
+                        ,ip
+                        ,dts_beg
+                        ,dts_end
+                        ,aux1
+                        ,aux2
                     ) values (
                         :v_pf_new_id
-                        ,:v_unit, :v_exc_unit
-                        ,:v_fb_gdscode, :v_trn_id, :v_att_id, :v_elapsed_ms
-                        ,:v_info, :v_exc_info, :v_stack
-                        ,:v_ip, :v_dts_beg, :v_dts_end
-                        ,:v_aux1, :v_aux2
+                        ,:v_unit
+                        ,:v_exc_unit
+                        ,:v_fb_gdscode
+                        ,:v_trn_id
+                        ,:v_att_id
+                        ,:v_elapsed_ms
+                        ,:v_info
+                        ,:v_exc_info
+                        ,:v_stack
+                        ,:v_ip
+                        ,:v_dts_beg
+                        ,:v_dts_end
+                        ,:v_aux1
+                        ,:v_aux2
                     );
-
+                    -- #ACTIVATE#IF#USE_ES_NEQ_2#END# */
 
                     v_save_gtt_cnt = v_save_gtt_cnt + 1;
 
@@ -671,6 +1078,7 @@ begin
                 v_save_dts_end = 'now';
 
                 -- 4debug only: how long data from GTT tmp$perf_log was saved:
+                /* #ACTIVATE#IF#DEBUG_EQU_1#BEG#
                 insert into v_perf_log( -- current unit: sp_add_perf_log
                         id,
                         unit, info, dts_beg, dts_end, elapsed_ms, ip, aux1)
@@ -680,9 +1088,11 @@ begin
                         :v_save_dts_beg,
                         :v_save_dts_end,
                         datediff( millisecond from :v_save_dts_beg to :v_save_dts_end ),
-                        rdb$get_context('SYSTEM','CLIENT_ADDRESS'), -- 3.0: fn_remote_address(),
+                        rdb$get_context('SYSTEM','CLIENT_ADDRESS'),
                         :v_save_gtt_cnt
                       );
+                -- #ACTIVATE#IF#DEBUG_EQU_1#END# */
+
 
                 -- #################### restored 25.03.2019 ##################################
                 -- 08.02.2019. Code control can pass here only when:
@@ -691,9 +1101,9 @@ begin
                 -- and 
                 -- 2) this :a_unit is to be successfully finished now, i.e. no exceptions ware raise during its execution.
                 -- This means that we can here increase g_success_counter.
-                if ( v_bop_finish_sign = 1 ) then
+                if ( v_top_unit_finish = 1 ) then
                 begin
-                    v_curr_success_bop_cnt = gen_id( g_success_counter, cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int) );
+                    v_business_actions_success_cnt = gen_id( g_success_counter, cast(rdb$get_context('USER_TRANSACTION', 'BUSINESS_OPS_CNT') as int) );
     
                     -- 21.02.2019: moved here from .bat/.sh. No sense to defer this up to test finish
                     -- because database state will be changed to full-shutdown and almost all of
@@ -701,25 +1111,118 @@ begin
                     -- by ISQL session #1.
                     v_dts = cast('now' as timestamp);
     
-    
                     -- 10.02.2019: this variable will be used in batch for show estimated perf score:
                     -- ESTIMATED_PERF_SINCE_TEST_BEG           1521    354 2019-02-21 07:50:34
                     rdb$set_context( 'USER_SESSION', 
                                      'TOTAL_OPS_SUCCESS_INFO', 
-                                     cast(v_curr_success_bop_cnt as char(18)) || ' ' || cast( v_dts as varchar(24)) 
+                                     cast(v_business_actions_success_cnt as char(18)) || ' ' || cast( v_dts as varchar(24)) 
                                    );
     
+                    select datediff(minute from p.test_time_dts_beg to :v_dts )
+                    from sp_get_test_time_dts p -- 10.02.2019: will query 'perf_log' table only one time per session, then returns context variables
+                    into v_curr_phase_lasts_minutes;
+
+                    -- NB: stored procedure rather than PSQL function is used here
+                    -- (in order to make this code common for 2.5 and 3.0)
+                    select result
+                    from fn_this_worker_seq_no
+                    into v_worker_id;
+
+
                     -- Here we operate with VIEW rather than with table: we have to remove
                     -- any dependencies on table 'perf_estimated' from .sql because this
                     -- table will be dropped and recreated again before each test launch.
-                    insert into v_perf_estimated( minute_since_test_start, success_count, worker_id, dts )
-                    select
-                        datediff(minute from p.test_time_dts_beg to :v_dts ) as curr_phase_lasts_minutes -- DO NOT add "+1" here, 25.03.2019 1117
-                       ,:v_curr_success_bop_cnt
-                       ,(select result from fn_this_worker_seq_no) -- NB: stored procedure rather than PSQL fcuntion is used here (in order to make this code common for 2.5 and 3.0)
-                       ,:v_dts
-                    from sp_get_test_time_dts p -- 10.02.2019: will query 'perf_log' table only one time per session, then returns context variables
+
+                    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+
+                    -- NB: this code can be uncommented only when current FB intance supports External COnnection Pool feature
+                    -- that was introduced in commercial FB branch HQbird 3.x and also presents in official FB 4.x.
+                    -- See batch scenario '1run_oltp_emul': "if use_es=2 if conn_pool_support=0 then <error> + goto final"
+
+                    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# v_pool_active = rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT'); -- #SUBST#EXTPOOL#SUPPORT_1#END#
+                    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# v_pool_idle = rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT'); -- #SUBST#EXTPOOL#SUPPORT_1#END#
+                    -- #SUBST#EXTPOOL#SUPPORT_0#BEG# v_pool_active = -1; -- #SUBST#EXTPOOL#SUPPORT_0#END#
+                    -- #SUBST#EXTPOOL#SUPPORT_0#BEG# v_pool_idle = -1; -- #SUBST#EXTPOOL#SUPPORT_0#END#
+
+                    v_sttm=
+                    q'{ execute block(
+                            a_minute_since_test_start int = ?
+                            ,a_business_actions_success_cnt numeric(12,2) = ?
+                            ,a_worker_id dm_ids = ?
+                            ,a_pool_active int = ?
+                            ,a_pool_idle int = ?
+                            ,a_att_id bigint = ?
+                            ,a_dts timestamp = ?
+                        ) as
+                        begin
+                            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                            -- NOTE: we have to log timestamp of point just BEFORE query that
+                            -- will work: datediff between this point and next firing of
+                            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                            -- of IDLE state for this connect in the Ext. Conn. Pool.
+                            execute procedure sp_perf_eds_logging('B');
+
+                            insert into v_perf_estimated -- #EDS#TAG#
+                            (
+                                minute_since_test_start
+                                ,success_count
+                                ,worker_id
+                                ,pool_active
+                                ,pool_idle
+                                ,att_id
+                                ,dts
+                            ) values (
+                                :a_minute_since_test_start
+                               ,:a_business_actions_success_cnt
+                               ,:a_worker_id
+                               ,:a_pool_active
+                               ,:a_pool_idle
+                               ,:a_att_id
+                               ,:a_dts
+                            );
+
+                            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                            -- for connect, so there we have TWO events: 'I' and 'A').
+                            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                        end
+                    }';
+                    execute statement (v_sttm)
+                    (
+                        v_curr_phase_lasts_minutes
+                        ,v_business_actions_success_cnt
+                        ,v_worker_id
+                        ,v_pool_active
+                        ,v_pool_idle
+                        ,current_connection
+                        ,v_dts
+                    )
+                    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+                    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
                     ;
+                    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+                    -- #ACTIVATE#IF#USE_ES_NEQ_2#BEG#
+                    -- usual way (use_es = 0): use static PSQL code.
+                    insert into v_perf_estimated(
+                        minute_since_test_start
+                        ,success_count
+                        ,worker_id
+                        ,pool_active
+                        ,pool_idle
+                        ,dts
+                    ) values (
+                        :v_curr_phase_lasts_minutes -- DO NOT add "+1" here, 25.03.2019 1117
+                       ,:v_business_actions_success_cnt
+                       ,:v_worker_id
+                       ,:v_pool_active
+                       ,:v_pool_idle
+                       ,:v_dts
+                    );
+                    -- #ACTIVATE#IF#USE_ES_NEQ_2#END# */
 
                 end
                 --#############################################################################
@@ -763,7 +1266,12 @@ as
     declare v_gdscode int = null;
     declare v_dts_beg timestamp;
     declare v_this dm_dbobj = 'srv_aggregate_perf_data';
-    declare c_semaphores cursor for ( select id from semaphores s where s.task = :v_this rows 1);
+    declare v_eds_info dm_info;
+    declare v_sttm varchar(8192);
+    declare v_lf char(1) = x'0A';
+    declare c_semaphores cursor for (
+        select id from semaphores s where s.task = :v_this rows 1
+    );
 begin
     -- 19.09.2020: make code common for 2.5 and 3.x+
     -- This SP must be stored in oltp_common_sp.sql
@@ -835,9 +1343,72 @@ begin
     --- ###########################################################################################################
     --- ### a g g r e g a t i o n:   g a t h e r   d a t a   f r o m   p e r f _ s p l i t _ NN    t a b l e s  ###
     --- ###########################################################################################################
-    select msg from tmp_aggregate_perf_data_autogen( :a_ignore_stop_flag ) into msg; -- 'i=1234, u=3210' etc
-    -- temply, 20.09.2020, in order to see this call in trace log:
-    --execute statement ( 'select msg from tmp_aggregate_perf_data_autogen( ? )' ) ( a_ignore_stop_flag ) into msg;
+
+    -- See oltpNN_config, parameter 'use_es'. Can be 0, 1 or 2:
+
+
+    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+    v_sttm =
+    q'{ execute block( a_ignore_stop_flag smallint = ? ) returns( msg dm_info ) as
+        begin
+            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+            -- NOTE: we have to log timestamp of point just BEFORE query that
+            -- will work: datediff between this point and next firing of
+            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+            -- of IDLE state for this connect in the Ext. Conn. Pool.
+            execute procedure sp_perf_eds_logging('B');
+
+            select msg --#EDS#TAG#
+            from tmp_aggregate_perf_log_autogen( :a_ignore_stop_flag )
+            into msg;
+
+            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+            -- for connect, so there we have TWO events: 'I' and 'A').
+            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+            suspend;
+        end
+    }';
+    execute statement (v_sttm) ( a_ignore_stop_flag )
+    -- 20.11.2020
+    -- If config parameter USE_ES is 2 then following line will be
+    -- replaced with uncommented code for run as ES/EDS.
+    -- Host and port will be taken from apropriate config parameters.
+    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+    into msg;
+
+    execute statement (
+        'select --#EDS#TAG#' || v_lf
+        || ' msg '
+        || ' from tmp_aggregate_perf_eds_autogen( ? )'
+    ) ( a_ignore_stop_flag )
+    -- ::: NB ::: do NOT add "on-external" substituion here!
+    -- Otherwise new records will appear in the perf_eds_split_NN tables
+    -- because of firing triggers on connect/disconnect.
+    into v_eds_info;
+    msg = msg || ', EDS agg.: ' || v_eds_info;
+    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+    /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+    -- use_es = 1 --> run this statement via ES in order to see
+    -- its occurences and performance in the trace log:
+    execute statement (
+        'select --#EDS#TAG#' || v_lf
+        || ' msg '
+        || ' from tmp_aggregate_perf_log_autogen( ? )'
+    ) ( a_ignore_stop_flag )
+    into msg;
+    -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+    -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+    -- usual way (use_es = 0): use static PSQL code.
+    select msg from tmp_aggregate_perf_log_autogen( :a_ignore_stop_flag ) into msg; -- 'i=1234, u=3210' etc
+    -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
     msg =  msg ||', ms='||datediff(millisecond from v_dts_beg to cast('now' as timestamp) );
 
     rdb$set_context('USER_SESSION','ADD_INFO', msg);  -- to be displayed in result log of isql
@@ -880,6 +1451,8 @@ create or alter procedure sp_halt_on_error(
     declare v_curr_trn bigint;
     declare v_dummy bigint;
     declare v_need_to_stop smallint;
+    declare v_exc_info dm_info;
+    declare v_stack dm_stack;
 begin
     -- Adding single character + LF into external table (text file) 'stoptest.txt'
     -- when test is needed to stop (either due to test_time expiration or because of
@@ -937,9 +1510,35 @@ begin
 
                 -- This point can be achieved by only one transaction (because of serialized access
                 -- to record which was  updated by previous statement).
+
+                if ( a_char in ('1', '5') ) then
+                    -- '1' ==> call from SP_ADD_TO_ABEND_LOG: unexpected test finish due to violation
+                    --         of PK or CHECK constraints, or when found some inacceptible conditions.
+                    --         Also call from SRV_FIND_QD_QS_MISM when founding mismatches between total
+                    --         sum of doc_data amounts and count of rows in QDistr + QStorned.
+                    -- '5' ==> call from SRV_CHECK_NEG_REMAINDERS: unexpected test finish due to encountering
+                    --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
+                    --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
+                    begin
+                        v_exc_info = 'ABNORMAL FINISH' ||iif( a_gdscode is null, ': gds = null, some data does not match or is missing.', ', gds = ' || coalesce(:a_gdscode,'<?>') );
+                    end
+                else if (a_char = '2') then
+                    -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
+                    --         In this case argument a_gdscode = -1 and we do NOT need to evaluate call stack.
+                    begin
+                        v_exc_info = iif( :v_need_to_stop < 0
+                                          ,'PREMATURE: EXTERNAL COMMAND.'
+                                          ,'NORMAL: TEST_TIME EXPIRED AT ' || left(cast(cast('now' as timestamp) as varchar(255)),19)
+                                        );
+                    end
+
+                select result from fn_get_stack( 1 ) into v_stack;
+
+
                 -- Leave as ES for ability to see this statement in the trace:
                 execute statement ('
-                  insert into perf_log(
+                  insert into perf_log -- #HALT#TAG#
+                  (
                       unit             -- 1
                      ,fb_gdscode       -- 2
                      ,ip               -- 3
@@ -948,43 +1547,44 @@ begin
                      ,elapsed_ms       -- 6
                      ,stack            -- 7
                      ,exc_unit         -- 8
-                     ,exc_info         -- 9
+                     ,info             -- 9
+                     ,exc_info         -- 10
                   ) values(
-                      ?,?,?, ?,?,?, ?,?,?
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                   )'
                 )
                 (
-                    'sp_halt_on_error'    -- 1
-                    ,:a_gdscode           -- 2
+                    'sp_halt_on_error'    --  1
+                    ,:a_gdscode           --  2
                     ,rdb$get_context('SYSTEM', 'CLIENT_ADDRESS') -- 3
-                    ,:v_curr_trn          -- 4
-                    ,'now'                -- 5
-                    ,-1 -- set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
-                    ,(select result from fn_get_stack( iif(:a_gdscode>=0, 1, 0) )) -- pass '1' to force write call_stack to perf_log if this is NOT expected test finish
-                    ,:a_char              -- 8
-                    ,trim(iif( -- write info for reporting state of how test finished:
-                               :a_gdscode >= 0, 'ABNORMAL: GDSCODE='||coalesce(:a_gdscode,'<?>')
-                              ,iif( :v_need_to_stop < 0
-                                    ,'PREMATURE: EXTERNAL COMMAND.'
-                                    ,'NORMAL: TEST_TIME EXPIRED AT ' || left(cast(cast('now' as timestamp) as varchar(50)),19)
-                                  )
-                             )
-                         )                -- 9
+                    ,:v_curr_trn          --  4
+                    ,'now'                --  5
+                    ,-1                   --  6 // NB: set elapsed_ms = -1 to skip this record from srv_mon_perf_detailed output:
+                    ,v_stack              --  7
+                    ,:a_char              --  8
+                    ,left(rdb$get_context('USER_SESSION','ADD_INFO'),255) -- 9
+                    ,v_exc_info           -- 10
                 )
                 ;
 
-                -- Value of sequence g_stop_test must be changed only ***AFTER***
-                -- insering record about finish into poerf_log table!
-                -- We change it to positive number in order to get false for
-                -- any subsequent evaluation of 'gen_id(g_stop_test, 0) <= 0' (see above):
-                v_dummy = gen_id( g_stop_test, abs(gen_id(g_stop_test,0)) + 1 );
-                --v_dummy = gen_id( g_stop_test, 2147483647);
 
             when any do
-                begin
-                    -- NOP --
-                end
+                if ( (select result from fn_is_lock_trouble(gdscode)) = 1 ) then
+                    begin
+                        -- nop --
+                    end
+                else
+                    exception;  -- ::: nb ::: anonimous but in when-block!
+
             end
+
+            -- Value of sequence g_stop_test must be changed only ***AFTER***
+            -- insering record about finish into poerf_log table!
+            -- We change it to positive number in order to get false for
+            -- any subsequent evaluation of 'gen_id(g_stop_test, 0) <= 0' (see above):
+
+            v_dummy = gen_id( g_stop_test, abs(gen_id(g_stop_test,0)) + 1 );
+
         end
     end
 end
@@ -1022,7 +1622,9 @@ begin
 
     v_last_unit = rdb$get_context('USER_TRANSACTION','TPLOG_LAST_UNIT');
 
-    if ( a_caller = v_last_unit ) then
+    if ( a_caller = v_last_unit 
+         -- or a_halt_due_to_error = 1 -- 13.12.2020 (?!)
+    ) then
     begin
         -- CORE-4483. "Changed data not visible in WHEN-section if exception
         -- occured inside SP that has been called from this code" ==> last record
@@ -1221,7 +1823,8 @@ begin
         v_start='now';
 
         execute statement( 'set statistics index '||idx_name )
-        with autonomous transaction; -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
+        with autonomous transaction  -- again since 27.11.2015 (commit for ALL indices at once is too long for huge databases!)
+        ;
 
         elapsed_ms = datediff(millisecond from v_start to cast('now' as timestamp)); -- 15.09.2015
 
@@ -1267,74 +1870,95 @@ create or alter procedure sys_get_fb_arch (
 begin
     
     -- Aux SP for detect FB architecture.
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') NOT similar to ('2.5.[0-9]|3.[0-9].[0-9]') 
+         and exists( select * from rdb$relations r where r.rdb$relation_name = upper('rdb$config') )
+       ) then
+        begin
+            -- 4.0 and above: one may use RDB$CONFIG table for get actual config
+            -- parameters, including server mode.
+            -- NOTE: though this was appeared in 4.0.0.2260 (~nov-2010), date of
+            -- database creation does not matter: this table WILL be avaliable also.
+            execute statement (
+                'select g.rdb$config_value, rdb$get_context(''SYSTEM'',''NETWORK_PROTOCOL'') as net_protocol '
+                || ' from rdb$config g '
+                || ' where g.rdb$config_name = ? '
+            ) ( 'ServerMode' )
+            into fb_arch, att_protocol; -- 'Super' / 'SuperClassic' / 'Classic'; 'TCPv4' / 'TCPv6' / 'WNET' / 'XNET' / NULL
+            if ( att_protocol is null ) then
+                fb_arch = 'Embedded';
+            else if ( fb_arch = 'Super' ) then
+                fb_arch = 'SuperServer';
+        end
 
-    -- ::: NOTE ::: 
-    -- This SP establishes new attachment using ES/EDS mechanism in order to detect whether FB works is Classic mode.
-    -- If current FB instance does support connections pool then this additional attachment will exist after this SP 
-    -- finish, i.e. it will be kept opened by engine. Despite that connections pool appeared only in 4.0, one of special 
-    -- build of Firebird 2.5 also has it. This engine (2.5, special build) will leave such attachment alive even when
-    -- its parent connection will be closed, moreover - even when LAST attachment will be gone. In order to kill all
-    -- such attachments one need to issue: ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL (see this command in .bat and .sh),
+    else -- OLD way for 2.5, 3.0 and 4.0 (before 20.11.2020)
+        begin
+            -- ::: NOTE ::: 
+            -- This SP establishes new attachment using ES/EDS mechanism in order to detect whether FB works is Classic mode.
+            -- If current FB instance does support connections pool then this additional attachment will exist after this SP 
+            -- finish, i.e. it will be kept opened by engine. Despite that connections pool appeared only in 4.0, one of special 
+            -- build of Firebird 2.5 also has it. This engine (2.5, special build) will leave such attachment alive even when
+            -- its parent connection will be closed, moreover - even when LAST attachment will be gone. In order to kill all
+            -- such attachments one need to issue: ALTER EXTERNAL CONNECTIONS POOL CLEAR ALL (see this command in .bat and .sh),
 
-
-    fb_arch = rdb$get_context('USER_SESSION', 'SERVER_MODE');
-
-    if ( fb_arch is null ) then
-    begin
-        select a.mon$server_pid, a.mon$remote_protocol
-        from mon$attachments a
-        where a.mon$attachment_id = current_connection
-        into cur_server_pid, att_protocol;
-
-        if ( att_protocol is null ) then
-            fb_arch = 'Embedded';
-        else if ( upper(current_user) = upper('SYSDBA')
-                  and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
-                  and exists(select * from mon$attachments a 
-                             where a.mon$remote_protocol is null
-                                   and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
-                            ) 
-                ) then
-            fb_arch = 'SuperServer';
-        else
+            fb_arch = rdb$get_context('USER_SESSION', 'SERVER_MODE');
+        
+            if ( fb_arch is null ) then
             begin
-                v_test_sttm =
-                    'select a.mon$server_pid + 0*(select 1 from rdb$database)'
-                    ||' from mon$attachments a '
-                    ||' where a.mon$attachment_id = current_connection';
-
-                select i.mon$page_fetches
-                from mon$io_stats i
-                where i.mon$stat_group = 0  -- db_level
-                into v_fetches_beg;
-            
-                execute statement v_test_sttm
-                on external
-                     'localhost:' || rdb$get_context('SYSTEM', 'DB_NAME')
-                as
-                     user a_connect_with_usr
-                     password a_connect_with_pwd
-                     role left('R' || replace(uuid_to_char(gen_uuid()),'-',''),31)
-                into ext_server_pid;
-            
-                in autonomous transaction do
-                select i.mon$page_fetches
-                from mon$io_stats i
-                where i.mon$stat_group = 0  -- db_level
-                into v_fetches_end;
-            
-                fb_arch = iif( cur_server_pid is distinct from ext_server_pid, 
-                               'Classic', 
-                               iif( v_fetches_beg is not distinct from v_fetches_end, 
-                                    'SuperClassic', 
-                                    'SuperServer'
-                                  ) 
-                             );
+                select a.mon$server_pid, a.mon$remote_protocol
+                from mon$attachments a
+                where a.mon$attachment_id = current_connection
+                into cur_server_pid, att_protocol;
+        
+                if ( att_protocol is null ) then
+                    fb_arch = 'Embedded';
+                else if ( upper(current_user) = upper('SYSDBA')
+                          and rdb$get_context('SYSTEM','ENGINE_VERSION') NOT starting with '2.5' 
+                          and exists(select * from mon$attachments a 
+                                     where a.mon$remote_protocol is null
+                                           and upper(a.mon$user) in ( upper('Cache Writer'), upper('Garbage Collector'))
+                                    ) 
+                        ) then
+                    fb_arch = 'SuperServer';
+                else
+                    begin
+                        v_test_sttm =
+                            'select a.mon$server_pid + 0*(select 1 from rdb$database)'
+                            ||' from mon$attachments a '
+                            ||' where a.mon$attachment_id = current_connection';
+        
+                        select i.mon$page_fetches
+                        from mon$io_stats i
+                        where i.mon$stat_group = 0  -- db_level
+                        into v_fetches_beg;
+                    
+                        execute statement v_test_sttm
+                        on external
+                             'localhost:' || rdb$get_context('SYSTEM', 'DB_NAME')
+                        as
+                             user a_connect_with_usr
+                             password a_connect_with_pwd
+                             role left('R' || replace(uuid_to_char(gen_uuid()),'-',''),31)
+                        into ext_server_pid;
+                    
+                        in autonomous transaction do
+                        select i.mon$page_fetches
+                        from mon$io_stats i
+                        where i.mon$stat_group = 0  -- db_level
+                        into v_fetches_end;
+                    
+                        fb_arch = iif( cur_server_pid is distinct from ext_server_pid, 
+                                       'Classic', 
+                                       iif( v_fetches_beg is not distinct from v_fetches_end, 
+                                            'SuperClassic', 
+                                            'SuperServer'
+                                          ) 
+                                     );
+                    end
+        
+                fb_arch = trim(fb_arch) || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
+                rdb$set_context('USER_SESSION', 'SERVER_MODE', fb_arch);
             end
-
-        fb_arch = trim(fb_arch) || ' ' || rdb$get_context('SYSTEM','ENGINE_VERSION');
-        rdb$set_context('USER_SESSION', 'SERVER_MODE', fb_arch);
-    end
+        end
 
     suspend;
 
@@ -1746,6 +2370,8 @@ returns (
        ,minutes_passed int
        ,perf_score int
        ,distinct_workers smallint
+       ,pool_active smallint
+       ,pool_idle smallint
 )
 as
     declare v_test_time_dts_beg timestamp;
@@ -1780,6 +2406,8 @@ begin
             ,u.minutes_passed
             ,( u.last_cnt_per_minute - x.earliest_cnt_for_phase ) / nullif( u.minutes_passed, 0 ) perf_score
             ,u.distinct_workers
+            ,u.pool_active
+            ,u.pool_idle
         from (
             select
                  sign( datediff(millisecond from :v_test_time_dts_beg to e.dts) ) as test_phase_sign
@@ -1788,7 +2416,9 @@ begin
                       ,e.minute_since_test_start
                      ) as minutes_passed
                 ,max(e.success_count) last_cnt_per_minute
-                ,count(distinct e.worker_id) distinct_workers
+                ,avg(distinct e.worker_id) distinct_workers -- 27.11.2020; todo: sync .sh with with this!
+                ,avg(e.pool_active) as pool_active
+                ,avg(e.pool_idle) as pool_idle
             from v_perf_estimated e
             group by 1,2
         ) u
@@ -1800,6 +2430,8 @@ begin
        ,minutes_passed
        ,perf_score
        ,distinct_workers
+       ,pool_active
+       ,pool_idle
     do
         suspend;
 
@@ -2165,46 +2797,21 @@ begin
 end
 ^ -- srv_get_page_cache_info
 
-
-create or alter procedure srv_fill_mon_cache_memory
+create or alter procedure srv_fill_mon_cache_worker
 returns (
-    info dm_info)
+     inserted_dbkey dm_dbkey
+    ,meta_cache_size type of column mon_cache_memory.meta_cache_size
+    ,statements_running_cnt type of column mon_cache_memory.page_cache_operating_stm_cnt
+    ,statements_stalled_cnt type of column mon_cache_memory.data_transfer_paused_stm_cnt
+)
 as
-    declare v_dts_beg timestamp;
-    declare v_dbkey dm_dbkey;
-    declare v_meta_cache_size bigint;
-    declare v_statements_running_cnt smallint;
-    declare v_statements_stalled_cnt smallint;
-    declare v_ibe smallint;
-    declare v_elapsed_ms int;
-    declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
+    declare v_dts timestamp;
 begin
-    -- This SP is used when mon_unit_perf=2 and is called only by SID=1,
-    -- in the loop with delay = <mon_query_interval> seconds (see config file).
-    -- Adds data to the table MON_CACHE_MEMORY about memory consumption.
+    -- called only from SP srv_fill_mon_cache_memory.
+    -- Code was separated from there in order to have ability to invoke it
+    -- either by static PSQL (common way) or using ES/EDS (when config 'use_es'>0)
 
-    -- 28.05.2020: moved here as common for 2.5 and 3.x+
-
-    v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
-    if ( v_ibe = 0 -- fn_remote_process() NOT containing 'IBExpert'
-         and
-         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
-       ) then
-    begin
-        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
-        suspend;
-        --###
-        exit;
-        --###
-    end
-    -- Check that table `ext_stoptest` (external text file) is EMPTY,
-    -- otherwise raises e`xception to stop test:
-    execute procedure sp_check_to_stop_work;
-
-    -- add to performance log timestamp about start/finish this unit:
-    execute procedure sp_add_perf_log(1, v_this);
-
-    v_dts_beg  = 'now';
+    v_dts = cast('now' as timestamp);
 
     -- Result of subtraction: (m.memo_used_att - (memo_used_trn + memo_used_stm)) equals to:
     -- 1) when pg_cache_type='dedicated' (SC, CS) then SUM of page cache and metadata cache
@@ -2224,6 +2831,8 @@ begin
         ,active_attachments_cnt
         ,page_cache_operating_stm_cnt
         ,data_transfer_paused_stm_cnt
+        ,dts
+        ,elap_ms -- see SP report_cache_dynamic, column: 'measurement_elapsed_ms'
     )
     select
         d.mon$page_buffers pg_buffers
@@ -2240,6 +2849,8 @@ begin
         ,m.active_attachments_cnt
         ,m.page_cache_operating_stm_cnt
         ,m.data_transfer_paused_stm_cnt
+        ,:v_dts
+        ,datediff(millisecond from :v_dts to cast('now' as timestamp)) -- moved here 10.12.2020 from SP srv_fill_mon_cache_memory
     from (
         select
             sum( iif( u.stat_gr = 0, m.mon$memory_used, 0) ) memo_db_used -- SC/CS: 0; SS: >0
@@ -2284,16 +2895,152 @@ begin
         ,page_cache_operating_stm_cnt
         ,data_transfer_paused_stm_cnt
     into
+        inserted_dbkey
+        ,meta_cache_size
+        ,statements_running_cnt
+        ,statements_stalled_cnt
+    ;
+
+    suspend;
+
+end
+^ -- srv_get_page_cache_info
+
+create or alter procedure srv_fill_mon_cache_memory
+returns (
+    info dm_info)
+as
+    declare v_dts_beg timestamp;
+    declare v_dbkey dm_dbkey;
+    declare v_meta_cache_size bigint;
+    declare v_statements_running_cnt smallint;
+    declare v_statements_stalled_cnt smallint;
+    declare v_ibe smallint;
+    declare v_elapsed_ms int;
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
+    declare v_this dm_dbobj = 'srv_fill_mon_cache_memory';
+begin
+    -- Top-level SP that is used when mon_unit_perf=2 and is called from "Big SQL"
+    -- only by session with SID=1,
+    -- There is delay = <mon_query_interval> seconds between each call of this SP
+    -- (see config file, parameter 'mon_query_interval').
+    -- Adds data to the table MON_CACHE_MEMORY about memory consumption.
+
+    -- 28.05.2020: moved here as common for 2.5 and 3.x+
+
+    v_ibe = iif( (select result from fn_remote_process) containing 'IBExpert', 1, 0);
+    if ( v_ibe = 0 -- fn_remote_process() NOT containing 'IBExpert'
+         and
+         coalesce(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY'), 0) = 0
+       ) then
+    begin
+        rdb$set_context( 'USER_SESSION','MON_INFO', 'mon$_dis!'); -- to be displayed in log of 1run_oltp_emul.bat
+        suspend;
+        --###
+        exit;
+        --###
+    end
+    -- Check that table `ext_stoptest` (external text file) is EMPTY,
+    -- otherwise raises e`xception to stop test:
+    execute procedure sp_check_to_stop_work;
+
+    -- add to performance log timestamp about start/finish this unit:
+    execute procedure sp_add_perf_log(1, v_this);
+
+    v_dts_beg  = 'now';
+
+    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+    v_sttm =
+    q'{ execute block returns(
+            v_dbkey dm_dbkey
+            ,v_meta_cache_size bigint
+            ,v_statements_running_cnt smallint
+            ,v_statements_stalled_cnt smallint
+        ) as
+        begin
+            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+            -- NOTE: we have to log timestamp of point just BEFORE query that
+            -- will work: datediff between this point and next firing of
+            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+            -- of IDLE state for this connect in the Ext. Conn. Pool.
+            execute procedure sp_perf_eds_logging('B');
+
+            select -- #EDS#TAG#
+                inserted_dbkey
+                ,meta_cache_size
+                ,statements_running_cnt
+                ,statements_stalled_cnt
+            from srv_fill_mon_cache_worker
+            into
+                v_dbkey
+                ,v_meta_cache_size
+                ,v_statements_running_cnt
+                ,v_statements_stalled_cnt
+            ;
+
+            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+            -- for connect, so there we have TWO events: 'I' and 'A').
+            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+            suspend;
+        end
+    }';
+    execute statement (v_sttm)
+    -- 20.11.2020
+    -- If config parameter USE_ES is 2 then following line will be
+    -- replaced with uncommented code for run as ES/EDS.
+    -- Host and port will be taken from apropriate config parameters.
+    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+    into
         v_dbkey
         ,v_meta_cache_size
         ,v_statements_running_cnt
         ,v_statements_stalled_cnt
     ;
+    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
 
-    v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
+    /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+    execute statement (
+        'select -- #EDS#TAG#' || v_lf
+        || '  inserted_dbkey '
+        || '  ,meta_cache_size '
+        || '  ,statements_running_cnt '
+        || '  ,statements_stalled_cnt '
+        || ' from srv_fill_mon_cache_worker '
+    )
+    into
+        v_dbkey
+        ,v_meta_cache_size
+        ,v_statements_running_cnt
+        ,v_statements_stalled_cnt
+    ;
+    -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
 
-    update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
-    where rdb$db_key = :v_dbkey ;
+    -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+    -- usual way (use_es = 0): use static PSQL code.
+    select
+        inserted_dbkey
+        ,meta_cache_size
+        ,statements_running_cnt
+        ,statements_stalled_cnt
+    from srv_fill_mon_cache_worker
+    into
+        v_dbkey
+        ,v_meta_cache_size
+        ,v_statements_running_cnt
+        ,v_statements_stalled_cnt
+    ;
+    -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
+    -- 10.12.2020: NOT needed here: this is done inside SP srv_fill_mon_cache_worker
+    -- v_elapsed_ms = datediff(millisecond from v_dts_beg to cast('now' as timestamp));
+    -- update mon_cache_memory set dts = :v_dts_beg, elap_ms = :v_elapsed_ms
+    -- where rdb$db_key = :v_dbkey;
 
     -- meta_cache 123456789012, stm_running 12345, stm_stalled 12345
     -- NB: do not add 'elapsed_ms NNNN', it will be evaluated in execute block.
@@ -2360,6 +3107,7 @@ begin
     -- 02.01.2019. Called only when config parameter 'mon_unit_perf' is 2: report about memory consumption
     -- by metadata cache size, active attachments and statements in 'running' and 'stalled' state.
     -- NB: all records from table 'mon_cache_memory' are DELETED before every new test run, see 1run_oltp_emul.bat/.sh
+    -- See also sp SRV_FILL_MON_CACHE_MEMORY - it is called on every iteration for SID=1 in the "Big SQL".
     for
         select
             m.dts
@@ -3191,7 +3939,10 @@ begin
     begin
         src = '-- invalid input argument a_proc = ' || coalesce('"'||trim(a_proc)||'"', '<null>');
         suspend;
-        exception ex_bad_argument; -- using( coalesce('"'||trim(a_proc)||'"', '<null>'), 'sys_get_proc_ddl' );
+        exception ex_bad_argument
+        -- uncomment temply for 3.0+ if need
+        -- using( coalesce('"'||trim(a_proc)||'"', '<null>'), 'sys_get_proc_ddl' )
+        ;
     end
 
     for
@@ -3338,7 +4089,7 @@ begin
                 ,case
                  when pt=-2 then 'set term ^;'
                  when pt=100 then '^set term ;^'
-                 when pt=-1 then 'create or alter procedure '||trim(p_nam)||iif(pq_in>0,' (','')
+                 when pt=-1 then 'create or alter procedure ' || trim(p_nam) || trim(iif(pq_in>0,' (',''))
                  when pt=5 then 'returns ('
                  when pt=20 then 'AS'
                  when pt in(0,10) then --in or out argument definition
@@ -3528,7 +4279,7 @@ begin
                     when 1=1 or mode=0 then
                         case
                             when rt=-2 then
-                                'create or alter view '||trim(v_name)||iif( mode=0, ' as select',' (' )
+                                'create or alter view ' || trim(v_name) || trim( iif( mode=0, ' as select',' (' ) )
                             when mode=1 and rt=-1 then -- rt=-1: fields of view
                                 trim(v_fld)||trim(iif(fld_pos+1=fq,') as',','))
                             when mode=0 and rt=-1 then
@@ -3702,6 +4453,191 @@ begin
 end 
 
 ^ -- sys_get_indx_ddl
+
+
+create or alter procedure sp_get_stat returns(
+    x_rows int
+   ,x_mean double precision
+   ,biased_std_dev double precision
+   ,unbiased_std_dev double precision
+   ,covar double precision
+   ,skewness double precision
+   ,kurtosis double precision
+   ,variance_outcome varchar(100)
+   ,sigma3_rule_outcome varchar(100)
+   ,symmetry_outcome varchar(100)
+   ,uniformity_outcome varchar(100)
+   ,norm_law_outcome varchar(100)
+)
+as
+    declare c_data cursor for ( select 1000+rand()*100 n from rdb$fields a, rdb$types b);
+    declare rows_cnt double precision;
+    declare rnd_val double precision;
+    declare m2 double precision;
+    declare m3 double precision;
+    declare m4 double precision;
+    declare x_min double precision;
+    declare x_max double precision;
+    declare delta double precision;
+    declare delta_n double precision;
+    declare delta_n2 double precision;
+    declare term1 double precision;
+    declare m_skew double precision;
+    declare m_kurt double precision;
+    declare skew_ratio double precision;
+    declare kurt_ratio double precision;
+    declare sigma3_violation smallint;
+begin
+    -- Get main statistics charcerictics (mean, median, cover, skewness, kurtosis) in one pass.
+    -- Currently not used; probably can be useful in the future.
+
+    rows_cnt=0;
+    x_mean=0;
+    m2=0;
+    m3=0;
+    m4=0;
+    x_min = 9223372036854775807;
+    x_max = -9223372036854775808;
+    open c_data;
+    while (2=2) do
+    begin
+        fetch c_data into rnd_val;
+        if (row_count = 0) then
+            leave;
+        rows_cnt = rows_cnt + 1;
+        delta = rnd_val - x_mean;
+        delta_n = delta / rows_cnt;
+        delta_n2 = delta_n * delta_n;
+        term1 = delta * delta_n * (rows_cnt-1);
+        x_mean = x_mean + delta_n;
+        -- Increment sum for eval. kurtosis:
+        m4 = m4 + term1 * delta_n2 * (rows_cnt * rows_cnt - 3 * rows_cnt + 3) + 6 * delta_n2 * m2 - 4 * delta_n * m3;
+        -- Increment sum for eval. skewness:
+        m3 = m3 + term1 * delta_n * (rows_cnt - 2) - 3 * delta_n * m2;
+        -- Increment sum for eval. variance (aka dispersion):
+        m2 = m2 + term1;
+    
+        x_min = minvalue(rnd_val, x_min);
+        x_max = maxvalue(rnd_val, x_max);
+    end
+    close c_data;
+    
+    x_rows = rows_cnt;
+    --
+    biased_std_dev = sqrt( m2 / rows_cnt );
+
+    --  Bessel's correction. We evaluate this only for info,
+    -- it is NOT used for skewness or kurtosis.
+    unbiased_std_dev = sqrt( m2 / ( rows_cnt - 1.0) );
+
+    -- https://www.researchgate.net/post/What_is_the_acceptable_range_of_skewness_and_kurtosis_for_normal_distribution_of_data
+    -- 1) The values for asymmetry and kurtosis between -2 and +2 are considered acceptable
+    --    in order to prove normal univariate distribution (George & Mallery, 2010)
+    -- 2) Most software packages that compute the skewness and kurtosis, also compute their standard error.
+    --    Both S = skewness/SE(skewness) and K = kurtosis/SE(kurtosis)
+    --    Thus, when |S| > 1.96 the skewness is significantly (alpha=5%) different from zero; the same for |K| > 1.96 and the kurtosis.
+    -- 3) A rule of thumb is -1 to 1 amplitude. Nevertheless, as said by Casper you should calculate CI 95% for adequate results reporting.
+    -- 4) I have also come across another rule of thumb -0.8 to 0.8 for skewness and -3.0 to 3.0 for kurtosis.
+
+
+    -- If skewness = 0, the data are perfectly symmetrical. But a skewness of exactly zero is quite unlikely for real-world data,
+    -- so how can you interpret the skewness number? Bulmer, M. G., Principles of Statistics (Dover,1979) - a classic - suggests this rule of thumb:
+    -- If skewness is less than -1 or greater than +1, the distribution is highly skewed.
+    -- If skewness is between -1 and -0.5 or between 0.5 and +1, the distribution is moderately skewed.
+    -- If skewness is between -0.5 and 0.5, the distribution is approximately symmetric.
+
+    -- NOTE. Evaluation of skewness and kurtosis uses *BIASED* std_dev,
+    -- i.e. "n" rather than "n-1" in denominator.
+    skewness = sqrt( rows_cnt ) * m3 / ( power(m2, 1.5) );
+
+    /*
+    A distribution with kurtosis < 0 is called platykurtic. Compared to a normal distribution,
+    its central peak is lower and broader, and its tails are shorter and thinner.
+    A distribution with kurtosis >0 is called leptokurtic. Compared to a normal distribution,
+    its central peak is higher and sharper, and its tails are longer and fatter
+    The smallest possible kurtosis -2, largest is infinity.
+
+    https://ncss-wpengine.netdna-ssl.com/wp-content/themes/ncss/pdf/Procedures/NCSS/Normality_Tests.pdf
+    Always remember that a reasonably large sample size is required to detect departures from normality.
+    Only extreme types of non-normality can be detected with samples less than 50 observations.
+    Normality tests generally have small statistical power (probability of detecting non-normal data)
+    unless the sample sizes are at least over 100. 
+    */
+
+    kurtosis = ( rows_cnt * m4) / (m2*m2) - 3;
+
+    m_skew = sqrt( 6*(rows_cnt-1) / ((rows_cnt+1)*(rows_cnt+3)) ); -- SES: Standard Error of Skewness
+    
+    m_kurt = sqrt( 24. * rows_cnt * (rows_cnt-2) * (rows_cnt-3) / ( (rows_cnt-1)*(rows_cnt-1)*(rows_cnt+3)*(rows_cnt+5) ) );
+
+    -- https://brownmath.com/stat/shape.htm
+    -- https://math.hws.edu/javamath/ryan/ChiSquare.html
+    -- https://digitalcommons.wayne.edu/cgi/viewcontent.cgi?article=2427&context=jmasm
+
+    skew_ratio=0;
+    kurt_ratio=0;
+    if ( m_skew<>0 ) then
+        -- "Zg1",  page 85 of Cramer, Duncan, Basic Statistics for Social Research (Routledge, 1997)
+        -- The critical value of Zg1 is approximately 2.
+        -- If Zg1 < -2, the population is very likely skewed negatively (though you do not know by how much).
+        -- If Zg1 is between -2 and +2, you can not reach any conclusion about the skewness of the population:
+        -- it might be symmetric, or it might be skewed in either direction.
+        -- If Zg1 > 2, the population is very likely skewed positively (though you do not know by how much).
+        skew_ratio = skewness / m_skew;
+    if ( m_kurt<>0 ) then
+        --  "Zg2", page 89 of Duncan Cramer's Basic Statistics for Social Research (Routledge, 1997).
+        -- The critical value of Zg2 is approximately 2.
+        -- If Zg2 < -2, the population very likely has negative excess kurtosis (platykurtic), though you do not know how much.
+        -- If Zg2 is between -2 and +2, you can not reach any conclusion about the kurtosis: excess kurtosis might be positive, negative, or zero.
+        -- If Zg2 > +2, the population very likely has positive excess kurtosis (leptokurtic), though you do not know how much.
+
+        kurt_ratio=kurtosis / m_kurt;
+
+
+    covar = 100.00 * biased_std_dev / x_mean;
+    sigma3_violation = iif( abs( x_mean - x_min ) > 3 * unbiased_std_dev  or abs( x_max - x_mean ) > 3 * unbiased_std_dev, 1, 0);
+    ----------------------------------------------------------------------------
+    if (  covar < 10 ) then
+        variance_outcome = 'Dispersion is low';
+    else if ( covar < 20 ) then
+        variance_outcome = 'Dispersion is middle';
+    else if ( covar < 33 ) then
+        variance_outcome = 'Dispersion is high';
+    else
+        variance_outcome = 'Sampling is heterogeneous, need to exclude peaks';
+    ----------------------------------------------------------------------------
+    if ( sigma3_violation = 1) then
+        sigma3_rule_outcome = 'Sampling DO NOT meet the Three Sigma rule.';
+    else
+        sigma3_rule_outcome = 'Sampling do MEET the Three Sigma rule.';
+    ----------------------------------------------------------------------------
+    if ( skewness < 0  ) then
+        symmetry_outcome = 'Most of values are GREATER than average.' || iif(sigma3_violation = 1, ' One need to remove LEAST element.', '');
+    else if ( skewness > 0 ) then
+        symmetry_outcome = 'Most of values are LESS than average.' || iif(sigma3_violation = 1, ' One need to remove GREATEST element.', '');
+    else
+        symmetry_outcome = 'Distribution according to ND law.';
+    
+    ----------------------------------------------------------------------------
+    if ( kurtosis < 0 ) then
+        uniformity_outcome = 'Low top distribution, values are scattered evenly.';
+    else if ( kurtosis = 0 ) then
+        uniformity_outcome = 'Distribution according to ND law';
+    else
+        uniformity_outcome = 'Peat distribution, values are concentrated near mean.';
+
+    ----------------------------------------------------------------------------
+    if ( skew_ratio < 3 and kurt_ratio < 3 ) then
+        norm_law_outcome = 'Distribution meets ND law requirements.';
+    else
+        norm_law_outcome = 'Distribution DOES NOT meet ND law requirements.';
+
+    suspend;
+
+end
+
+^ -- sys_get_stat_in_one_pass
+
 
 set term ;^
 commit;

@@ -1,9 +1,11 @@
 ####################################################################
-# OLTP-EMUL test for Firebird database - configuration parameters.
-# To get last version type following command:
-# git clone https://github.com/FirebirdSQL/oltp-emul .
-# This file is used for launching test and ISQL sessions on WINDOWS host
-# with running Firebird 4.x 
+# OLTP-EMUL test for Firebird database. Configuration parameters.
+# To get the actual version of test, enter command:
+# 
+# git clone --config core.autocrlf=false https://github.com/FirebirdSQL/oltp-emul .
+# 
+# This file is used to launch ISQL sessions on POSIX for test server with running
+# Firebird 4.x 
 # Parameters are extracted by '1run_oltp_emul.sh' command scenario.
 ####################################################################
 
@@ -13,81 +15,49 @@
 #::::::::::::::::::::::::::::::::::::::::::::::::
 
 
-   # Folder with Firebird console utilities (isql, fbsvcmgr, gbak, gstat).
-   # For builds that are published on official Firebird site such folder is /opt/firebird/bin
-   # For builds that are created in Ubuntu/Debian repos this folder usually is /usr/bin/
+   # Folder with Firebird console utilities (isql, fbsvcmgr, gfix, gbak).
+   # For builds that are published on official Firebird site such folder is /opt/firebird/bin/
+   # For builds that are installed from Ubuntu/Debian repository this folder is /usr/bin/
    # Trailing backslash is optional.
-   # Allows referencing to existing OS environment variable by using exclamation sign.
-   # Example:
-   # fbc = /opt/fb40/bin
+   # Examples:
+   # fbc = /opt/firebird/bin
+   # fbc = /usr/bin
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #
    fbc = /opt/firebird/bin
 
 
-   # Optional. LINUX only: command-line utility for operate as ISQL.
-   # Actual for builds from Ubuntu/Debian repository rather than published on official FB site.
+   # LINUX ONLY. OPTIONAL FOR CentOS/RH. Command-line utility for operate as ISQL.
+   # Actual only for builds installed from Ubuntu/Debian repository.
    # These builds have ISQL utility with different name: 'isql-fb' instead of usual 'isql'.
-   # Full name of this utility will be evaluated by test as concatenation of <fbc> and <clu> values.
-   # Value <fbc>/isql will be used if you leave this parameter commented.
-   # More details about directories where FB utilities live:
+   # Full name of this utility will be evaluated as concatenation of <fbc> and <clu> values.
+   # String '<fbc>/isql' will be used to call ISQL if you leave this parameter commented.
+   #
+   # More details about used directories when FB is installed from Ubuntu/Debian repository:
    #     https://firebirdsql.org/manual/ubusetup.html
    #     https://www.firebirdsql.org/file/documentation/reference_manuals/user_manuals/html/ubusetup.html 
+   # Command for list FB-related files that were installed on Ubuntu/Debian:
+   #     dpkg -L firebird4.0-server
    #
-   # NOTE: you may have to create symlinks in <fbc> folder for following utilities
-   # if they are missed in <fbc>:
-   # gbak; fbsvcmgr; gfix; gstat
-   #
-   # Most probably all of them must point to apropriate utilities in /usr/bin,
-   # i.e. you can set: clu = /usr/bin/isql-fb
-   #
-   # clu = <no value defined>
+   # clu = isql-fb
 
 
-   # Alias or full path and file name of database.
-   # If you want this database be created by test itself, specify it as
-   # FULL PATH and file name. Use only ASCII characters in its name.
-   # Allows referencing to existing OS environment variable by using dollar sign.
+   # Full path and file name of database. DO NOT USE ALIAS. Use only ASCII characters.
+   # Existing OS variable can be referred here by using dollar sign.
+   # It is recommended to read Filesystem Hierarchy Standard before you decide where to put
+   # database and temporary files:
+   #     https://refspecs.linuxfoundation.org/FHS_3.0/fhs-3.0.pdf
+   # Firebird service account must have full access to the folder of specified database <dbnm>
+   # (test will try to create temporary database in this folder for some checks and then drop it).
+   #
    # Examples:
    # dbnm = /var/db/oltp_40.fdb
    # dbnm = $TMP/data/oltp_40.fdb
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #
-   dbnm = /var/tmp/oltp_40.fdb
-
-
-   # Backup of DB for storing settings and results of every completed test.
-   # When test completes, this .fbk is restored to some temporary .fdb,
-   # new data are written there and finally database is backed up again.
-   # If absent, then apropriate database will be created on every test launch
-   # (see calls of script 'oltp_results_storage_DDL.sql')
-   # Scenario 'oltp_overall_report' uses this DB when makes overall report.
-   #
-   # Must be stored on the same host as <dbnm>.
-   # It is recommended to store this DB in the same directory where <dbnm>.
-   #
-   # NOTE: *BACKUP* must be speficied here rather then .fdb file!
-   #
-   # Examples:
-   # results_storage_fbk = /var/db/oltp_40-results-storage.fbk
-   #
-   results_storage_fbk = /var/tmp/oltp_40_results.fbk
-
-
-   # External utility to compress HTML report before storing it in the database
-   # defined by <results_storage_fbk> parameter.
-   # Supported compressors: 7za, zstd and zip
-   # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
-   # Examples:
-   # report_compress_cmd=/usr/bin/7za
-   # report_compress_cmd=/usr/bin/zstd
-   # report_compress_cmd=/usr/bin/zip
-   #
-   # NOTE: YOU HAVE TO INSTALL APROPRIATE PACKAGE FIRST.
-   #
-   report_compress_cmd = /usr/bin/zip
+   dbnm = /var/db/oltp_40.fdb
 
 
    # Parameters for remote connection and authentication.
@@ -99,10 +69,15 @@
 
 
    # Port that is listening by Firebird instance on <host>.
-   # In order to check which process is listening now selected port, type (locally on server):
+   # In order to check which process is listening to selected port, type (locally on server):
    #     netstat --tcp --listening --program --numeric | grep <port>
    # Output will contain PID of process at last token (delimited by '/'). Put this value in the command:
    #     ps ax | grep " <PID>" | grep -v grep
+   #
+   # Ubuntu/Debian notes: if your FB instance was installed from repository then you can check port by
+   # issuing command:
+   #     grep -i "RemoteServicePort" /etc/firebird/<@.@>/firebird.conf
+   # -- where <@.@> marks major FB version (2.5; 3.0; 4.0).
    #
    port = 3050
 
@@ -132,17 +107,26 @@
    # * 'always' means that logs will be removed after test finish regardless any result.
    # * 'never' means that logs will be always preserved.
    # * 'if_no_severe_errors' means that logs will be removed only if no severe exceptions occured during test.
-   # Test considers following exceptions as 'severe':
-   #    gdscode   description
-   #  ---------   ------------
-   #  335544321   string truncation: attempt to assign too long text into string variable.
-   #  335544347   not_valid: validation error for column.
-   #  335544558   check_constraint: operation violates CHECK constraint on view or table.
-   #  335544665   unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint
-   #  335544349   no_dup: operation violates unique index
-   #  335544466   foreign_key: violation of FOREIGN KEY constraint.
-   #  335544838   foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table
-   #  335544839   foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause
+   # Test considers following Firebird-related exceptions as 'severe':
+   #    gdscode    description
+   #  ---------    -----------
+   #  335544321    string truncation: attempt to assign too long text into a string variable.
+   #  335544334    convert_error: conversion error from string
+   #  335544347    not_valid: validation error for column @1, value "@2".
+   #  335544349    no_dup: operation violates unique index
+   #  335544352    no_priv: no permission for @1 access to @2 @3
+   #  335544359    read_only_field: attempted update of read-only column @1
+   #  335544360    read_only_rel: attempted update of read-only table
+   #  335544361    read_only_trans: attempted update during read-only transaction
+   #  335544362    read_only_view: cannot update read-only view @1
+   #  335544466    foreign_key: violation of FOREIGN KEY constraint "@1" on table "@2".
+   #  335544472    login: your user name and password are not defined.
+   #  335544558    check_constraint: operation violates CHECK constraint on view or table.
+   #  335544665    unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint
+   #  335544838    foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table
+   #  335544839    foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause
+   #  335544842    stack_trace
+   #  335544843    ctx_var_not_found: context variable @1 is not found in namespace SYSTEM
    #
    # NOTE: if FB crash occures during test run then value of this parameter will be ignored and all logs will be preserved.
    # Recommended value: if_no_severe_errors
@@ -150,14 +134,14 @@
    remove_isql_logs = if_no_severe_errors
 
 
-#:::::::::::::::::::::::::::::::::::::::::::
-#  SETTINGS FOR REPLICATION, WORKLOAD LEVEL AND PAUSES
-#:::::::::::::::::::::::::::::::::::::::::::
+#:::::::::::::::::::::::::::::
+#  SETTINGS FOR WORKLOAD LEVEL
+#:::::::::::::::::::::::::::::
 
 
    # If you plan this database be involved in replication, then one need to add primary keys
    # to all persistent tables that can be changed during test work.
-   # Assign value of following parameter to 1 in order all necessary changes be added to tables DDL
+   # Assign value of following parameter to 1 in order to apply all necessary changes to tables DDL
    # (primary keys and triggers for some of tables).
    # Setting value to 0 will DROP all changes that are unneeded when test runs without replication.
    # This parameter can be changed 'on the fly': database recreation is NOT required, but in case
@@ -189,13 +173,13 @@
    # script, one can not to check log of errors which occured during this execution. Some errors can require test
    # to be prematurely stopped (e.g. if FB process crashed and it was reflected in firebird.log). But each session
    # can found this only when ISQL finished. This mean that value of following parameter must belong to reasonable scope.
-   # For some (exotic) purpoces when it is needed to increase frequency of reconnections one may to set it to 5...50.
+   # For some (exotic) purposes when it is needed to increase frequency of reconnections one may to set it to 5...50.
    # Recommended value: 300
    #
    actions_todo_before_reconnect = 300
 
 
-   # Maximal number connections per second at the test startup phase.
+   # Maximal number of established connections per second when test STARTUP begins.
    # Defines allowed rate of new attachments appearance for making workload grow smoothly.
    #
    # We have to limit RATE of requests for new attachments, especially when total count of launching ISQL sessions 
@@ -228,10 +212,11 @@
    max_cps = 25
 
 
+   # OPTIONAL.
    # MINIMAL pause duration between each business operations, in seconds.
    # This parameter has default value 0 and can be commented.
    # Duration of pause will be evaluated at runtime as random value 
-   # between %sleep_min% and %sleep_max% values.
+   # between <sleep_min> and <sleep_max> values.
    #
    sleep_min = 0
 
@@ -253,7 +238,7 @@
 
 
    # When we want to insert delays between subsequent business actions then parameter sleep_max > 0 must be specified.
-   # Delays can be done either by using calls of external OS command (i.e. "shell ... ;") or by UDF invocation.
+   # Delays can be done either by external OS command (i.e. "shell ... ;") or by UDF invocation.
    # Calls to external OS command from dozen of sessions leads to valuable load, especially when number of sessions more than 300.
    # This can be avoided if delays are done via UDF calls.
    #
@@ -268,7 +253,11 @@
    # -- must be written on the SINGLE LINE in this script ( <UDF_name> will be searched in this line as its 4th word).
    #
    # This UDF implementation (.so file) must be stored in the server-side folder, usually in $FIREBIRD_HOME$/UDF.
-   # Also, UDF calls must be enabled in firebird.conf (e.g.: UDFaccess = restrict UDF)
+   # Also, UDF calls must be enabled in firebird.conf by specifying: UDFaccess = restrict UDF
+   # NOTES for Ubuntu/Debian.
+   #     If your FB instance was installed from Ubuntu/Debian repository then put .so file to /usr/lib/firebird/<@.@>/UDF/
+   #     where '@.@' marks major version of FB, i.e.:
+   #     UdfAccess parameter for such FB instance must have *absolute* value rather then relative, i.e.:
    # See description for parameter 'UDFaccess' in standard firebird.conf for details.
    #
    # Test provides its own UDF and appropriate declaration script named 'oltp_sleepUDF_nix.sql'.
@@ -276,16 +265,15 @@
    # from firebird.conf.
    #
    # NOTES.
-   # You can leave parameter 'sleep_ddl' commented if 'mon_unit_perf' is not 2.
-   # UDF usage is mandatory when config parameter 'mon_unit_perf' has value 2.
+   #     UDF usage can not be avoided if parameter 'mon_unit_perf' has value 2. You can NOT leave 'sleep_ddl' commented out in this case.
    #
-   # By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
-   # You have to add it or uncomment manually.
+   #     By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
+   #     You have to add it or uncomment manually.
    #
    sleep_ddl = ./oltp_sleepUDF_nix.sql
 
 
-   # Should SET TRANSACTION statement include NO AUTO UNDO clause. Avaliable values: 1=yes, 0=no
+   # Should SET TRANSACTION statement include NO AUTO UNDO clause ? Avaliable values: 1=yes, 0=no
    # Performance can be increased if this option is set to 1:
    # SuperServer:   5 -  6 %
    # SuperClassic: 10 - 11 %
@@ -302,14 +290,47 @@
    # In that case set value of this parameter to zero to prevent selection of procedure that does this updating.
    #
    # Recommended value of this parameter depends on size of database:
-   # within scope 30...60 minutes for databases with size up to 20 Gb;
-   # within scope 60...90 minutes for databases with size 20...40 Gb;
-   # within scope 90...120 minutes for databases with size 40...60 Gb;
-   # within scope 120...240 minutes for databases with size 60...80 Gb;
-   # 0 (zero) for databases with size more than 80...100 Gb (this means that statistics will not be updated at all).
+   #     within scope 30...60 minutes for databases with size up to 20 Gb;
+   #     within scope 60...90 minutes for databases with size 20...40 Gb;
+   #     within scope 90...120 minutes for databases with size 40...60 Gb;
+   #     within scope 120...240 minutes for databases with size 60...80 Gb;
+   #     0 (zero) for databases with size more than 80...100 Gb (this means that statistics will not be updated at all).
    # NOTE. For big databases (with size more than 100 Gb) updating of index statistics has sense only for big [test_time] values.
    #
    recalc_idx_min_interval = 30
+
+
+   # Following parameter can be used for performance benchmark of Firebird ES/EDS mechanism and its External Connections Pool (ECP).
+   # Note: ECP is supported only since Firebird 4.x. It is also supported by HQbird 3.x - commercial FB-branch (see https://ib-aid.com/ ).
+   # This parameter is ignored if test is launched against Firebird 2.5.x.
+   # When this parameter is non-zero then most of application and service procedures are changed: static PSQL expression are replaced with dynamic ones.
+   # Avaliable values:
+   #     0 - do not change static PSQL code, use it whenever it is possible (default);
+   #     1 - replace static PSQL code with dynamic and use it in 'EXECUTE STATEMENT', but *without* using 'ON EXTERNAL' mechanism;
+   #     2 - replace static PSQL code with dynamic and use it in 'EXECUTE STATEMENT ... ON EXTERNAL'.
+   #         External Connections Pool can be tested and additional reports will be generated in this case.
+   #
+   # This parameter can be changed without need to DB recreation: test applies DDL replacements before every new launch.
+   # If 'use_es' = 2 and 'separate_workers' = 1 then additional requirement exists for parameters 'mon_query_role', 'mon_usr_prefix' and 'mon_usr_passwd':
+   # all of them must be defined, i.e. have non-empty values. Otherwise there is no way to distinguish "authors" of running DML within external connections.
+   #
+   # WARNING! Activating ES/EDS without ECP leads to significant performance penalty!
+   # It is strongly recommended to enable ECP when this parameter is set to 2.
+   #
+   # Optimal values of ECP-related parameters in firebird.conf can be found empirically as follows:
+   # 1. Set parameter 'make_html' of this test to 1 (this parameter is described below);
+   # 2. Open firebird.conf and change ExtConnPoolSize: set it to 2*N+10, whene N is planning number of launched ISQL sessions;
+   # 3. ExtConnPoolLifeTime: optimal value can be achieved after several FB restarts and test launches.
+   #    Initial value can be set to 15.
+   #    Then launch test with test_time not less than 20 minutes. Wait until it completely finish.
+   #    Open HTML report and find there text: "External connections life activity, per connections". Note that there is 'chart' reference to the right of this text.
+   #    Jump to this chart ("External connections pool: life activity, per connections").
+   #    Note on dark-magenta dots that represent "Max. idle state in the pool, s".
+   #    If almost all of them lie near upper bound of this chart then you have to INCREASE value of ExtConnPoolLifeTime parameter. Set it, for example, to 30.
+   #    Restart FB, repeat test launch, wait for full completition and check again this chart.
+   #    Do these steps until most of dark-magenta dots on Y-axis will be much lower than value of ExtConnPoolLifeTime.
+   #
+   use_es = 0
 
 
 #:::::::::::::::::::::::::::::::::::
@@ -330,6 +351,8 @@
    # Assign 1 to this parameter if you want to separate work of sessions and thus totally exclude exceptions related to
    # update conflicts and violation or check constraint defined for aggregated remainders value.
    # Otherwise set it to 0.
+   # NOTE. When this parameter is 1 and 'use_es' is 2 then all following parameters must be uncommented:
+   # 'mon_query_role' ; 'mon_usr_prefix' ; 'mon_usr_passwd'.
    # Recommended value: 1
    #
    separate_workers = 1
@@ -370,13 +393,14 @@
    detailed_info = 0
 
 
+
    # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
    # When 0 then monitor tables are not queried.
    # When 1 then EVERY session will take two snapshots before and after execution of selected unit.
    # More detailed analysis with detalization down to separate stored procedures can be achieved
    # by updating setting 'mon_unit_list'.
    # When 2 then only ONE session is dedicated to gather monitoring data with obtaining data
-   # that relates to ALL other working sessions.
+   # that relates to ALL other working sessions. This is first session of launched.
    # It will call special SP 'srv_fill_mon_memo_consumption' every <mon_query_interval>-th second.
    # NOTE: delays for mon_unit_perf=2 between transactions will be done only when 'sleep_ddl' is defined,
    # e.g. when we make delays via UDF, without calls to external OS commands.
@@ -386,12 +410,19 @@
    mon_unit_perf = 0
 
 
+   # Following three parameters must be either all defined or all commented out.
+   # They are used for two purposes:
+   # 1) to gather monitoring data on behalf of non-privileged user about resources that were consumed by him and ONLY by him;
+   # 2) to link "authority" of DML with worker ID. Need only when this DML is performed by connection in External Pool and
+   #    changes of every worker must be separated (see description of parameters 'separate_workers' and 'use_es').
+   #
    # Gathering of monitoring data leads to significant performance penalty if session works as SYSDBA: 
    # all other attachments have to put information about their state into special pool.
    # Benchmarks show that performance can fall for ~10x when all attachments work as SYSDBA and value of
-   # parameter <mon_unit_perf> is 1.
+   # parameter <mon_unit_perf> is 1 (i.e. every worker gathers monitoring data about himself *AND* all other workers).
    # But actually each worker is interested only about its own data from monitoring rather than others.
-   # Behaviour was improved in Firebird 3.x+ for such case: if session works as NON-privileged used then
+   #
+   # Engine was improved in Firebird 3.x+ for such case: if session works as NON-privileged used then
    # its query to monitoring tables will not affect on other attachments which work under different logins.
    # One can use this improvement and require that test will launch every ISQL session so that it will work
    # with database as non-privileger user, with accessing to DB objects via special role with all needed grants.
@@ -410,10 +441,18 @@
    # Each user name will be further provided with suffix like '0001', '0002' etc, up to the total number of sessions.
    # These users will be granted to use ROLE which name is defined by <mon_query_role> parameter (see above).
    # After test finish all of them will be dropped.
-   # NOTE: actual only for Firebird 3.0 and above. Has no effect on Firebird 2.5.
+   # NOTE-1. Actual only for Firebird 3.0 and above. Has no effect on Firebird 2.5.
+   # NOTE-2. Value must end with underscore character.
    # Recommended value: any string that meets FB requirement to the name of USER, e.g.: tmp$oemul$user_
    #
    mon_usr_prefix = tmp$oemul$user_
+
+
+   # Password for temporarily created users. Do not set this it to trivial value because policy for passwords
+   # can became more strict in the future versions of FB.
+   # Value must not contain '=', '!' and '%' character because of parsing problems.
+   #
+   mon_usr_passwd = 0Ltp-Emu1
 
 
    # This setting can be used only when config parameter 'enable_mon_query' is 1.
@@ -427,7 +466,7 @@
    mon_unit_list = //
 
 
-   # This setting can be used only when config parameter 'enable_mon_query' is 2.
+   # This setting is applied only when config parameter 'enable_mon_query' is 2.
    # Number of seconds between calls to SP that gathers monitoring data for all working attachments.
    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script
@@ -440,21 +479,22 @@
 
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-#  SETTINGS TO FORCEDLY TERMINATE OF WORK BEFORE THE DUE TIME
+#  SETTINGS FOR PREMATURE TERMINATION OF WORK BEFORE TIME EXPIRE
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 
    # Mnemonics of exceptions which must force test to be stopped (see calls of fn_halt_sign(gdscode)):
-   # 'CK' -- halt if CHECK violation or 'not_valid' occurs (mostly this can be due to negative stock remainders)
-   # 'PK' -- halt if PK or UK violation occurs
-   # 'FK' -- halt if FK violation occurs // now n/a because test does not use foreign keys.
-   # 'ST' -- halt if gdscode 335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
+   #     'CK' -- halt if CHECK violation or 'not_valid' occurs (mostly this can be due to negative stock remainders)
+   #     'PK' -- halt if PK or UK violation occurs
+   #     'FK' -- halt if FK violation occurs // now n/a because test does not use foreign keys.
+   #     'ST' -- halt if gdscode 335544842 appeared at the top of stack and logged into perf_log (strange problem only in 3.0 SC)
    # These mnemonics can be combined in list, i.e.: 'CK/PK/FK' - halt if CHECK or PK or FK violation occurs
    # Default: '/CK/' ==> force test to be stopped on attempt to write NEGATIVE values for stock remainders.
-   # 12.02.2015: PK and FK violations *can* be detected only in sp_make_qty_storno & sp_kill_qty_storno,
-   # but it is due to undefined order of UNDO actions inside the engine when some action must be cancelled.
+   # 12.02.2015: PK and FK violations *can* be detected only during heavy workload in procedures that operates with huge number
+   # of records. These are: sp_make_qty_storno and sp_kill_qty_storno,
+   # This can occur due to undefined order of UNDO actions inside the engine when some action must be cancelled.
    # Detailed investigation:
-   # sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
+   #     sql.ru/forum/1142271/posledstviya-nepredskazuemo-neposledovatelnyh-otkatov-izmeneniy-pri-exception
    # Explanation by dimitr was sent privately to e-mail, letters date = 12.02.2015.
    #
    halt_test_on_errors = /CK/
@@ -464,14 +504,14 @@
    #
    # Declarative CHECK constraint for non-negative QTY_* columns should NOT ever be fired in this test.
    # This parameter defined numeric value which bits must be interpreted as:
-   # bit#0 := 1 -- perform calls of procedure SRV_FIND_QD_QS_MISM in order to register mismatches between
-   #               doc_data.qty and total number of rows in QDISTR and QSTORNED tables for doc_data.id;
-   # bit#1 := 1 -- perform calls of procedure SRV_CHECK_NEG_REMAINDERS instead of actual totalling turnovers
-   #               to the table INVNT_SALDO. This value must be used only for debug purposes.
-   # bit#2 := 1 -- allow dump dirty data into debug tables for analysis, see sp ZDUMP4DBG, in case
-   #               when PK/FK or check constraint is violated (see also parameter 'halt_test_on_errors')
-   #               NOTE: when bit#2 has value 1 then parameter 'create_with_debug_objects' must be 1
-   #               to force build scenario create auxiliary Z-tables.
+   #     bit 0 := 1 -- perform calls of procedure SRV_FIND_QD_QS_MISM in order to register mismatches between
+   #                   doc_data.qty and total number of rows in QDISTR and QSTORNED tables for doc_data.id;
+   #     bit 1 := 1 -- perform calls of procedure SRV_CHECK_NEG_REMAINDERS instead of actual totalling turnovers
+   #                   to the table INVNT_SALDO. This value must be used only for debug purposes.
+   #     bit 2 := 1 -- allow dump dirty data into debug tables for analysis, see sp ZDUMP4DBG, in case
+   #                   when PK/FK or check constraint is violated (see also parameter 'halt_test_on_errors')
+   #                   NOTE: when bit#2 has value 1 then parameter 'create_with_debug_objects' must be 1
+   #                   to force build scenario create auxiliary Z-tables.
    #
    # This parameter was used during test development and can be useful in case of some changes/refactoring
    # in test logic. Normally its value must be 1.
@@ -479,10 +519,11 @@
    qmism_verify_bitset = 1
 
 
+   # OPTIONAL.
    # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
    # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
    # '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
-   # Usage of this script is OK for most cases except extremely high workload when establishing of new connect will be unavaliable.
+   # This script works normally for most cases except extremely high workload when establishing of new connect is difficult.
    #
    # When extremely high workload is used then following message can appear on every attempt to establish new attachment:
    #     Statement failed, SQLSTATE = 08004
@@ -494,14 +535,13 @@
    # Please note that you have to make this file EMPTY before every new test run. Test can not do that when server is remote.
    #
    # If you have decided to use EXTERNAL FILE then following steps must be done for premature terminate all test activity:
-   #   1. Open that file in text editor and type one ascii-character there;
-   #   2. Press ENTER and save this file.
-   #   3. Make this file empty again when all isql sessions terminated their work.
+   #     1. Open that file in text editor and type one ascii-character there;
+   #     2. Press ENTER and save this file.
+   #     3. Make this file empty again when all isql sessions terminated their work.
    # Also, please note on value of parameter "ExternalFileAccess" in firebird.conf:
-   #   1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
-   #      queried by every attachment as 'stop flag'.
-   #   2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
-   #
+   #     1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
+   #        queried by every attachment as 'stop flag'.
+   #     2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
    #
    #     <tmpdir>/1stoptest.tmp.sh
    #
@@ -617,10 +657,10 @@
    # Should heavy-loaded tables (QDistr and QStorned) be splitted on several different tables,
    # each one for separate pair of operations that are 'source' and 'target' of storning ?
    # Avaliable values: 
-   # 0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
-   # 1 = USE several tables with the same structure in order to split heavy workload on them.
-   #     NOTE (2019). Not only Qdistr and QStorned but also PERF_LOG table will be 'splitted' onto
-   #     several tables (with names PERF_SPLIT_01...PERF_SPLIT_09) when this parameter is set to 1. 
+   #     0 = do NOT split workload on several tables (instead of single QDistr and QStorned);
+   #     1 = USE several tables with the same structure in order to split heavy workload on them.
+   #         NOTE (2019). Not only Qdistr and QStorned but also PERF_LOG table will be 'splitted' onto
+   #         several tables (with names PERF_SPLIT_01...PERF_SPLIT_09) when this parameter is set to 1. 
    # Recommended value: 1.
    #
    create_with_split_heavy_tabs = 1
@@ -629,7 +669,8 @@
    # Whether heavy-loaded table (QDistr or its XQD_* clones) should have only one ("wide")
    # compound index or two separate indices (1=yes, 0=no).
    # Number of columns in compound index depends on value of two parameters:
-   # 1) create_with_split_heavy_tabs and 2) create_with_separate_qdistr_idx (this).
+   #     1) 'create_with_split_heavy_tabs' and
+   #     2) 'create_with_separate_qdistr_idx' (this).
    # Order of columns is defined by parameter 'create_with_compound_idx_selectivity'.
    # Recommended value: 0.
    #
@@ -638,7 +679,9 @@
 
    # Parameter 'create_with_compound_columns_order' defines order of fields in the starting part
    # of compound index key for the table which is subject to most heavy workload - QDistr. 
-   # Avaliable options: 'most_selective_first' or 'least_selective_first'.
+   # Avaliable options:
+   #     'most_selective_first' or
+   #     'least_selective_first'.
    # When choice = 'most_selective_first' then first column of this index will have selectivity = 1 / [W],
    # where [W] = number of rows in the table 'WARES', depends on selected workload mode.
    # Second and third columns will have poor selectivity = 1/6.
@@ -687,6 +730,52 @@
    test_intervals = 30
 
 
+   # OPTIONAL.
+   # Backup(!) name of dedicated database that serves as storage for test settings
+   # and final report of every completed test.
+   # When test finished, this backup is restored to temporary database, new data are saved
+   # and then this database is backed up again to this .fbk.
+   #
+   # Scenario 'oltp_overall_report' (see 'utils' sub-directory) will restore from this backup
+   # for generating overall report, so in that case this parameter must be defined.
+   #
+   # Firebird service account must have access rights to operate with this file.
+   # It is recommended to put this .fbk in the same directory as <dbnm>.
+   #
+   # NOTE: *BACKUP* must be speficied here rather then .fdb file!
+   #
+   # Examples:
+   # results_storage_fbk = $(dirname "$dbnm")/oltp_40_results.fbk
+   # results_storage_fbk = /var/db/oltp_40-results-storage.fbk
+   #
+   # results_storage_fbk = <no value defined>
+
+
+
+   # OPTIONAL. LINUX ONLY.
+   # Utility to compress HTML report and (if FB crash occured) stack trace of dump.
+   # Compressed result will be saved in the database defined by <results_storage_fbk>.
+   # By default, GZIP utility will be used that must present on most Linux instances.
+   # Supported compressors: gzip, p7zip, zstd and zip
+   # If none of them can be found then HTML report will be stored without compression.
+   # Extraction of HTML report will be done by 'oltp_overall_report' scenario which supposes
+   # that apropriate packages already was installed, namely:
+   #     'gzip'  - to extract from .gz; binary for extraction: /usr/bin/7za
+   #     'p7zip' - to extract from .7z, .gz and .zip; binary for extraction: /usr/bin/7za
+   #     'zstd'  - to extract from .zstd; binary for extraction: /usr/bin/zstd
+   # Note that 7za and zstd provide much higher compression than ZIP or GZIP.
+   # This parameter can be left commented out if you don't plan to run test on regular basis
+   # with transferring its (compressed) results to scenario 'oltp_overall_report'.
+   #
+   # Examples:
+   # report_compress_cmd=/usr/bin/gzip
+   # report_compress_cmd=/usr/bin/7za
+   # report_compress_cmd=/usr/bin/zstd
+   # report_compress_cmd=/usr/bin/zip
+   #
+   # report_compress_cmd = <no value defined>
+
+
    # This parameter is used in 'oltp-scheduled' scenario and points to the name of etalone DB which serves
    # as source for copy to work DB before every new test starts.
    # It is possible to get following error when DB was moved from one host to another without b/r:
@@ -695,13 +784,16 @@
    # In this case try following command:
    #     <fbc>/gfix -icu <etalon_dbnm>
    # NOTE.
-   # It is recommended to change state of this DB to 'full shutdown' or at least make it read only.
+   # It is recommended to store this database in the same directory as <dbnm> and change its state to 'full shutdown'
+   # or at least make it read only.
    #
-   etalon_dbnm = /var/tmp/oltp_40.etalone.fdb
+   etalon_dbnm = $(dirname "$dbnm")/oltp_40.etalone.fdb
 
 
    # Create report in HTML format (along with plain text) ? Avaliable options: 1 = yes, 0 = no.
-   # NOTE: when this parameter is 1, time of reports creation will be slighly increased.
+   # When parameter 'results_storage_fbk' is uncommented then HTML report will be saved in dedicated database and later
+   # will be extracted from there by {OLTP_ROOT}\util\oltp-overall-report\oltp_overall_report batch scenario.
+   # NOTE: time of reports creation will be increased if this parameter is set to 1.
    #
    make_html = 1
 
@@ -721,23 +813,21 @@
    run_db_validation = 0
 
 
-   # Optional parameter.
-   # Should final report be saved in file with name which contain info about FB, database, test settings ?
-   # If no, leave this parameter commented. In that case final report will be always saved with the same name.
-   # If yes, choose format according to one of following:
+   # This parameter defines form of final report file name which might contain info about FB and main DB/test settings.
+   # Value can be one of follows:
    #     regular   - appropriate for quick found performance degradation, without details of test settings
    #     benchmark - appropriate for analysis when different settings are applied
    #
    # Report file name always consists of tokens that reflect:
-   # * Performance score;
-   # * FB snapshot number;
-   # * ServerMode value;
-   # * Test phase duration (hours and minutes);
-   # * Number of worked sessions;
-   # * Forced Writes value;
-   # * Number of CPU cores;
-   # * Total RAM size, Gb;
-   # * Timestamp when test started.
+   #     * Performance score;
+   #     * FB snapshot number;
+   #     * ServerMode value;
+   #     * Test phase duration (hours and minutes);
+   #     * Number of worked sessions;
+   #     * Forced Writes value;
+   #     * Number of CPU cores;
+   #     * Total RAM size, Gb;
+   #     * Timestamp when test started.
    # Example of report name when this parameter is 'regular':
    #     YYYYmmDD_HHMM_score_07011_build_2241_ss40__3h00m_100_att_fw__on_cpu4_ram32.txt
    # Example of report name when this parameter is 'benchmark':
@@ -761,6 +851,7 @@
    # Avaliable options: 1 = yes, 0 = no.
    # This setting has sense only when you launch ISQL sessions at the server which you are 
    # interesting on, i.e. when value of 'host' parameter is localhost or 127.0.0.1
+   # Some kind of information can be inaccessible if you work as user without admin rights.
    # NOTE: scenario that is launched by cron will see PATH=/usr/bin:/bin, i.e. some utilities from /usr/sbin
    # will not be avaliable. Some of these utilities ((e.g. fdisk and dmidecode) are used to gather hardware data.
    # This can be solved if cron job line will contain: " . /etc/profile; " before the command that is to be launched.
@@ -772,10 +863,9 @@
    gather_hardware_info = 1
 
 
-#::::::::::::::::::::::::::::::::::::::::::::
-#  EXOTIC SETTINGS (USAGE WAS NOT CHECKED)
-#::::::::::::::::::::::::::::::::::::::::::::
-
+#::::::::::::::::::::::::::::::::::::::::::::::::::::
+#  EXOTIC SETTINGS (USAGE HAS NOT BEEN DEEPLY TESTED)
+#::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 
    # Does Firebird running in embedded mode ? (1=yes, 0=no)

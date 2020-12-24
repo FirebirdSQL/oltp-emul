@@ -19,7 +19,7 @@ msg_noarg() {
 
 sho() {
   local msg=$1
-  local log=$2
+  local log=$2 # ${2:-"UNKNOWN_LOG"}
   local use_ms=${3:-0}
   local dts
   if [[ $use_ms -eq 0 ]]; then
@@ -29,6 +29,11 @@ sho() {
   fi
   echo $dts. $msg
   echo $dts. $msg>>$log
+#  if [[ "${log}" == "UNKNOWN_LOG" ]]; then
+#      echo MISSED NAME OF LOG FILE. Message: "$msg"
+#  else
+#      echo $dts. $msg>>$log
+#  fi
 }
 
 apply_cmd() {
@@ -142,16 +147,20 @@ get_diff_fblog() {
     rm -f $tmpdir/tmp_fb_diff.$sid.tmp
     
     sho "SID=$sid. Gathering firebird.log, mode=$mode" $log4sid
+    
+    # 20.12.2020: do NOT try to open firebird.log directly:
+    # when FB is installed on Ubuntu from repo, log will be
+    # in /etc/firebird/N.M/ folder rather than in $fbc
 
     # fblog_beg = $tmpdir/fb_log_when_test_started.$fb.log
-    if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
-        fb_home_dir="$(dirname "$fbc")"
-        sho "SID=$sid. ISQL session is running on server-side, we can open $fb_home_dir/firebird.log directly call fbsvcmgr to get its content." $log4sid
-        echo -e 'Command: diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log' >> $log4sid
-	echo --- start of diff output --- >>$tmpdiff
-	diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log 1>>$tmpdiff 2>&1
-	echo --- start of diff output --- >>$tmpdiff
-    else
+#    if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+#        fb_home_dir="$(dirname "$fbc")"
+#        sho "SID=$sid. ISQL session is running on server-side, we can open $fb_home_dir/firebird.log directly call fbsvcmgr to get its content." $log4sid
+#        echo -e 'Command: diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log' >> $log4sid
+#	echo --- start of diff output --- >>$tmpdiff
+#	diff --unchanged-line-format="" --new-line-format=":%dn: %L" $fblog_beg $fb_home_dir/firebird.log 1>>$tmpdiff 2>&1
+#	echo --- start of diff output --- >>$tmpdiff
+#    else
         sho "SID=$sid. Use command $run_fbs to get content of firebird.log" $log4sid
         $run_fbs 1>$fblog_end 2>>$log4sid
         sho "SID=$sid. Done, size of $fblog_end: $(stat -c%s $fblog_end). Starting comparison of old and new firebird log" $log4sid
@@ -160,7 +169,7 @@ get_diff_fblog() {
 		diff --unchanged-line-format="" --new-line-format=":%dn: %L"  $fblog_beg $fblog_end
 		--- end of diff output ---
 	EOF
-    fi
+#    fi
     cat $tmpdiff
     cat $tmpdiff >> $log4sid
 
@@ -552,7 +561,11 @@ add_html_table() {
         echo "</pre>" >>$tmp_html
         cat $tmp_html >> $htm_file
 
-        exit 1
+        # 23.12.2020: do NOT use 'exit' here!
+        # isql could failed because of FB crash rather than PSQL-related error,
+        # so we have to continue final stage of this script in order to gather
+        # stack-trace info.
+        return
 
     fi
 
@@ -817,11 +830,12 @@ add_html_table() {
     fi
 
     if [[ -f ${chart_settings_file} ]]; then
-        #x_axis_field=$(grep -i x_axis_field $chart_settings_file | awk -F '=' '{print $2}')
-        #y_axis_field=$(grep -i y_axis_field $chart_settings_file | awk -F '=' '{print $2}')
 
+        ##################################
+        # Start writing to $tmp_chart_html
+        ##################################
 	cat <<-EOF >>$tmp_chart_html
-	$( [[ -n "${href_title}" ]] && echo "<h3><a name=${href_name}> ${href_title} </a></h3>" )
+	$( [[ -n "${href_title}" ]] && echo "${htm_repn}<a name=${href_name}> ${href_title} </a>${htm_repc}" )
 
 	<div id="${draw_func_name}_div" style="width: ${chart_div_wid}px; height: ${chart_div_hei}px;${div_inline_expr}"></div>
 
@@ -855,7 +869,8 @@ add_html_table() {
 	if [[ "${chart_type}" == "PieChart" ]]; then
 		cat <<-EOF >>$tmp_chart_html
 	        var options = {
-                        title: '${chart_title}'
+                        title: '${chart_title}',
+                	$( [[ -n "${chart_area_options}" ]] && echo "chartArea:${chart_area_options}," )
                     };
 		EOF
 	else
@@ -917,9 +932,408 @@ add_html_table() {
 
     rm -f $sql_temp $sql_log $sql_err $tmp_sqlda $tmp_nums $tmp_html $tmp_chart_data
 
+    # added 08.12.2020:
+    rm -f $chart_settings_file
+
 }
 # end of: add_html_table()
 # -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+save_crash_info() {
+    # "$dbconn" $crash_on_db_shut $crash_during_run $plog
+    
+    local dbconn=$1
+    local v_overall_results_id=$2
+    local crash_on_db_shut=$3
+    local crash_during_run=$4
+    local log4all=$5
+    
+    local tmpname=tmp_crash_info
+    local tmpauxsql=$tmpdir/${tmpname}.sql
+    local tmpauxlog=$tmpdir/${tmpname}.log
+    local tmpauxlst=$tmpdir/${tmpname}.lst
+    local tmpauxerr=$tmpdir/${tmpname}.err
+    local tmpauxtmp=$tmpdir/${tmpname}.tmp
+    local tmpsidsql=$(dirname $sql)/${tmpname}.1.sql
+    local tmpsidlog=$(dirname $sql)/${tmpname}.1.log
+    local tmpsiderr=$(dirname $sql)/${tmpname}.1.err
+
+    local run_cmd zip_retcode gdb_retcode iter truncated stack_trace_state
+    local core_dir core_pattern_ok gdb_stack_trace_log zip2b64_txt zip_cmd
+    local crashed_process crash_exact_stamp crashed_executable  crash_size trace_size
+    local dts_exact_suffix v_crash_id
+
+    sho "Routine $FUNCNAME: start." $log4all
+
+    # 18.12.2020
+    if [ $EUID -eq 0 ];  then
+        if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+            if [[ $crash_on_db_shut -eq 1 || $crash_during_run -eq 1 ]]; then
+                # 18.12.2020. Attempt to gather info about crash and create stack-trace
+                # We are interested only about crashes that:
+                # 1) related to '$fbc/firebird' binary
+                # 2) did appear NOT earlier than first timestamp of this test launch
+                # Table PERF_LOG is updated on every new test launch with record:
+                # unit = 'crash_watch_interval', dts = timestamp of oltp-emul scenario start
+                command -v gdb 1>>$tmpsidlog 2>&1
+                if [[ $? -eq 0 ]]; then
+                    # gdb found, now we can check crashes and create stack trace for them.
+                    # ------------------- Get core dumps pattern that is defined at this host --------------------
+                    sys_core_ptn=$(cat /proc/sys/kernel/core_pattern)
+                    exe_pos_in_core_pattern=$(echo $sys_core_ptn|grep -b -o "%e"|head -1| awk 'BEGIN {FS=":"}{print $1}')
+		    core_pattern_ok=1
+                    if [ -z "$exe_pos_in_core_pattern" ] ; then
+			cat <<-EOF >$tmpsidlog
+			Invalid core pattern: $sys_core_ptn
+			Pattern must contain element for determining executable filename: %e
+			Add in /etc/sysctl.conf string like following:
+			kernel.core_pattern=/tmp/core.%e.%p.%h.%t
+			Avaliable options in the pattern mask:
+			    %p: pid
+			    %: '%' is dropped
+			    %%: output one '%'
+			    %u: uid
+			    %g: gid
+			    %s: signal number
+			    %t: UNIX time of dump
+			    %h: hostname
+			    %e: executable filename
+			EOF
+			cat $tmpsidlog
+			cat $tmpsidlog >$log4all
+			core_pattern_ok=0
+                    else
+                        sho "Core pattern: $sys_core_ptn - DOES contain executable filename element '%e'" $log4all
+                    fi
+                    
+                    if [[ $core_pattern_ok -eq 1 ]]; then
+                        core_dir=$(dirname "${sys_core_ptn}")
+                        if [ ! -d "${core_dir}" ] ; then
+			    sho "Path where core dumps should be stored: '$core_dir' - is not a directory." $log4all
+			    core_pattern_ok=0
+                        fi
+                    fi
+
+                    if [[ $core_pattern_ok -eq 1 ]]; then
+                        percent_pos_in_core_pattern=$(echo $sys_core_ptn|grep -b -o "%"|head -1| awk 'BEGIN {FS=":"}{print $1}')
+                        # Get mask from kernel.core_pattern for pass it to 'find' command:
+                        # =/tmp/core.%e.%p.%h.%t ==> /tmp/core-*
+                        act_core_ptn="$(echo $sys_core_ptn | cut -c1-$percent_pos_in_core_pattern)*"
+
+                        # take pattern from .conf:
+                        # (.|-|/)+(fb_inet_server|fb_smp_server|fbserver|firebird|isql|gstat|fbsvcmgr|gfix|gbak|fb_lock_print)(.|-)+
+
+			cat <<- EOF >>$tmpauxsql
+				set heading off;
+				select left(cast(dateadd(-3 minute to dts_beg) as varchar(100)),19)
+				from perf_log g
+				where g.unit = 'crash_watch_interval'
+				order by dts_beg desc rows 1;
+			EOF
+			$isql_name $dbconn -nod -i $tmpauxsql $dbauth 1>$tmpauxlog 2>$tmpauxerr
+			dts_this_test_launch="9999-12-31 23:29:29"
+			if [[ -s $tmpauxlog ]]; then
+			    while read line ; do
+			        dts_this_test_launch=$line
+			    done < <(grep . $tmpauxlog)
+			    # result: min_dts is approx. timestamp of OLTP-EMUL scenario start (minus several minutes)
+			fi
+
+                        #fb_processes_pattern="(.|-|/)+(fb_inet_server\|fb_smp_server\|firebird)(.|-)+"
+                        run_cmd="find ${act_core_ptn} -type f -newermt \"${dts_this_test_launch}\" | grep -i -E \"(core(.|-)?|/)(firebird|fb_inet_server|fb_smp_server)\""
+                        sho "Trying to find dumps with creation timestamp greater than ${dts_this_test_launch}. Command:" $log4all
+                        sho "$run_cmd" $log4all
+                        eval $run_cmd > $tmpauxlog
+                        sho "Result:" $log4all
+                        echo ----------------
+                        cat $tmpauxlog
+                        echo ----------------
+                        cat $tmpauxlog >>$log4all
+                        
+                        # Now we have a list of dumps that relate to crashed FB process.
+                        # We have to process each of these dumps and create stack trace.
+                        if [[ -s $tmpauxlog ]]; then
+                            # Validate dumps each of them must point to origin binary:
+                            # "Core was generated by `/opt/fb30test/bin/firebird'"
+                            # - and dirname of this binary must contain current '$fbc'
+                            rm -f $tmpauxlst
+                            while read -r line
+                            do
+                                  gdb -batch -c $line 2>$tmpauxerr | grep "generated by" 1>$tmpauxtmp 2>&1
+                                  gdb_retcode=$?
+                                  # Example when core file is valid and gdb was able to determine its origin:
+                                  # Core was generated by `/opt/fb30test/bin/firebird'
+                                  if [[ $gdb_retcode -eq 0 ]]; then
+                                      execfn=$(grep . $tmpauxtmp | cut -d"\`" -f2 | cut -d"'" -f1)
+                                      sho "Success. Result of parsing executable name for this core:" $log4all
+                                      sho "${execfn}" $log4all
+                                      echo $line>>$tmpauxlst
+                                  else
+                                      sho "Could NOT determine binary which is origin for this core." $log4all
+                                      sho "Commands 'file <core_file> and gdb -c <core_file> have no expected output." $log4all
+                                      continue
+                                  fi
+                            done < $tmpauxlog
+                        fi
+                        # -s $tmpauxlog
+                        # Result: $tmpauxlst now contains only file names that really are core files and points to 'our' FB instance
+                        if [[ -s $tmpauxlst ]]; then
+                            sho "Process each core file from list $tmpauxlst" $log4all
+				cat<<- EOF >$tmpauxlog
+				thread apply all bt
+				quit
+				yes
+				EOF
+
+			    iter=0
+			    for dump_i in $(cat $tmpauxlst)
+			    do
+				crashed_process=$(echo ${dump_i##*/} | awk 'BEGIN{FS="[.-]"} {print $2}')
+				iter=$((iter+1))
+				sho "Start iteration: $iter. Core dump to be processed: ${dump_i##*/}" $log4all
+				sho "Crashed process name: $crashed_process" $log4all
+				sho "Get full path and name of binary that crashed." $log4all
+				gdb -batch -c $dump_i 2>$tmpauxerr | grep "generated by" 1>$tmpauxtmp 2>&1
+				gdb_retcode=$?
+				# Example when core file is valid and gdb was able to determine its origin:
+				# Core was generated by `/opt/fb30test/bin/firebird'
+				if [[ $gdb_retcode -eq 0 ]]; then
+				    crashed_executable=$(grep . $tmpauxtmp | cut -d"\`" -f2 | cut -d"'" -f1)
+				else
+				    sho "Could NOT determine binary which is origin for this core." $log4all
+				    sho "Command gdb -c <core_file> has no expected output." $log4all
+				    continue
+				fi
+				# NB: folder must be re-defined for each processed dump!
+				crashed_bin_dir=${crashed_executable%/*}
+				# TODO: add filter for occurence '$fbc' in crashed_bin_dir ?
+				sho "Result of parsing: crashed_executable=$crashed_executable, crashed_bin_dir=$crashed_bin_dir" $log4all
+				can_run_gdb=0
+				if [[ -s $crashed_executable ]]; then
+				    file $crashed_executable 1>$tmpauxtmp 2>&1
+			            cat $tmpauxtmp
+				    cat $tmpauxtmp >>$log4all
+			            if grep -q -i " executable" $tmpauxtmp ; then
+			                sho "File '$crashed_executable' is executable, we can attempt to gather stack trace for its dump." $log4all
+			                can_run_gdb=1
+			            else
+			                sho "File '$crashed_executable' is NOT executable. Stack trace can not be obtained." $log4all
+			            fi
+			        else
+				    sho "File '$crashed_executable' is empty or does not exist. Stack trace can not be obtained." $log4all
+			        fi
+			        if [[ $can_run_gdb -eq 0 ]]; then
+			            sho "%%%%%%%%%%%%%%%%%%%%%%%%%%%   L O O P  %%%%%%%%%%%%%%%%%%%%%%%%%%%%%" $log4all
+				    continue
+				fi
+
+				# Aaccuracy for crash timestamp must be milliseconds:
+				dts_exact_suffix=$(ls -l --time-style='+%H%M%S.%N' $dump_i | awk '{print $6}' | cut -c 1-13)
+				crash_exact_stamp=$(ls -l --time-style='+%H:%M:%S.%N' $dump_i | awk '{print $6}' | cut -c 1-12)
+				# timestamp in format 
+				#crash_exact_stamp=$(stat -c %y $dump_i | cut -c 1-26)
+				crash_size=$(stat -c%s $dump_i)
+				#$(ls -lh $dump_i | awk '{print $5}')
+				gdb_stack_trace_log=$tmpdir/gdb.$crashed_process.$dts_exact_suffix.$iter.txt
+				run_cmd="gdb -q -x $tmpauxlog $crashed_executable $dump_i"
+
+				sho "Generating stack trace for dump $dump_i. Size of dump: $crash_size." $log4all
+				sho "Command: $run_cmd" $log4all
+				##########################
+				###   r u n    g d b   ###
+				##########################
+				eval $run_cmd 1>$gdb_stack_trace_log 2>&1
+				trace_size=$(stat -c%s $gdb_stack_trace_log)
+				#$(ls -lh $gdb_stack_trace_log | awk '{print $5}')
+				sho "Completed. Check stack trace file '$gdb_stack_trace_log', its size: $trace_size" $log4all
+
+				# Inspect stack trace: check whether it contains phrases like
+				# 'Missing separate debuginfo for .../firebird' or
+				# 'not a core dump'
+				# or 'is truncated: expected .* size .* found' etc
+				truncated=0
+				stack_trace_state=NOT_INSPECTED
+				if grep -q -i -E "$dump_i is truncated: expected .* size .* found" $gdb_stack_trace_log; then
+				    sho "NOTE: truncated dump detected:" $log4all
+				    grep -n -i -E "$dump_i is truncated: expected .* size .* found" $gdb_stack_trace_log >$tmpauxtmp
+				    cat $tmpauxtmp
+				    cat $tmpauxtmp>>$log4all
+				    truncated=1
+				    stack_trace_state=TRUNCATED_DUMP
+				fi
+
+				if grep -q -i -E "Missing.+[[:space:]]+debuginfo.+[[:space:]]+$crashed_executable" $gdb_stack_trace_log; then
+				    sho "ACHTUNG. Stack trace is likely useless: could not find file $crashed_bin_dir/.debug/$crashed_process.debug" $log4all
+				    stack_trace_state=MISSED_DEBUG_INFO
+				elif grep -q -i -E "not a core dump" $gdb_stack_trace_log; then
+				    # /tmp/core-fb_smp_server-9447-1516128499 is truncated -- can be written in locale charset, do NOT use it!
+				    sho "ACHTUNG. Coredump is INVALID. Stack trace is likely useless:" $log4all
+				    stack_trace_state=NOT_A_CORE_DUMP
+				elif grep -q -i -E "Failed[[:space:]]+to[[:space:]]+read.*from[[:space:]]+memory" $gdb_stack_trace_log; then
+				    sho "ACHTUNG. Coredump could not be inspected by gdb, memory-related problems. Stack trace is likely useless:" $log4all
+				    if [[ $truncated -eq 0 ]]; then
+				        stack_trace_state=DUMP_IS_BROKEN
+				    fi
+				else
+				    if grep -q -i -E "from[[:space:]]+$crashed_bin_dir/.debug/$crashed_process.debug(.|[[:space:]])+done" $gdb_stack_trace_log; then
+				        sho "Found .debug file and message about successful reading symbols from it." $log4all
+				        stack_trace_state=VALID
+				    else
+				        sho "Stack trace looks strange: could not find message about reading symbols from .debug file" $log4all
+				        stack_trace_state=NO_EXPECTED_MSG
+				    fi
+
+				    if [[ $stack_trace_state == "VALID"  ]]; then
+				      if grep -q -i "shutdownThread" $gdb_stack_trace_log; then
+				        sho "Passed check-1: found 'shutdownThread' string in the stack trace '$gdb_stack_trace_log'" $log4all
+				        stack_trace_state="$stack_trace_state. CHECK-1 PASSED"
+				      else
+				        sho "WARNING. String 'shutdownThread' was NOT found in the stack trace '$gdb_stack_trace_log'" $log4all
+				      fi
+
+				      if grep -q -i -e "at .*.cpp:[[:digit:]]" $gdb_stack_trace_log; then
+				        sho "Passed check-2: found at least one line with pattern 'at ... .cpp:[digits]'" $log4all
+				        stack_trace_state="$stack_trace_state. CHECK-2 PASSED"
+				      fi
+				    fi
+				fi
+				# End of strack trace  inspection for validity
+				
+				# Now we have to compress stack trace. convert it to base64 and generate
+				# SQL script with INSERT statements for storing in $results_storage_fbk
+
+		    #////////////////////////////////////// beg of block for saving stack trace in the results_storage ////////////////////////////////////////////
+		    rm -f $tmpauxsql $tmpsidlog $tmpsiderr
+
+		    echo "set bail on;set echo on;" >>$tmpauxsql
+		    zip_cmd=UNSUPPORTED
+		    if [[ -n "${report_compress_cmd}" ]]; then
+		        # 28.06.2020. Compress to stdout and redirect to base64 text:
+		        # 10 digits, 26 lowercase characters, 26 uppercase characters as well as the Plus sign (+) and the Forward Slash (/).
+		        # There is also a 65th character known as a pad, which is the Equal sign (=). This character is used when the last
+		        # segment of binary data doesn't contain a full 6 bits
+		        if [[ ${report_compress_cmd} == *"/zip"*  ]]; then
+		            #zip_cmd=${report_compress_cmd} -9 ${gdb_stack_trace_log}.zip ${gdb_stack_trace_log}
+		            zip2b64_txt=${gdb_stack_trace_log}.zip.b64.txt
+		            zip_cmd="${report_compress_cmd} -9 --junk-paths - ${gdb_stack_trace_log} | base64 > $zip2b64_txt"
+		        elif [[ ${report_compress_cmd} == *"/7za"*  ]]; then
+		            zip2b64_txt=${gdb_stack_trace_log}.7z.b64.txt
+		            zip_cmd="${report_compress_cmd} u dummy -tgzip -mx9 -mfb273 -so ${gdb_stack_trace_log} | base64 > ${gdb_stack_trace_log}.7z.b64.txt"
+		            #zip_cmd="${report_compress_cmd} u $tmpauxtmp -mx9 -mfb273 ${gdb_stack_trace_log}; cat $tmpauxtmp | base64 > $zip2b64_txt ; rm -f $tmpauxtmp"
+		        elif [[ ${report_compress_cmd} == *"/zstd"*  ]]; then
+		            zip2b64_txt=${gdb_stack_trace_log}.zst.b64.txt
+		            zip_cmd="${report_compress_cmd} --stdout -19 ${gdb_stack_trace_log} | base64 > $zip2b64_txt"
+		        else
+		            command -v /usr/bin/gzip 1>>$tmpauxlog 2>&1
+		            if [[ $? -eq 0 ]]; then
+		                report_compress_cmd="/usr/bin/gzip"
+		                zip2b64_txt=${gdb_stack_trace_log}.gz.b64.txt
+		                zip_cmd="${report_compress_cmd} --best --stdout ${gdb_stack_trace_log} | base64 > $zip2b64_txt"
+		            else
+		                sho "Unsupported config parameter report_compress_cmd = ${report_compress_cmd}" $log4all
+		            fi
+		        fi
+		    fi
+
+		    # Saving HEAD INFO about dump and result of stack trace inspection (valid/truncated/etc):
+		    rm -f $tmpauxsql
+			cat <<-EOF >$tmpauxsql
+				set bail on;
+				set heading off;
+				insert into results_crash_list(
+				     run_id -- bigint not null; FK, references to results_overall.id
+				    ,dumpname -- varchar(255)
+				    ,dumpsize -- bigint
+				    ,dumptime -- timestamp
+				    ,crashed_binary -- varchar(255) -- name of binary that crashed: '/opt/fb40/bin/firebird' etc
+				    ,stack_trace_validation_result -- varchar(255)
+				    ,stack_trace_size -- bigint
+				) values (
+				    ${v_overall_results_id}
+				    ,'${dump_i}' -- name of core file
+				    ,${crash_size} -- size of dump
+				    ,'$(stat -c %y ${dump_i} | cut -c 1-23)' -- exact timestamp of dump, with to milliseconds
+				    ,'${crashed_executable}' -- name of crashed binary: '/opt/fb40/bin/firebird' etc
+				    ,'${stack_trace_state}' -- VALID. CHECK-1 PASSED. CHECK-2 PASSED.
+				    ,${trace_size}
+				)
+				returning id as v_crash_id -- primary key for referencing further in  results_crash_data.crash_id
+				;
+			EOF
+		    run_cmd="$isql_name -i $tmpauxsql -q -nod $dbauth $host/$port:$results_fdb"
+		    sho "Saving main info about dump and result of stack trace inspection. Command:" $log4all
+		    sho "$run_cmd" $log4all
+		    eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
+		    catch_err $? $log4all $tmpsiderr "Check whether database $results_fdb or table exists."
+
+		    # Filter out empty lines and remove all spaces from run_id value:
+		    ##########################################
+		    v_crash_id=$(grep . $tmpsidlog | tr -d "[:blank:]")
+		    ##########################################
+		    sho "Result: v_crash_id=.$v_crash_id." $log4all
+
+		    rm -f $tmpauxsql
+		    if [[ ${zip_cmd} == *"UNSUPPORTED"*  ]]; then
+		        sho "Stack trace is converted to base64 format and saved without compression" $log4all
+		        while read line; do
+				cat <<-EOF >>$tmpauxsql
+				insert into results_crash_data(run_id, crash_id, txt2b64) values( ${v_overall_results_id}, ${v_crash_id}, '${line}' );
+				EOF
+		        done < <( cat $gdb_stack_trace_log | base64 )
+		    else
+		        sho "Stack trace is compressed and converted to base64 format before saving. Command:" $log4all
+		        sho "$zip_cmd" $log4all
+		        eval "$zip_cmd" 1>$tmpsidlog 2>$tmpsiderr
+		        zip_retcode=$?
+		        cat $tmpsidlog >>$log4all
+		        cat $tmpsiderr >>$log4all
+		        if [[ $zip_retcode -ne 0 ]]; then
+		            catch_err $? $log4all $tmpsiderr "Compression FAILED. Check log in $log4all"
+		        fi
+		        
+		        # Saving STACK TRACE (compressed and then converted to base64)::
+		        #####################
+		        while read line; do
+				cat <<-EOF >>$tmpauxsql
+				insert into results_crash_data(run_id, crash_id, zip2b64) values( ${v_overall_results_id}, ${v_crash_id}, '${line}' );
+				EOF
+		        done < <( cat $zip2b64_txt )
+		        rm -f $zip2b64_txt
+		    fi
+		    echo "commit;">>$tmpauxsql
+
+		    run_cmd="$isql_name $host/$port:$results_fdb -i $tmpauxsql -q -nod $dbauth -ch utf8"
+		    sho "Saving stack trace in $results_fdb, crash_id=${v_crash_id}. Command:" $log4all
+		    sho "$run_cmd" $log4all
+		    eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
+		    catch_err $? $log4all $tmpsiderr "Check occurences of alternate quoting: q'{ ... }' withing strings"
+		    rm -f  $tmpauxsql
+		    #////////////////////////////////////// end of block for saving stack trace in the $results_storage ///////////////////////
+			    done
+			    # for dump_i in $(cat $tmpauxlst)
+                        fi
+                        # -s $tmpauxlst
+                    fi
+                    # core_pattern_ok -eq 1
+                fi
+                # found gdb
+            fi
+            # $crash_on_db_shut -eq 1 || $crash_during_run -eq 1
+        fi
+        # dbconn containing localhost or 127.0.0.1
+    else
+        # Attempt to gather stack trace under non-root leads to:
+        # /tmp/fbdumps/core.firebird...: Permission denied.
+        sho "You are non-privileged user. Root acces required for check crashes and gathering stack traces." $log4all
+    fi
+    # EUID -eq 0 ==> root
+    rm -f $tmpauxsql $tmpauxlog $tmpauxlst $tmpauxerr $tmpauxtmp $tmpsidsql $tmpsidlog $tmpsiderr
+
+    sho "Routine $FUNCNAME: finish." $log4all
+
+}
+# end of: save_crash_info
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 ############################################################
 ###                  m a i n    p a r t                  ###
@@ -1035,8 +1449,26 @@ sho "SID=$sid. Creating starter script sid_starter_sql='$sid_starter_sql'" $log
 rm -f $sid_starter_sql
 
 
+if [[ "$fb" != "25" ]]; then
+    # We create non-privileged users in all cases except:
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # mon_unit_perf = 0 AND mon_query_role is undefined AND mon_usr_prefix is undefined
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # Working as NON_dba is much closer to the real-world applications
+    # then doing common business tasks as SYSDBA.
+    # ### CAUTION ###
+    # This logic must be duplicated in sub-routine ':adjust_grants' of 1oltp_isql_run scenario
+    if [[ $mon_unit_perf -eq 0 && "${mon_query_role}" == "" && "${mon_usr_prefix}" == "" ]]; then
+        check_for_locksmith=0
+    else
+        check_for_locksmith=1
+    fi
+else
+    check_for_locksmith=0
+fi
+
 conn_as_locksmith=1
-if [[ "$fb" != "25" && -n "${mon_query_role}" && -n "${mon_usr_prefix}" ]]; then
+if [[ $check_for_locksmith -eq 1 ]]; then
     # If FB = 3.x+ then we create non-privileged users in all cases except mon_unit_perf=0
     # Working as NON_dba is much closer to the real-world applications then doing common business tasks as SYSDBA.
     if [[ $mon_unit_perf -eq 1 ]]; then
@@ -1059,6 +1491,9 @@ if [[ "$fb" != "25" && -n "${mon_query_role}" && -n "${mon_usr_prefix}" ]]; then
         # overall performance score is equal to the case when mon_unit_perf=0.
         # For this reason ALL attachments must connect as NON-privileged users
         # (with different names for each connection):
+
+        # connections must be done by NON-privileged users:
+        # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         conn_as_locksmith=0
     elif [[ $mon_unit_perf -eq 2 ]]; then
         if [[ $sid -eq 1 ]]; then
@@ -1077,6 +1512,12 @@ if [[ "$fb" != "25" && -n "${mon_query_role}" && -n "${mon_usr_prefix}" ]]; then
         ####################################################################
         # See also: 1run_oltp_emul.sh, routine: adjust_grants
         conn_as_locksmith=1
+
+        # added 20.11.2020
+        if [[ -n ${mon_query_role} && -n "${mon_usr_prefix}" ]]; then
+            conn_as_locksmith=0
+        fi
+
     fi
 fi
 
@@ -1087,7 +1528,6 @@ EOF
 
 if [[ $conn_as_locksmith -eq 0 ]]; then
     v_user_for_sid=${mon_usr_prefix}$(printf "%04d" $sid)
-    v_pswd_for_sid='123'
 	cat <<- EOF >> $sid_starter_sql
 	-- ##########################################################################################################
 	-- ###                   w o r k   a s   n o n - p r i v i l e g e d   u s e r                            ###
@@ -1101,7 +1541,8 @@ if [[ $conn_as_locksmith -eq 0 ]]; then
 	-- "Tag the shmem session clumplets with username. This allows much faster lookups for non-locksmith users."
 
 	rollback;
-	connect '$host/$port:$dbnm' user '$v_user_for_sid' password '$v_pswd_for_sid' role '$mon_query_role';
+	set bail on;
+	connect '$host/$port:$dbnm' user '$v_user_for_sid' password '$mon_usr_passwd' role '$mon_query_role';
 	EOF
 else
 	if [[ "$fb" != "25" ]]; then
@@ -1130,28 +1571,83 @@ else
 		echo -e "This is FB 2.5, monitoring was not improved. All sessions will work as SYSDBA" >> $sid_starter_sql
 	fi
 	cat <<- EOF >> $sid_starter_sql
-	rollback;
-	connect '$host/$port:$dbnm' user '$usr' password '$pwd';
+		rollback;
+		set bail on;
+		connect '$host/$port:$dbnm' user '$usr' password '$pwd';
 	EOF
 fi
 
 cat <<- EOF >> $sid_starter_sql
 	set term ^;
 	execute block as
+            declare v_sid smallint;
 	begin
 	    -- Define 'sequential number' of current ISQL session and make it be known 
 	    -- for main script and every business operations that are called from there:
-	    -- NB: name 'WORKER_SEQUENTIAL_NUMBER' is used in procedures for storing
-	    -- value in doc_list.worker_id for possible separation of scope that is avaliable
+	    -- Value of context variable WORKER_SEQUENTIAL_NUMBER is obtained in sp/func
+	    -- FN_THIS_WORKER_SEQ_NO and is further returned to callers for storing
+	    -- in doc_list.worker_id for possible separation of scope that is avaliable
 	    -- for each ISQL session. Purpose - reduce frequency of lock conflicts.
+            if ( '${mon_usr_prefix}' > '' and current_user starting with upper('${mon_usr_prefix}') ) then
+                begin
+                    v_sid = cast( right(current_user, position('_',reverse(current_user))-1) as smallint);
+                end
+            else
+                begin
+                    v_sid = $sid;
+                end
 	    rdb\$set_context( 'USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER', '$sid' );
 	    rdb\$set_context( 'USER_SESSION', 'WORKER_SEQ_NUMB_4RESTORE', '$sid' );
 	end^
+EOF
+
+    if [[ $conn_as_locksmith -eq 0 && $use_es -eq 2 ]]; then
+	cat <<- EOF >> $sid_starter_sql
+	set list on^
+	execute block returns( who_am_i varchar(31), whats_my_role varchar(31), my_connection int, use_es_from_settings smallint, local_worker_seq_number smallint, remote_worker_seq_number smallint, msg varchar(255) ) as
+	    declare passed_check smallint = 0;
+	begin
+	    who_am_i = current_user;
+	    whats_my_role = current_role;
+	    my_connection = current_connection;
+	    use_es_from_settings = rdb\$get_context('USER_SESSION', 'USE_ES');
+	    local_worker_seq_number = rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER');
+	    execute statement 'select fn_this_worker_seq_no() from rdb\$database'
+	            on external '$host/$port:' || rdb\$get_context('SYSTEM','DB_NAME')
+	            as user '$v_user_for_sid' password '${mon_usr_passwd}' role '${mon_query_role}'
+	    into remote_worker_seq_number;
+	    if (local_worker_seq_number = remote_worker_seq_number) then
+	        begin
+    		    passed_check=1;
+	            msg = 'PASSED check for equality of worker_id in EDS connection and in "parent" code. Values are equal.';
+	        end
+	    else
+	        begin
+	    	    msg = 'FAILED check detected: value of worker_id in EDS differs from one that was assigned in the "parent" code.';
+	        end
+	    suspend;
+	    if (passed_check = 0) then
+	        exception ex_further_work_forbidden;
+	end^
+	set list off^
+	EOF
+    fi
+
+cat <<- EOF >> $sid_starter_sql
 	set term ;^
+	set bail off;
+	set width who_is_granted 31;
+	set width obj_name 31;
+	set width obj_type 12;
+	-- select * from v_current_privileges;
 	-- Call main script that was created on prepare phase of oltp-emul scenario:
+	-- Usually this is $tmpdir/sql/tmp_random_run.sql
+	-- ##############################################
 	in $sql;
+	-- ##############################################
 EOF
 ##############################################################################################################
+
 
 # 17.05.2020: authentification is performed now in $sid_starter_sql:
 run_isql="$isql_name -now -q -n -pag 9999 -i $sid_starter_sql"
@@ -1167,6 +1663,7 @@ EOF
 
 tmpauxsql=$tmpdir/tmp_$sid.aux.sql
 tmpauxlog=$tmpdir/tmp_$sid.aux.log
+tmpauxlst=$tmpdir/tmp_$sid.aux.lst
 tmpauxerr=$tmpdir/tmp_$sid.aux.err
 tmpauxtmp=$tmpdir/tmp_$sid.aux.tmp
 tmpcharts=$tmpdir/chart_settings.tmp
@@ -1277,8 +1774,10 @@ do
     fi
   fi
 
+  echo "########################################"
   sho "SID=$sid. Starting packet $packet." $sts
-	cat <<- EOF >>$tmpsidlog
+  echo "########################################"
+	cat <<- EOF >$tmpsidlog
 		RUNCMD: $run_isql
 		STDLOG: $log
 		STDERR: $err
@@ -1292,6 +1791,10 @@ do
   ###    R U N     I S Q L   ###
   ##############################
   $run_isql 1>>$log 2>>$err
+  
+  # this adds for all messages the same prefix , i.e. timestamp that was at the moment when isql started:
+  # ((/opt/fb40/bin/isql employee -i ./test.sql 1>&3) 2>&1 | awk '{print d,$0}' d="$(date +%Y%m%d_%H%M%S.%N | cut -b 1-19)" 1>./isql-stderr.log) 3>./isql-stdout.log
+  #((${run_isql} 1>&3) 2>&1 | awk '{print d,$0}' d="$(date +%H:%M:%S.%N | cut -b 1-12)" 1>>$err) 3>>$log
 
   sho "SID=$sid. Finish isql, packet No. $packet" $sts
 
@@ -1336,23 +1839,27 @@ do
       sho "SID=$sid. No FB craches detected in $err." $sts
   fi
 
+
   if [[ $crash_during_run -eq 0 ]]; then
 
       # 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
       # 42S22 ==> -206 	335544578 	dsql_field_err 	Column unknown
-      # 42S02 ==> -204 	335544580 	table unknown: TMP // when forgen to add backstash befor tmp$foo
+      # 42S02 ==> -204 	335544580 	table unknown: TMP // when forgen to add backstash before '$', e.g.: tmp$foo
       # 22001 ==> arith overflow / string truncation
       # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
       # 28000 ==> no permission for ... access to ... // 17.05.2020: OLTP_USER_nnnn via role WORKER instead of SYSDBA
+      # 22018 ==> conversion wrror // 22.11.2020, when exec. sttm 'iif( <expr>, <val>, null)' - and null is not casted to datatype of <val>
+      # 54001 ==> Too many concurrent executions of the same request // infinite recursive calls ? // 15.12.2020
 
       # Ubuntu + FB 2.5.4.x from repo: "42000" can be raised by user-defined-expection for unknown reason!!!
       # commented 01.06.2019 19:03: syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000"
 
-      syntax_pattern="Dynamic SQL Error\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000\|SQLSTATE = 28000"
+      syntax_pattern="Dynamic SQL Error\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000\|SQLSTATE = 28000\|SQLSTATE = 22018\|SQLSTATE = 54001"
 
       syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $err)
       if [ $syntax_err_cnt -gt 0 ] ; then
           sho "SID=$sid. DSQL errors occured at least $syntax_err_cnt times, pattern = $syntax_pattern. Session has finished its job." $sts
+          grep -m1 -n -i -A5 -e "$syntax_pattern" $err
           grep -n -i -A5 -e "$syntax_pattern" $err 1>>$sts 2>&1
 
           remove_isql_logs=never
@@ -1368,7 +1875,9 @@ do
       run_fbs="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth info_server_version info_implementation"
       cancel_test=0
       # 26.10.2018: unable to establish connect under extremely heavy workload, ~2000-3000 attachments.
+      #########################
       GET_FB_REPLY_MAX_TRIES=20
+      #########################
       for k in `seq $GET_FB_REPLY_MAX_TRIES`
       do
           if grep -i "test_was_cancelled" $log > /dev/null ; then
@@ -1393,22 +1902,28 @@ do
           #######################################################################
           ###     f b s v c m g r   i n f o _ s e r v e r _ v e r s i o n     ###
           #######################################################################
-          $run_fbs 1>$tmpsidlog 2>$tmpsiderr
-          if [[ $k -gt 1 && $(stat -c%s $tmpsiderr) -eq 0 ]]; then
-              sho "SID=$sid. Return to script. Problem RESOLVED after $k iterations." $sts
-              echo Content of STDOUT received from fbsvcmgr:>>$sts
-              echo ----------------------------------------->>$sts
-              cat $tmpsidlog | sed -e 's/^/       /' >> $sts
-              echo ----------------------------------------->>$sts
+          # NB: do NOT use '$err' here! This is STDERR log of ISQL worker and it will be parsed further
+          $run_fbs 1>$tmpauxlog 2>$tmpauxerr
+          if [[ $k -gt 1 && $(stat -c%s $tmpauxerr) -eq 0 ]]; then
+                sho "SID=$sid. Return to script. Problem === RESOLVED === after $k iterations." $sts
+		cat <<-EOF >$tmpauxtmp
+		SID=$sid. Content of STDOUT received from fbsvcmgr:
+		$(grep . $tmpauxlog)
+		EOF
+		cat $tmpauxtmp
+		cat $tmpauxtmp >>$sts
+		rm -f $tmpauxtmp $tmpauxlog $tmpauxerr
+                sho "SID=$sid. Break from loop after $k iterations." $sts
+		break
           else
-              if [ $(stat -c%s $tmpsiderr) -gt 0 ]; then
-                  sho "SID=$sid. Problem EXISTS. Size of logs: STDOUT=$(stat -c%s $tmpsidlog), STDERR=$(stat -c%s $tmpsiderr)" $sts
+              if [ $(stat -c%s $tmpauxerr) -gt 0 ]; then
+                  sho "SID=$sid. Problem EXISTS. Size of logs: STDOUT=$(stat -c%s $tmpauxlog), STDERR=$(stat -c%s $tmpauxerr)" $sts
               else
                   sho "SID=$sid. Successful get FB version on first call." $sts
               fi
           fi
 
-          #sho "SID=$sid. Size of logs: STDOUT=$(stat -c%s $tmpsidlog), STDERR=$(stat -c%s $tmpsiderr)" $sts
+          #sho "SID=$sid. Size of logs: STDOUT=$(stat -c%s $tmpauxlog), STDERR=$(stat -c%s $tmpsiderr)" $sts
           # ::: NB ::: 26.10.2018
           # Under heavy workload (2500...3000 attachments) client can issue:
           # 'connection rejected by remote interface'
@@ -1419,48 +1934,57 @@ do
           # Unable to complete network request to host "localhost".
           # -Failed to establish a connection.  
 
-          if [ -s $tmpsiderr ]; then
-              sho "SID=$sid. Firebird is UNAVAILABLE. We have to check whether this problem relates to CLIENT or SERVER side." $sts
-              cat $tmpsiderr
-              echo Content of STDERR received from fbsvcmgr:>>$sts
-              echo ----------------------------------------->>$sts
-              cat $tmpsiderr | sed -e 's/^/       /' >> $sts
-              echo ----------------------------------------->>$sts
+          grep -m1 -i "\(connection[[:space:]]\+rejected\)\|\(error[[:space:]]\+\(reading\|writing\).*\(from\|to\).*connection\)" $err > $tmpauxtmp
 
-              # Only 'connection rejected by remote interface' can be interpreted as TEMPORARY unavaliable!
-              if grep -i "connection rejected" $tmpsiderr > /dev/null ; then
-                  sho "Failure seems to be on CLIENT-SIDE." $sts
-                  rm -f $tmpsiderr
-                  if [ $k -eq $GET_FB_REPLY_MAX_TRIES ] ; then
-                      ###################################################
-                      # ....................  e x i t ...................
-                      ###################################################
-                      sho "SID=$sid exceeds limit $GET_FB_REPLY_MAX_TRIES for attempts to get reply from FB server. Job is terminated." $sts
-                      rm -f $sid_starter_sql
-                      exit
-                  else
-                      sho "Try to solve failure: iteration $k of total $GET_FB_REPLY_MAX_TRIES. Loop to next attempt after small pause." $sts
-                      sleep 5
-                      sho "Pause finished, LOOP to next iteration." $sts
-                  fi
-              else
+          if [[ -s $tmpauxerr || -s $tmpauxtmp ]]; then
+
+              # Phrase 'connection rejected by remote interface' can be interpreted as TEMPORARY unavaliable because of heavy workload.
+              # Phrase 'Error reading data from the connection' must be considered as probable crash, but dump creation can take several minutes!
+              # In both cases we have to WAIT and attempt to re-connect to FB server. Number of attempts is limited to $GET_FB_REPLY_MAX_TRIES
+              # grep -m1 -i "\(connection[[:space:]]\+rejected\)\|\(error[[:space:]]\+\(reading\|writing\).*\(from\|to\).*connection\)" $tmpsiderr > $tmpauxtmp
+
+              sho "SID=$sid. At least one phrase about connection problems detected in ${tmpsiderr}:" $sts
+	      cat $tmpauxerr
+              cat $tmpauxtmp
+	      cat $tmpauxerr >>$sts
+              cat $tmpauxtmp >>$sts
+              
+              if grep -q -m1 -i "error[[:space:]]\+\(reading\|writing\).*\(from\|to\).*connection" $err ; then
+                  crash_during_run=1
+              fi
+
+              # Here we remove logs that created by FBSVCMGR: they will be recreated on next iteraton if problem with connection remains:
+              rm -f $tmpauxtmp $tmpauxerr
+
+              if [ $k -eq $GET_FB_REPLY_MAX_TRIES ] ; then
+                  sho "SID=$sid exceeds limit $GET_FB_REPLY_MAX_TRIES for attempts to get reply from FB server. Job is terminated." $sts
+                  rm -f $sid_starter_sql
                   ###################################################
                   # ....................  e x i t ...................
                   ###################################################
-                  sho "Failure seems to be on SERVER-SIDE. Job is terminated" $sts
-                  rm -f $tmpsiderr
-                  rm -f $sid_starter_sql
                   exit
+              else
+                  sho "SID=$sid. Try to solve failure: iteration $k of total $GET_FB_REPLY_MAX_TRIES. Loop to next attempt after small pause." $sts
+                  sleep 5
+                  sho "SID=$sid. Pause finished, LOOP to next iteration." $sts
               fi
           else
-              sho "SID=$sid. Firebird is alive, test can be continued." $sts
-              cat $tmpsidlog>>$sts
-              rm -f $tmpsidlog $tmpsiderr
+              sho "SID=$sid. Firebird is alive, test can be continued. Check: crash_during_run=$crash_during_run" $sts
+              cat $tmpauxlog>>$sts
+              rm -f $tmpauxtmp $tmpsiderr
+
+              # Here we make empty ISQL worker STDERR log because otherwise this
+              # check for crashes will detect again problem that already gone:
+              >$err
+              sho "SID=$sid. Make $err file empty." $sts
+
               break
           fi
       done
-  else
-      sho "SID=$sid. FB crash or connection problem detected, set flag 'cancel_test' to 1" $rpt
+  fi
+  
+  if [[ $crash_during_run -gt 0 ]]; then
+      sho "SID=$sid. Possible FB crash detected, set flag 'cancel_test' to 1" $rpt
       cancel_test=1
   fi
   # $crash_during_run -eq 0 or 1
@@ -1482,7 +2006,6 @@ do
 
     plog=$rpt
     # ---- do NOT ---- rm $plog
-
 
 
     psql=$prf.performance_report.tmp
@@ -1511,7 +2034,6 @@ do
     $run_fbs_dbshut 1>$tmpauxerr 2>&1
     cat $tmpauxerr
     cat $tmpauxerr >>$rpt
-
 
     # 06.10.2020: FB can crash when try to change DB state to shutdown!
     # We have to check $tmpauxerr for presence of text like: "Error reading/writing data from/to the connection"
@@ -1663,13 +2185,15 @@ do
 		execute procedure srv_drop_oltp_worker;
 		commit;
 	EOF
-        $isql_name $dbconn -nod -q -pag 9999 -i $psql $dbauth 1>>$rpt 2>&1
+        $isql_name $dbconn -nod -q -pag 9999 -i $psql $dbauth 1>$tmpsidlog 2>$tmpsiderr
+	catch_err $? $rpt $tmpsiderr "Ensure that generated DSQL in SP srv_drop_oltp_worker is correct." 0
+	rm -f $psql $tmpsidlog
     fi
+
 
     # $tmpdir/oltp30.report.txt -- it DOES contain now some info, we should NOT zap it!
     ####plog=$rpt
     # ---- do NOT ---- rm $plog
-
 
     # 22.03.2020: implementing HTML report generation
     #################################################
@@ -1726,21 +2250,38 @@ do
 	            <li>Performance, TOTAL score:
 	                &nbsp;&nbsp;&nbsp;<span><a href="#perftotal">as table</a><span> &nbsp;&nbsp;&nbsp; <span><a href="#perf_total_chart">as chart</a><span>
 	            </li>
-	            <!--
-	            Disabled 07.05.2020: there is no sense to show average score for some INTERMEDIATE period. Dispersion will beextremely high in this case.
-	            Rather, CUMULATIVE value must be used but this is already done in 'Performance per MINUTE' report.
-	            <li>Performance in DYNAMIC, $test_intervals intervals:
-	                &nbsp;&nbsp;&nbsp;<span><a href="#perfdynam">as table</a><span> &nbsp;&nbsp;&nbsp; <span><a href="#perf_dynamic_chart">as chart</a><span>
-	            </li>
-	            -->
 
 	            <li>Performance per MINUTE, during test_time phase:
 	                &nbsp;&nbsp;&nbsp;<span><a href="#perfminute">as table</a><span> &nbsp;&nbsp;&nbsp; <span><a href="#perf_m1_chart">as chart</a><span>
 	            </li>
+	EOF
 
+        if [[ $conn_pool_support -eq 1 ]]; then
+	    if [[ $use_es -eq 2 ]]; then
+		cat <<- EOF >>$phtm
+	            <li>External connections pool usage, per minute: <span><a href="#extpool_usage_table">as table</a><span>
+                        <ol> as chart:
+                    	    <!-- Output chart with number of active and idle connections, per minute: -->
+                            &nbsp;&nbsp;&nbsp;<span><a href="#extpool_active_idle_chart">active &amp; idle connections</a><span>
+                            &nbsp;&nbsp;&nbsp;<span><a href="#extpool_ssn_reset_chart">session resets count</a><span>
+                        </ol>
+                    </li>
+	            <li>External connections life activity, per connection:
+                        &nbsp;&nbsp;&nbsp;<span><a href="#extpool_life_activity_table">as table</a><span>
+
+                        <!--  Output chart with:  "avg idle, s" ; "max idle, s", per WORKER // sid=1...$winq -->
+                	&nbsp;&nbsp;&nbsp;<span><a href="#extpool_life_activity_chart">as chart</a><span>
+                    </li>
+		EOF
+                ###echo "&nbsp;&nbsp;&nbsp;<span><a href="#extpool_usage_table">as table</a><span> &nbsp;&nbsp;&nbsp; <span><a href="#extpool_usage_chart">as chart</a><span>" >>$phtm
+	    else
+	        echo "<li>External connections pool: DISABLED. Test config parameter 'use_es' must be 2; ExtConnPoolSize must be ^&gt; 0.</li>" >>$phtm
+	    fi
+        fi
+
+	cat <<- EOF >>$phtm
 	            <!-- NOT YET IMPLEMENTED <li><a href="#perftrace">Performance, TRACE data for ISQL #1</a> </li> -->
 	            <li><a href="#perfdetail">Performance, DETAILS per units</a> </li>
-
 	EOF
 
         if [[ $mon_unit_perf -eq 0 ]]; then
@@ -1805,6 +2346,10 @@ do
 	EOF
     fi
     # make_html=1
+
+#if [[ 12345 -eq 54321 ]]; then
+#QWERTYQWERTY
+#DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!
 
     if [ $gather_hardware_info -eq 1 ]; then
 	cat <<- EOF >>$plog
@@ -1971,19 +2516,39 @@ do
     if [ $make_html -eq 1 ]; then
         if [[ $fb -ge 40 ]]; then
             msg="Firebird configuration"
-		cat <<-EOF >$psql
+		cat <<-"EOF" >$psql
 			set width param_name 35;
 			set width param_value 40;
 			set width param_default 40;
 			set width param_source 20; -- 'firebird.conf' or 'databases.conf'
-			select
-			     rdb\$config_name param_name
-			    ,iif(trim(rdb\$config_value)='', '[empty]',rdb\$config_value) param_value
-			    ,iif(trim(rdb\$config_default)='', '[empty]', rdb\$config_default) param_default
-			    ,cast(iif(rdb\$config_is_set, '[ X ]', '     ') as varchar(5)) as "is set ?"
-			    ,rdb\$config_source param_source
-			from rdb\$config
-			order by param_name;
+			set term ^;
+			execute block returns(param_name varchar(255), param_value varchar(255), param_default varchar(255), "is set ?" varchar(8), param_source varchar(255)) as
+			begin
+			  if ( not exists(select * from rdb$relations r where r.rdb$relation_name=upper('rdb$config') ) ) then
+			    begin
+			        param_name = 'Too old FB 4.x is used.';
+			        param_value = 'You have to upgrade it.';
+			        param_default = 'at least to 4.0.0.2260';
+			        suspend;
+			    end
+			  else
+			    for
+				execute statement (
+			    	    q'{select 
+			    	    rdb$config_name param_name
+			            ,iif(trim(rdb$config_value)='', '[empty]',rdb$config_value) param_value
+			            ,iif(trim(rdb$config_default)='', '[empty]', rdb$config_default) param_default
+			            ,cast(iif(rdb$config_is_set, '[ X ]', '     ') as varchar(5)) as "is set ?"
+			            ,rdb$config_source param_source
+			          from rdb$config
+			          order by param_name }'
+			        )
+			        into param_name, param_value, param_default, "is set ?", param_source
+			    do
+			        suspend;
+			end
+			^
+			set term ;^
 		EOF
 	    #$isql_name $dbconn -nod -pag 99999 -i $psql $dbauth 1>$tmpauxlog 2>&1
 		cat <<- EOF >>$phtm
@@ -2270,8 +2835,9 @@ do
 		y_format_list=pattern:'0';
 		x_values_skip_pattern=OVERALL
 		chart_type=PieChart
-		chart_div_wid=1100
-		chart_div_hei=700
+		chart_div_wid=650
+		chart_div_hei=450
+                echo chart_area_options={ left:0, top:0, width:"100%", height:"100%" }
 	EOF
 
         echo "$htm_sect <a name="perftotal"> $rpt_name </a> $htm_secc" >> $phtm
@@ -2287,70 +2853,6 @@ do
 #,['customer order: creation' ]
 #,['customer order: refuse' ]
 #,['order to supplier: creation' ]
-
-    #------------------------------------------------------------------------------------
-    if [[ 1 -eq 0 ]]; then
-        ##############################################
-        ### ::: NB ::: FOLLOWING CODE WAS DISABLED ###
-        ##############################################
-        rpt_name="Performance in DYNAMIC"
-	cat <<- EOF >>$plog
-		
-		$rpt_name
-		=======================
-	EOF
-	
-	cat <<- "EOF" >$psql
-	    -- Get performance score for N equal time intervals, where N is defined by value 'test_intervals' config parameter
-		set width itrv_no  7;
-		set width itrv_beg 8;
-		set width itrv_end 8;
-		select cast(interval_no as smallint) as itrv_no
-		      ,cnt_ok_per_minute
-		      ,cnt_all
-		      ,cnt_ok
-		      ,cnt_err
-		      ,cast(err_prc as numeric(8,2)) as err_prc
-		      ,substring(cast(interval_beg as varchar(24)) from 12 for 8) itrv_beg
-		      ,substring(cast(interval_end as varchar(24)) from 12 for 8) itrv_end
-		from rdb$database
-		left join report_perf_dynamic p on 1=1
-		;
-		commit;
-	EOF
-	cat $psql >> $plog
-
-        s1=$(date +%s)
-	$isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
-        # Add timestamps of start and finish and how long last ISQL was:
-	log_elapsed_time $s1 $plog "$rpt_name"
-
-        if [ $make_html -eq 1 ]; then
-		# 04.05.2020: show chart using google charts api.
-		cat <<-EOF >$tmpcharts
-			draw_func_name=perf_dynamic_chart
-			href_name=perf_dynamic_chart
-			href_title=Performance per intervals, chart
-			x_axis_field=itrv_no
-			y_axis_field=cnt_ok_per_minute
-			x_axis_title=interval No.
-			y_axis_title=performance
-			chart_color=DarkSeaGreen
-			axis_color=DarkOliveGreen
-			chart_type=LineChart
-			curve_type=function
-		        chart_div_wid=1300
-		EOF
-            echo "$htm_sect <a name="perfdynam">$rpt_name</a> $htm_secc" >> $phtm
-	    s1=$(date +%s)
-	    add_html_table $psql $phtm $tmpcharts
-	    #                 1    2        3
-	    log_elapsed_time $s1 $phtm "$rpt_name"
-	
-        fi
-	rm -f $psql
-    fi
-    # end of DISABLED block for performance in dynamic (since 07-05-2020)
 
     #------------------------------------------------------------------------------------
 
@@ -2372,7 +2874,6 @@ do
             test_phase_name
             ,minutes_passed
             ,perf_score
-            -- disabled: this is NOT a number of active attachments >>> ,distinct_workers
         from report_perf_per_minute
         where test_phase_name = 'TEST_TIME' -- remove 'WARM_TIME' phase in order to draw ONE line in chart
         ;
@@ -2381,7 +2882,7 @@ do
 
     cat $psql >> $plog
     s1=$(date +%s)
-    $isql_name $dbconn -now -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+    $isql_name $dbconn -nod -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
     # Add timestamps of start and finish and how long last ISQL was:
     log_elapsed_time $s1 $plog "$rpt_name"
     if [ $make_html -eq 1 ]; then
@@ -2409,6 +2910,260 @@ do
 	log_elapsed_time $s1 $phtm "$rpt_name"
     fi
     rm -f $psql
+
+    #------------------------------------------------------------------------------------
+
+    if [[ $conn_pool_support -eq 1 && $use_es -eq 2 ]]; then
+	cat <<- "EOF" >$psql
+            set list on;
+            select
+		 rdb$get_context('SYSTEM', 'EXT_CONN_POOL_SIZE') as pool_size
+		,rdb$get_context('SYSTEM', 'EXT_CONN_POOL_LIFETIME') as pool_lifetime
+            from rdb$database;
+	EOF
+	$isql_name $dbconn -nod -q -i $psql $dbauth 1>$tmpauxlog 2>&1
+	ecp_size=0
+	ecp_lifetime=0
+    	while read line ; do
+    	    arr=($line)
+    	    col=${arr[0]}
+    	    val=${arr[1]}
+    	    if [[ "${col^^}" == "POOL_SIZE" ]]; then
+                ecp_size=$val
+    	    elif [[ "${col^^}" == "POOL_LIFETIME" ]]; then
+                ecp_life=$val
+    	    fi
+    	done < <(grep . $tmpauxlog)
+
+        rpt_name="External connections pool usage, per minute"
+	cat <<- EOF >$tmpauxlog
+		Current External Connections Pool parameters:
+		  Max. size of pool for oldest idle connection to be closed: ExtConnPoolSize = $ecp_size
+		  Max. allowed time for connection to be in IDLE state, sec: ExtConnPoolLifeTime = $ecp_life
+              
+		Data in this report:
+		  Minute: number of minutes passed since start of test_time phase
+		State of connections:
+		  * Active: value of rdb$get_context('SYSTEM', 'EXT_CONN_POOL_ACTIVE_COUNT'), average per minute
+		  * Idle: value of rdb$get_context('SYSTEM', 'EXT_CONN_POOL_IDLE_COUNT'), average per minute
+		Intensity of use:
+		  * Num. of created connections =  how many connections did appear in External Connections Pool
+		  * Num. of session resets =  how many times 'ALTER SESSION RESET' occured when connection state
+		                              became IDLE (0 if FB instance does not support this feature).
+		  * Num. of removed connections = how many IDLE connections have been closed (removed from pool)
+		                                  because of expiration ExtConnPoolLifeTime = $ecp_life seconds.
+	EOF
+
+	cat $tmpauxlog >> $plog
+	#if [[ $make_html -eq 1 ]]; then
+	#	echo "$htm_sect <a name="extpool_usage_table">$rpt_name</a> $htm_secc" >> $phtm
+	#	add_html_text $tmpauxlog $phtm 0 "null" "pre"
+	#fi
+	cat <<- "EOF" >$psql
+            select 
+              x.minute_since_test_start as "minute"
+             ,x.avg_pool_active as "Active connections, average"
+             ,x.avg_pool_idle as "Idle connections, average"
+             ,x.attach_total_cnt as "Num. of created connections"
+             ,x.reset_total_cnt as "Num. of session resets"
+             ,x.detach_total_cnt as "Num. of removed connections"
+            from report_extpool_usage_chronology x
+	    ;
+	EOF
+	cat $psql >> $plog
+	s1=$(date +%s)
+	$isql_name $dbconn -nod -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1 $plog "$rpt_name"
+	if [ $make_html -eq 1 ]; then
+	    echo "$htm_sect <a name="extpool_usage_table">$rpt_name</a> $htm_secc" >> $phtm
+	    add_html_text $tmpauxlog $phtm 0 "null" "pre"
+
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+
+		cat <<- "EOF" >$psql
+                    select
+		         x.minute_since_test_start as "minute"
+                         ,x.avg_pool_active as "Active connections, average"
+                         ,x.avg_pool_idle as "Idle connections, average"
+                         ,x.reset_total_cnt as "Num. of session resets"
+                    from report_extpool_usage_chronology x
+        	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+        	    --UNION ALL 
+        	    --select row_number()over()
+            	    -- ,cast(50+rand()*70 as int)
+            	    -- ,cast(100+rand()*50 as int)
+            	    -- ,cast(30000+rand()*3000 as int)
+        	    --from rdb$fields rows 200
+        	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                    ;
+		EOF
+
+	    #s1=$(date +%s)
+	    #add_html_table $psql $phtm
+
+		cat <<-EOF >$tmpcharts
+		    chart_only_show=1
+		    href_title=$rpt_name: average number of active and idle connections (ExtConnPoolSize &#61; $ecp_size, ExtConnPoolLifeTime &#61; $ecp_life)
+                    draw_func_name=pool_m1_active_idle_length_chart
+                    href_name=extpool_active_idle_chart
+                    axis_color=DarkBlue
+                    x_axis_field=minute
+                    x_axis_title=minute
+                    y_fields_list=Active connections, average;  Idle connections, average
+                    y_format_list=pattern:'0.00';               pattern:'0.00'
+                    y_colors_list=DarkGreen;                    DarkMagenta
+                    y_legends_list=Avg. number of active connections; Avg. number of idle connections
+		    y_list_delimiter=;
+                    chart_div_wid=1400
+                    point_size=4
+                    chart_area_options={ left:40, top:35, width:"100%" }
+		EOF
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm $tmpcharts
+            #                1     2       3
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+
+		cat <<- "EOF" >$psql
+                    select
+		         x.minute_since_test_start as "minute"
+			 ,x.detach_total_cnt as "Num. of session resets"
+                    from report_extpool_usage_chronology x
+        	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+        	    --UNION ALL 
+        	    --select row_number()over()
+            	    -- ,cast(40000+rand()*4000 as int)
+        	    --from rdb$fields rows 200
+        	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+                    ;
+		EOF
+
+		cat <<-EOF >$tmpcharts
+	            chart_only_show=1
+                    href_title=$rpt_name: number of session resets.
+                    draw_func_name=pool_m1_session_resets_chart
+                    href_name=extpool_ssn_reset_chart
+                    axis_color=DarkBlue
+                    x_axis_field=minute
+                    x_axis_title=minute
+                    y_fields_list=Num. of session resets
+                    y_format_list=pattern:'0'
+                    y_colors_list=Blue
+                    y_legends_list=Avg. number of session resets
+		    y_list_delimiter=;
+                    chart_div_wid=1400
+                    point_size=4
+                    chart_area_options={ left:90, top:35, width:"100%" }
+		EOF
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm $tmpcharts
+            #                1     2       3
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+
+	fi
+	# make_html=1
+
+	
+	# $#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$#$
+	rpt_name="External connections pool: life activity, per connection"
+	cat <<- EOF >$tmpauxlog
+
+		Current External Connections Pool parameters:
+		  Max. size of pool for oldest idle connection to be closed: ExtConnPoolSize = $ecp_size
+		  Max. allowed time for connection to be in IDLE state, sec: ExtConnPoolLifeTime = $ecp_life
+
+		Data in this report:
+		  * ext conn. seq no = sequential number of working external connection
+		Duration values of external connections that was created by this worker:
+		  * avg_idle_seconds = average IDLE state, seconds;
+		  * max_idle_seconds = longest IDLE state, seconds (can not exceed 'ExtConnPoolLifeTime' in FB config);
+		  * max_life_seconds = longest life of connection (from its creation to disconnect in ISQL), seconds
+	EOF
+	cat $tmpauxlog >> $plog
+	cat <<- "EOF" >$psql
+            select
+        	ext_connection_seq_no as "ext conn. seq no"
+        	,t.avg_idle_seconds as "avg idle, s"
+        	,t.max_idle_seconds as "max idle, s"
+        	,t.max_life_seconds as "max life, s"
+            from report_extpool_lifetime t
+    	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+    	    --UNION ALL 
+    	    --select
+    	    --	row_number()over()
+    	    --    ,cast(1+rand()*5 as int)
+    	    --    ,cast(20+rand()*100 as int)
+    	    --    ,cast(200+rand()*100 as int)
+    	    --from rdb$fields rows 200
+    	    -- #DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG#DEBUG
+            ;
+	EOF
+	cat $psql >> $plog
+	s1=$(date +%s)
+	$isql_name $dbconn -nod -q -n -pag 9999 -i $psql $dbauth 1>>$plog 2>&1
+	# Add timestamps of start and finish and how long last ISQL was:
+	log_elapsed_time $s1 $plog "$rpt_name"
+	if [ $make_html -eq 1 ]; then
+
+	    add_html_text $tmpauxlog $phtm 0 "null" "pre"
+
+            echo "$htm_sect <a name="extpool_life_activity_table"> $rpt_name (ExtConnPoolSize = $ecp_size, ExtConnPoolLifeTime = $ecp_life): </a> $htm_secc" >> $phtm
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm
+
+            echo "$htm_sect <a name="extpool_life_activity_chart"> $rpt_name (ExtConnPoolSize = $ecp_size, ExtConnPoolLifeTime = $ecp_life): </a> $htm_secc" >> $phtm
+		cat <<-EOF >$tmpcharts
+	            chart_only_show=1
+                    draw_func_name=pool_max_idle_chart
+                    axis_color=DarkBlue
+                    x_axis_field=ext conn. seq no
+                    x_axis_title=external connection sequential no
+                    y_fields_list=avg idle, s        ; max idle, s
+                    y_format_list=pattern:'0.00'     ; pattern:'0.00'
+                    y_colors_list=GoldenRod          ; DarkMagenta
+                    y_legends_list=Avg. idle state in the pool, s ; Max. idle state in the pool, s
+		    y_list_delimiter=;
+                    chart_div_wid=1400
+                    point_size=4
+                    y_scale_type=log
+                    chart_area_options={ left:80, top:35, width:"100%" }
+		EOF
+  
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm $tmpcharts
+            #                1     2       3
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+
+		cat <<-EOF >$tmpcharts
+	            chart_only_show=1
+                    draw_func_name=pool_max_life_chart
+                    axis_color=DarkBlue
+                    x_axis_field=ext conn. seq no
+                    x_axis_title=external connection sequential no
+                    y_fields_list=max life, s
+                    y_format_list=pattern:'0.00'
+                    y_colors_list=Blue
+                    y_legends_list=Max. duration of life in the pool, s
+		    y_list_delimiter=;
+                    chart_div_wid=1400
+                    point_size=4
+                    chart_area_options={ left:80, top:35, width:"100%" }
+		EOF
+ 
+	    s1=$(date +%s)
+	    add_html_table $psql $phtm $tmpcharts
+            #                1     2       3
+	    log_elapsed_time $s1 $phtm "$rpt_name"
+
+	fi
+	# make_html=1
+	
+        rm -f $psql $tmpauxlog
+    fi
+    # [[ $conn_pool_support -eq 1 && $use_es -eq 2 ]] ==> show report about ExternalConnPoool usage
+
 
     #------------------------------------------------------------------------------------
     rpt_name="Performance in DETAILS"
@@ -2460,6 +3215,9 @@ do
     if [ $mon_unit_perf -eq 1 ]; then
 
 		cat <<- EOF >>$plog
+			#####################################################################
+			###    m o n i t o r i n g     d a t a     p e r     u n i t s    ###
+			#####################################################################
 
 			$rpt_name
 			=======================================
@@ -2484,7 +3242,11 @@ do
 		if [ $make_html -eq 1 ]; then
 
 			echo "$htm_sect <a name="perfmon4unit_table">$rpt_name - table:</a> $htm_secc" >> $phtm
+			s1=$(date +%s)
+
 		        add_html_table $psql $phtm
+
+			log_elapsed_time $s1 $phtm "$rpt_name"
 			
 			echo "$htm_sect <a name="perfmon4unit_chart">$rpt_name - charts:</a> $htm_secc" >> $phtm
 
@@ -2883,9 +3645,12 @@ do
 		rm -f $psql
 
 		if [ $fb -gt 25 ]; then
-			rpt_name="Monitoring data, per TABLES and UNITS (avail. only in FB 3.0)"
+			rpt_name="Monitoring data, per TABLES and UNITS"
 			cat <<- EOF >>$plog
-				
+				######################################################################
+				###    m o n i t o r i n g     d a t a     p e r     t a b l e s   ###
+				######################################################################
+
 				$rpt_name
 				==============================================================
 				Get report about gathered MONITOR tables data, detalization  per TABLES and UNITS.
@@ -2921,6 +3686,9 @@ do
 
 		rpt_name="Memory consumption, metadata cache, attachments activity"
 		cat <<- EOF >>$plog
+			##########################################################################
+			###    m o n i t o r i n g     m e m o r y    c o n s u m p t i o n    ###
+			##########################################################################
 			
 			$rpt_name
 			====================================
@@ -2945,11 +3713,11 @@ do
 
 		rm -f $tmpauxlog
 		cat <<- "EOF" >>$tmpauxlog
-			Fields:
-			  page cache memo used            = page cache total size, bytes:
+			Data in this report:
+			  page cache memo used            = total size of page cache, bytes
 			  memo used, total                = total of mon$memory_usage.mon$memory_used for database level (mon$stat_group = 0);
 			  memo allocated, total           = the same of mon$memory_usage.mon$memory_allocated;
-			  metadata cache memo used        = metadata cache, bytes;
+			  metadata cache memo used        = size of cache for metadata, bytes;
 			  metadata cache percent of total = ratio: metadata cache / (metadata cache + page cache);
 			  total attachments cnt           = total number of attachments, regardless of state;
 			  active attachments cnt          = number of attachments with mon$state = 1;
@@ -3512,6 +4280,10 @@ do
     fi
     rm -f $psql
 
+#fi
+#QWERTYQWERTY
+#DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!DEBUG!!!REMOVE!!!LATER!!!
+
     #-------------------------------------------------------------------------------
     save_report=0
 
@@ -3638,23 +4410,28 @@ do
 
         fi
 
-        if [[ $save_report -eq 1 && -s "$results_storage_fbk" ]]; then
+        if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
+
+            if [[ $save_report -eq 1 && -s "$results_storage_fbk" ]]; then
 			# 27.04.2020: obtain values from SETTINGS and write into special DB for storing overall results:
 			# oltp_results.fdb, table results_overall
 			results_fbk=$results_storage_fbk # from .conf; $(dirname "${dbnm}")/oltp_results.fbk
-			results_fdb=$(dirname "$results_storage_fbk")/tmp_oltp_results.fdb.tmp
+			results_fdb=$(dirname "$dbnm")/tmp_oltp_results.$RANDOM.fdb.tmp
 			rm -f $results_fdb
 
 			run_cmd="$fbc/gbak -v -c -se $host/$port:service_mgr $results_fbk $results_fdb -user ${usr} -pas ${pwd}"
-			sho "Saving data of just completed test to database." $plog
-			sho "Restore previously saved DB, command:" $plog
-			sho "$run_cmd" $plog
+			cat <<-EOF >$tmpauxtmp
+			Start saving data of just completed test to database.
+			Step-1: restore previously saved DB to remporary database.
+			Command: $run_cmd
+			EOF
+			cat $tmpauxtmp
+			cat $tmpauxtmp>>$plog
+			rm -f $tmpauxtmp
+			
 			eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
 			catch_err $? $plog $tmperr "Check whether database $results_fbk exists."
-			#set -x
-			#$fbc/gbak -c -se $host/$port:service_mgr $results_fbk $results_fdb -user ${usr} -pas ${pwd} 1>$tmpsidlog 2>$tmpsiderr
-			#set +x
-			
+
 			cat <<- EOF > $psql
 			    set bail on;
 			    connect '$host/$port:$results_fdb' user '${usr}' password '${pwd}';
@@ -3672,7 +4449,7 @@ do
 			EOF
 			
 			run_cmd="$isql_name -i $psql -q -nod $dbauth"
-			sho "Saving test settings and last run results in $results_fdb. Command:" $plog
+			sho "Step-2: saving test settings and last run results in $results_fdb. Command:" $plog
 			sho "$run_cmd" $plog
 			eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
 			catch_err $? $plog $tmpsiderr "Check whether database $results_fbk exists."
@@ -3688,12 +4465,16 @@ do
 					select run_id from results_overall order by run_id desc rows 1;
 				EOF
 				run_cmd="$isql_name -i $psql -q -nod $dbauth $host/$port:$results_fdb"
-				sho "Obtain last run_id from results_overall table in DB $results_fdb. Command:" $plog
+				sho "...Obtain last run_id from results_overall table in DB $results_fdb. Command:" $plog
 				sho "$run_cmd" $plog
 				eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
 				catch_err $? $plog $tmpsiderr "Check whether database $results_fdb or table exists."
+
 				# Filter out empty lines and remove all spaces from run_id value:
+				##########################################
 				v_run_id=$(grep . $tmpsidlog | tr -d "[:blank:]")
+				##########################################
+
 				sho "Result: v_run_id=.$v_run_id." $plog
 				rm -f $psql $tmpsidlog $tmpsiderr
 				#v_run_id="$(echo -e "${v_run_id}" | tr -d '[:space:]')"
@@ -3702,35 +4483,40 @@ do
 					set bail on;
 					set echo on;
 					EOF
+
 					zip_cmd=UNSUPPORTED
-					if [[ -n "${report_compress_cmd}" ]]; then
-					    # 28.06.2020. Compress to stdout and redirect to base64 text:
-					    # 10 digits, 26 lowercase characters, 26 uppercase characters as well as the Plus sign (+) and the Forward Slash (/).
-					    # There is also a 65th character known as a pad, which is the Equal sign (=). This character is used when the last
-					    # segment of binary data doesn't contain a full 6 bits
-					    if [[ ${report_compress_cmd} == *"/zip"*  ]]; then
-					        #zip_cmd=${report_compress_cmd} -9 ${htm_with_params_in_name}.zip ${htm_with_params_in_name}
-					        zip2b64_txt=${htm_with_params_in_name}.zip.b64.txt
-					        zip_cmd="${report_compress_cmd} -9 --junk-paths - ${htm_with_params_in_name} | base64 > $zip2b64_txt"
-					    elif [[ ${report_compress_cmd} == *"/7za"*  ]]; then
-					        zip2b64_txt=${htm_with_params_in_name}.7z.b64.txt
-					        zip_cmd="${report_compress_cmd} u dummy -tgzip -mx9 -mfb273 -so ${htm_with_params_in_name} | base64 > ${htm_with_params_in_name}.7z.b64.txt"
-					        #zip_cmd="${report_compress_cmd} u $tmpauxtmp -mx9 -mfb273 ${htm_with_params_in_name}; cat $tmpauxtmp | base64 > $zip2b64_txt ; rm -f $tmpauxtmp"
-					    elif [[ ${report_compress_cmd} == *"/zstd"*  ]]; then
-					        zip2b64_txt=${htm_with_params_in_name}.zst.b64.txt
-					        zip_cmd="${report_compress_cmd} --stdout -19 ${htm_with_params_in_name} | base64 > $zip2b64_txt"
+					# 28.06.2020. Compress to stdout and redirect to base64 text:
+					# 10 digits, 26 lowercase characters, 26 uppercase characters as well as the Plus sign (+) and the Forward Slash (/).
+					# There is also a 65th character known as a pad, which is the Equal sign (=). This character is used when the last
+					# segment of binary data doesn't contain a full 6 bits
+					if [[ ${report_compress_cmd} == *"/zip"*  ]]; then
+					    zip2b64_txt=${htm_with_params_in_name}.zip.b64.txt
+					    zip_cmd="${report_compress_cmd} -9 --junk-paths - ${htm_with_params_in_name} | base64 > $zip2b64_txt"
+					elif [[ ${report_compress_cmd} == *"/7za"*  ]]; then
+					    zip2b64_txt=${htm_with_params_in_name}.7z.b64.txt
+					    zip_cmd="${report_compress_cmd} u dummy -tgzip -mx9 -mfb273 -so ${htm_with_params_in_name} | base64 > ${htm_with_params_in_name}.7z.b64.txt"
+					elif [[ ${report_compress_cmd} == *"/zstd"*  ]]; then
+					    zip2b64_txt=${htm_with_params_in_name}.zst.b64.txt
+					    zip_cmd="${report_compress_cmd} --stdout -19 ${htm_with_params_in_name} | base64 > $zip2b64_txt"
+					else
+			    		    command -v /usr/bin/gzip 1>>$tmpauxlog 2>&1
+				    	    if [[ $? -eq 0 ]]; then
+		    				    report_compress_cmd="/usr/bin/gzip"
+					            zip2b64_txt=${htm_with_params_in_name}.gz.b64.txt
+					            zip_cmd="${report_compress_cmd} --best --stdout ${htm_with_params_in_name} | base64 > $zip2b64_txt"
 					    else
-					        sho "Unsupported command for compress HTML results: {report_compress_cmd}" $plog
+		    			            sho "Unsupported config parameter report_compress_cmd = ${report_compress_cmd}" $plog
 					    fi
 					fi
-					
+
 					if [[ ${zip_cmd} == *"UNSUPPORTED"*  ]]; then
-					    sho "HTML report is saved without compression" $plog
+					    sho "...Config parameter 'report_compress_cmd' is COMMENTED OUT." $plog
+					    sho "...HTML report is converted to base64 and saved without compression." $plog
 					    while read line; do
-					        echo "insert into results_reports(run_id, txt) values(${v_run_id}, q'{${line} }');">>$psql
-					    done < <( cat $htm_with_params_in_name )
+					        echo "insert into results_reports(run_id, txt) values(${v_run_id}, '${line}');">>$psql
+					    done < <( cat $htm_with_params_in_name | base64 )
 					else
-					    sho "HTML report is compressed and converted to base64 format before saving. Command:" $plog
+					    sho "...HTML report is COMPRESSED before converting to base64 base64 and saving. Command:" $plog
 					    sho "$zip_cmd" $plog
 					    eval "$zip_cmd" 1>$tmpsidlog 2>$tmpsiderr
 					    retcode=$?
@@ -3740,7 +4526,7 @@ do
 					        catch_err $? $plog $tmpsiderr "Compression FAILED. Check log in $plog"
 					    fi
 					    while read line; do
-					        echo "insert into results_reports(run_id, zip2b64) values(${v_run_id}, q'{${line}}');">>$psql
+					        echo "insert into results_reports(run_id, zip2b64) values(${v_run_id}, '${line}');">>$psql
 					    done < <( cat $zip2b64_txt )
 					    echo "update results_overall o set o.report_compress_cmd='$report_compress_cmd' where o.run_id=${v_run_id};" >>$psql
 					    rm -f $zip2b64_txt
@@ -3748,25 +4534,39 @@ do
 					echo "commit;">>$psql
 
 					run_cmd="$isql_name $host/$port:$results_fdb -i $psql -q -nod $dbauth -ch utf8"
-					sho "Saving HTML report in $results_fdb, run_id=${v_run_id}. Command:" $plog
+					sho "Step-3: saving HTML report in $results_fdb, run_id=${v_run_id}. Command:" $plog
 					sho "$run_cmd" $plog
 					eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
 					catch_err $? $plog $tmpsiderr "Check occurences of alternate quoting: q'{ ... }' withing strings in HTML"
 					rm -f  $psql
-				else
+					sho "HTML report saved." $plog
+					
+					#_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=
+					# Get stack traces for each crashes that occured during test, from launch up to current time.
+					# Save stack traces into $result_storage_fbk, tables: results_crash_list, results_crash_data
+					save_crash_info "$dbconn" $v_run_id $crash_on_db_shut $crash_during_run $plog
+					#                   1         2            3                    4
+					#_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=_=
+					
+				else # ${v_run_id} is undefined (error in .sql)
+				
 					sho "Can not save HTML report in $results_fdb: variable 'v_run_id' remains undefined." $plog
 				fi # -n "$v_run_id" 
 			fi
 
-			# do not use '-se' here! Can fail for unknown reason!
-			run_cmd="$fbc/gbak -b -user ${usr} -pas ${pwd} $results_fdb $results_fbk"
-			sho "Make backup of new results, command:" $plog
+			#
+			run_cmd="$fbc/gbak -b -se $host/$port:service_mgr -user ${usr} -pas ${pwd} $results_fdb $results_fbk"
+			#run_cmd="$fbc/gbak -b -user ${usr} -pas ${pwd} $host/$port:$results_fdb $results_fbk"
+			sho "Final stage: make backup of new results, command:" $plog
 			sho "$run_cmd" $plog
 			eval "$run_cmd" 1>$tmpsidlog 2>$tmpsiderr
 			catch_err $? $plog $tmpsiderr "Check whether database $results_fbk exists."
 			rm -f $tmpsidlog $results_fdb
-
-        fi
+	    else
+	        sho "Parameter results_storage_fbk is undefined, SKIP saving results to database." $plog
+            fi # [[ $save_report -eq 1 && -s "$results_storage_fbk" ]]
+            
+        fi #  [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
 
         rm -f $tmpauxlog
 	rm -f $tmpdir/1stoptest.tmp.sh

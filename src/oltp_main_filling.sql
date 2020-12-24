@@ -2084,6 +2084,86 @@ insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values( -9
 insert into fb_errors(fb_sqlcode, fb_gdscode, fb_mnemona, fb_errtext) values( -901, 337182760, 'trace_mandatory_switch_miss', 'mandatory switch \');
 commit;
 
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- 14.12.2020
+-- 1. Added "0" to the list of severe gdscodes, this was SuperClassic 3.0 trouble in sep-2014.
+-- 2. 03-feb-2017: added arith exc./string overflow, gdscode=335544321: see comments in fn_halt_sign.
+--   Auto removing of .err files which did contain "string truncation" error was the main reason
+--   why pseudo-regression in 4.0 could not be found during jul-2016 ... dec-2016.
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values(         0, 'ANY','Unidentified error in PSQL code: gdscode=0 within WHEN block when exception raised.');
+
+-- 'arith_except' (Arithmetic exception, numeric overflow, or string truncation):
+-- all these errors must be fixed by increasing of field size or check source code.
+-- Particularly, string truncation of 'v_call' variable (when it was modified by
+-- debug code in sp_make_qty_storno and sp_kill_qstorno_ret_qs2qd) was actual reason
+-- of "performance regression" in 4.0 since 16-jul-2016: variable of unicode_fss type
+-- does not allow to fit more chars than declared len, even if all chars are ascii (1 byte).
+-- See also letter from hvlad 06-jan-2017 01:59
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544321, 'ANY','string truncation: attempt to assign too long text into a string variable.');
+
+-- Possible reasons: no all config parameters are saved in SETTNIGS table; trigger TRG_CONNECT remains INactive;
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544843, 'ANY', 'ctx_var_not_found: context variable @1 is not found in namespace SYSTEM');
+
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544347, '/CK/','not_valid: validation error for column @1, value "@2".');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544558, '/CK/','check_constraint: operation violates CHECK constraint on view or table.');
+
+-- unique_key_violation (violation of PRIMARY or UNIQUE KEY constraint "T1_XY" on table "T1")
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544665, '/PK/','unique_key_violation: operation violates PRIMARY or UNIQUE KEY constraint' );
+
+-- no_dup (attempt to store duplicate value (visible to active transactions) in unique index "T2_XY") - without UNQ constraint
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544349, '/PK/','no_dup: operation violates unique index');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544466, '/FK/','foreign_key: violation of FOREIGN KEY constraint "@1" on table "@2".' );
+
+-- Foreign key reference target does not exist (when attempt to ins/upd in DETAIL table FK-field with value for which parent ID has been changed or deleted - even in uncommitted concurrent Tx)
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544838, '/FK/','foreign_key_target_doesnt_exist: attempt to insert/update field in child table with value which does not exists in parent table');
+
+-- Foreign key references are present for the record  (when attempt to upd/del in PARENT table PK-field and rows in DETAIL (no-cascaded!) exists for old value)
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544839, '/FK/','foreign_key_references_present: attempt to delete parent record while child records exist and FK was declared without CASCADE clause');
+
+-- problem in 3.0 SC only: this error appears at the TOP of stack and this prevent following job of Tx
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544842, '/ST/','stack_trace');
+
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544352, 'ANY','no_priv: no permission for @1 access to @2 @3');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544359, 'ANY', 'read_only_field: attempted update of read-only column @1' );
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544360, 'ANY', 'read_only_rel: attempted update of read-only table');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544361, 'ANY', 'read_only_trans: attempted update during read-only transaction');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544362, 'ANY', 'read_only_view: cannot update read-only view @1');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544334, 'ANY', 'convert_error: conversion error from string');
+
+insert into fb_severe_errors(fb_gdscode, stop_if_halt_list, fb_descr)
+values( 335544472, 'ANY', 'login: your user name and password are not defined.');
+
+commit;
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
 -- REMOVE unneeded indices on field 'ID' for some tables if setting 'C_MINIMAL_PK_CREATION' = '1'
 -- Prevent PK for: qdistr,qstorned,pdistr,pstorned - only if setting
 -- 'HALT_TEST_ON_ERRORS' containing 'PK'

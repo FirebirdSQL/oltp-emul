@@ -15741,8 +15741,8 @@ drop table tmp$wares;
 drop table tmp$agents;
 drop table tmp$names;
 
-alter trigger TRG_CONNECT active;
-commit;
+-- 01.12.2020, disabled. Moved from here to oltp_activate.sql: alter trigger TRG_CONNECT active;
+
 set list on;
 set echo off;
 select 'oltp_data_filling.sql finish at ' || current_timestamp as msg from rdb$database;

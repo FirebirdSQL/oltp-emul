@@ -76,7 +76,6 @@ as
     declare v_storno_sub smallint;
     declare v_ctx_max_rows type of dm_ctxnv;
     declare v_ctx_max_qty type of dm_ctxnv;
-    declare v_stt varchar(255);
     declare v_pattern type of dm_name;
     declare v_source_for_random_id dm_dbobj;
     declare v_source_for_min_id dm_dbobj;
@@ -87,7 +86,8 @@ as
     declare v_this dm_dbobj = 'sp_fill_shopping_cart';
     declare v_info dm_info = '';
     declare v_detailed_exc_text dm_info; -- 19.12.2018
-
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
     declare c_take_random_ware cursor for (
         select p.id_selected
         from
@@ -96,7 +96,7 @@ as
                     :v_source_for_min_id,
                     :v_source_for_max_id,
                     :v_raise_exc_on_nofind, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
-                    :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
+                    :v_can_skip_order_clause, -- 17.07.2014: if = 1 then 'order by id' will be SKIPPED in statement inside fn
                     :v_find_using_desc_index, -- 11.09.2014, performance of select id from v_xxx order by id DESC rows 1
                     :v_doc_rows
                 ) p
@@ -116,6 +116,15 @@ begin
 
     -- add to performance log timestamp about start/finish this unit:
     execute procedure sp_add_perf_log(1, v_this);
+
+    -- check that all needed context variables EXIST, otherwise terminate test:
+    execute procedure sp_check_ctx(
+         'USER_SESSION', 'C_SUPPLIER_DOC_MAX_ROWS'
+        ,'USER_SESSION', 'C_CUSTOMER_DOC_MAX_ROWS'
+        ,'USER_SESSION', 'C_SUPPLIER_DOC_MAX_QTY'
+        ,'USER_SESSION', 'C_CUSTOMER_DOC_MAX_QTY'
+    );
+
 
     if ( fn_make_predictable_workload() = 1 ) then
         begin
@@ -197,16 +206,78 @@ begin
                 0
               );
 
-    select
-        r.snd_optype_id
-        ,r.storno_sub
-    from v_rules_for_qdistr r -- 29.03.2019: replaced table name with view in order to remove dependencies
-    where
-        r.rcv_optype_id = :a_optype_id
-        and r.mode containing 'new_doc' 
-    into v_snd_optype_id, v_storno_sub;
+    -- See oltpNN_config, parameter 'use_es'. Can be 0, 1 or 2:
 
-    v_info = 'view='||v_source_for_random_id||', rows='||v_doc_rows||', oper='||a_optype_id;
+    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+    v_sttm =
+    q'{ execute block( a_optype_id bigint = ?, a_mode dm_name = ?)
+            returns(v_snd_optype_id bigint, v_storno_sub smallint) as
+        begin
+            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+            -- NOTE: we have to log timestamp of point just BEFORE query that
+            -- will work: datediff between this point and next firing of
+            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+            -- of IDLE state for this connect in the Ext. Conn. Pool.
+            execute procedure sp_perf_eds_logging('B');
+    
+            select
+                r.snd_optype_id
+                ,r.storno_sub
+            from v_rules_for_qdistr r
+            where
+                r.rcv_optype_id = :a_optype_id
+                and r.mode containing :a_mode
+            into v_snd_optype_id, v_storno_sub;
+
+            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+            -- for connect, so there we have TWO events: 'I' and 'A').
+            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+            suspend;
+        end
+    }';
+    execute statement ( v_sttm ) ( a_optype_id, 'new_doc' )
+    -- 20.11.2020
+    -- If config parameter USE_ES is 2 then following line will be
+    -- replaced with uncommented code for run as ES/EDS.
+    -- Host and port will be taken from apropriate config parameters.
+    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+    into v_snd_optype_id, v_storno_sub;
+    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+    /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+    execute statement (
+        'select --#EDS#TAG# ' || v_lf
+        || '    r.snd_optype_id '
+        || '    ,r.storno_sub '
+        || ' from v_rules_for_qdistr r '
+        || ' where '
+        || '    r.rcv_optype_id = ? '
+        || '    and r.mode containing ? '
+    )
+    ( a_optype_id, 'new_doc' )
+    into v_snd_optype_id, v_storno_sub;
+    -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+    -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+    -- usual way (use_es = 0): use static PSQL code.
+    begin
+        select
+            r.snd_optype_id
+            ,r.storno_sub
+        from v_rules_for_qdistr r -- 29.03.2019: replaced table name with view in order to remove dependencies
+        where
+            r.rcv_optype_id = :a_optype_id
+            and r.mode containing 'new_doc' 
+        into v_snd_optype_id, v_storno_sub;
+    end
+    -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
+    v_info = 'view='||trim(v_source_for_random_id)||', rows='||v_doc_rows||', oper='||a_optype_id;
 
     delete from tmp$shopping_cart where 1=1;
     row_cnt = 0;
@@ -520,6 +591,7 @@ begin
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement(v_stt) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,agent_id
@@ -575,11 +647,12 @@ returns (
 )
 as
     declare v_ibe smallint;
-    declare v_stt varchar(255);
     declare v_dummy bigint;
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_client_order';
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
 begin
 
     -- Moves client order in 'cancelled' state. No rows from such client order
@@ -599,16 +672,95 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            (select id_selected from
-                            sp_get_random_id( 'v_cancel_client_order' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,:c_raise_exc_when_no_found
-                                              ,:c_can_skip_order_clause
-                                            )
-                            )
-                          );
+
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+            'v_cancel_client_order'   -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1...5
+        )
+        (
+            'v_cancel_client_order'   -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_client_order' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
 
     -- Find doc ID (with checking in view v_*** is need) and try to LOCK it.
     -- Raise exc if no found or can`t lock:
@@ -633,17 +785,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+        v_sttm = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                 ||',v.qty_clo ,v.qty_clr ,v.qty_ord'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+        v_sttm = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                 ||',null      ,null      ,null'
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement(v_stt) ( x := :doc_list_id )
+        execute statement(v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,agent_id
@@ -703,7 +856,7 @@ as
     declare v_rows_added int;
     declare v_qty_sum dm_qty;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(255);
     declare v_dummy bigint;
     declare v_this dm_dbobj = 'sp_supplier_order';
 begin
@@ -755,17 +908,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-       v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+       v_sttm = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                ||' ,v.qty_clo ,v.qty_ord'
                ||' from v_doc_detailed v where v.doc_id = :x';
     else
-       v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+       v_sttm = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                ||' ,null     ,null'
                ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement(v_stt) ( x := :doc_list_id )
+        execute statement(v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,agent_id
@@ -824,7 +978,7 @@ as
     declare v_rows_added int;
     declare v_qty_sum dm_qty;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(255);
     declare v_this dm_dbobj = 'sp_supplier_invoice';
 begin
 
@@ -876,17 +1030,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-       v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
+       v_sttm = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.cost_retail'
                ||' ,v.qty_clo ,v.qty_ord ,v.qty_sup'
                ||' from v_doc_detailed v where v.doc_id = :x';
     else
-       v_stt = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
+       v_sttm = 'select h.worker_id, h.agent_id, d.id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail'
                ||' ,null     ,null       ,null'
                ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement(v_stt) ( x := :doc_list_id )
+        execute statement(v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,agent_id
@@ -944,10 +1099,11 @@ returns(
 as
     declare v_dummy bigint;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_supplier_invoice';
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
 begin
 
     -- Randomly chooses invoice from supplier (NOT yet accepted) and CANCEL it
@@ -971,16 +1127,95 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            ( select id_selected
-                              from sp_get_random_id(  'v_cancel_supplier_invoice' -- a_view_for_search
-                                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                                ,:c_raise_exc_when_no_found
-                                                ,:c_can_skip_order_clause
-                                              )
-                            )
-                          );
+
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+           'v_cancel_supplier_invoice' -- 1
+           ,cast(null as dm_dbobj)     -- 2
+           ,cast(null as dm_dbobj)     -- 3
+           ,c_raise_exc_when_no_found  -- 4
+           ,c_can_skip_order_clause    -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1..5
+        )
+        (
+            'v_cancel_supplier_invoice' -- 1
+           ,cast(null as dm_dbobj)      -- 2
+           ,cast(null as dm_dbobj)      -- 3
+           ,c_raise_exc_when_no_found   -- 4
+           ,c_can_skip_order_clause     -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_supplier_invoice' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
+    end
+
     -- upd. log with doc id whic is actually handling now:
     execute procedure sp_upd_in_perf_log( v_this, null, 'dh='||doc_list_id);
 
@@ -1031,24 +1266,25 @@ begin
     v_ibe = iif( fn_remote_process() containing 'IBExpert', 1, 0);
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.doc_id, r.worker_id, r.agent_id, r.doc_data_id, r.ware_id, r.qty, r.cost_purchase, r.cost_retail';
+    v_sttm = 'select r.doc_id, r.worker_id, r.agent_id, r.doc_data_id, r.ware_id, r.qty, r.cost_purchase, r.cost_retail';
 
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ' ,n.qty_clo ,n.qty_ord ,n.qty_sup';
+       v_sttm = v_sttm || ' ,n.qty_clo ,n.qty_ord ,n.qty_sup';
     else
-       v_stt = v_stt || ' ,null     ,null       ,null';
+       v_sttm = v_sttm || ' ,null     ,null       ,null';
 
-    v_stt = v_stt ||' from tmp$result_set r';
+    v_sttm = v_sttm ||' from tmp$result_set r';
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ' left join v_saldo_invnt n on r.ware_id = n.ware_id';
+       v_sttm = v_sttm || ' left join v_saldo_invnt n on r.ware_id = n.ware_id';
 
     -- 17.07.2014: add cond for indexed scan to minimize fetches when multiple
     -- calls of this SP from s`p_cancel_supplier_order:
-    v_stt = v_stt || ' where r.doc_id = :x';
+    v_sttm = v_sttm || ' where r.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id )
+        execute statement (v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
         doc_list_id
         ,worker_id
@@ -1204,12 +1440,13 @@ as
     declare v_qty_sum dm_qty;
     declare v_dbkey dm_dbkey;
     declare v_agent_id type of dm_idb;
-    declare v_raise_exc_on_nofind dm_sign;
-    declare v_can_skip_order_clause dm_sign;
-    declare v_find_using_desc_index dm_sign;
+    declare c_raise_exc_when_no_found dm_sign;
+    declare c_can_skip_order_clause dm_sign;
+    declare c_find_using_desc_index dm_sign;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_this dm_dbobj = 'sp_customer_reserve';
+    declare v_lf char(1) = x'0A';
 begin
 
     -- Takes several wares, adds them into
@@ -1244,24 +1481,104 @@ begin
         a_client_order_id = null;
     else if ( a_client_order_id is null ) then
         begin
-            v_raise_exc_on_nofind = 0;   -- do NOT raise exc if random seacrh will not find any record
-            v_can_skip_order_clause = 0; -- do NOT skip `order by` clause in sp_get_random_id (if order by id DESC will be used!)
-            v_find_using_desc_index = 0; -- 22.09.2014; befo: 1; -- use 'order by id DESC' (11.09.2014)
+            c_raise_exc_when_no_found = 0;   -- do NOT raise exc if random seacrh will not find any record
+            c_can_skip_order_clause = 0; -- do NOT skip `order by` clause in sp_get_random_id (if order by id DESC will be used!)
+            c_find_using_desc_index = 0; -- 22.09.2014; befo: 1; -- use 'order by id DESC' (11.09.2014)
             -- First of all try to search among client_orders which have
             -- at least one row with NOT_fully reserved ware.
             -- Call sp_get_random_id with arg NOT to raise exc`eption if
             -- it will not found such documents:
+
+    
+            /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+            v_sttm =
+            q'{ execute block(
+                    a_view_for_search dm_dbobj = ?
+                    ,a_view_for_min_id dm_dbobj = ?
+                    ,a_view_for_max_id dm_dbobj = ?
+                    ,a_raise_exc_when_no_found smallint = ?
+                    ,a_can_skip_order_clause smallint = ?
+                    ,a_find_using_desc_index smallint = ?
+                ) returns(doc_list_id bigint) as
+                begin
+                    -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                    -- NOTE: we have to log timestamp of point just BEFORE query that
+                    -- will work: datediff between this point and next firing of
+                    -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                    -- of IDLE state for this connect in the Ext. Conn. Pool.
+                    execute procedure sp_perf_eds_logging('B');
+    
+                    select id_selected --#EDS#TAG#
+                    from sp_get_random_id(
+                        :a_view_for_search
+                        ,:a_view_for_min_id
+                        ,:a_view_for_max_id
+                        ,:a_raise_exc_when_no_found
+                        ,:a_can_skip_order_clause
+                        ,:a_find_using_desc_index
+                    )
+                    into doc_list_id;
+
+                    -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                    -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                    -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                    -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                    -- for connect, so there we have TWO events: 'I' and 'A').
+                    --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                    suspend;
+                end
+            }';
+            execute statement (v_sttm)
+            (
+                'v_random_find_clo_res'   -- 1
+               ,'v_min_id_clo_res'        -- 2
+               ,'v_max_id_clo_res'        -- 3
+               ,c_raise_exc_when_no_found -- 4
+               ,c_can_skip_order_clause   -- 5
+               ,c_find_using_desc_index   -- 6
+            )
+            -- 20.11.2020
+            -- If config parameter USE_ES is 2 then following line will be
+            -- replaced with uncommented code for run as ES/EDS.
+            -- Host and port will be taken from apropriate config parameters.
+            -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+            -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+            into a_client_order_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+            /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+            execute statement (
+                'select --#EDS#TAG#' || v_lf
+                || ' id_selected '
+                || ' from sp_get_random_id( ?, ?, ?, ?, ?, ? )' -- 1..6
+            )
+            (
+                'v_random_find_clo_res' -- 1
+               ,'v_min_id_clo_res'      -- 2
+               ,'v_max_id_clo_res'      -- 3
+               ,c_raise_exc_when_no_found   -- 4
+               ,c_can_skip_order_clause -- 5
+               ,c_find_using_desc_index -- 6
+
+            )
+            into a_client_order_id;
+             -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+            -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+            -- usual way (use_es = 0): use static PSQL code.
             select id_selected
             from sp_get_random_id(
-                    'v_random_find_clo_res',
-                    'v_min_id_clo_res',
-                    'v_max_id_clo_res',
-                    :v_raise_exc_on_nofind,
-                    :v_can_skip_order_clause,
-                    :v_find_using_desc_index
-                )
-            into
-                a_client_order_id;
+                'v_random_find_clo_res' -- a_view_for_search
+                ,'v_min_id_clo_res' -- a_view_for_min_id ==> the same as a_view_for_search
+                ,'v_max_id_clo_res' -- a_view_for_max_id ==> the same as a_view_for_search
+                ,:c_raise_exc_when_no_found
+                ,:c_can_skip_order_clause
+                ,:c_find_using_desc_index
+            )
+            into a_client_order_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
         end
 
     v_qty_sum = 0;
@@ -1329,17 +1646,18 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if ( v_ibe = 1 ) then
-        v_stt = 'select v.worker_id, v.base_doc_id, v.doc_data_id, v.ware_id, v.qty,v.cost_purchase, v.cost_retail'
+        v_sttm = 'select v.worker_id, v.base_doc_id, v.doc_data_id, v.ware_id, v.qty,v.cost_purchase, v.cost_retail'
                 ||',v.qty_ord ,v.qty_avl ,v.qty_res'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.worker_id, h.base_doc_id, d.id, d.ware_id, d.qty,d.cost_purchase, d.cost_retail'
+        v_sttm = 'select h.worker_id, h.base_doc_id, d.id, d.ware_id, d.qty,d.cost_purchase, d.cost_retail'
                 ||',null      ,null      ,null     '
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id )
+        execute statement (v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,client_order_id
@@ -1394,12 +1712,13 @@ returns (
     qty_res type of dm_qty -- new value of corresp. row
 ) as
     declare v_linked_client_order type of dm_idb;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_ibe smallint;
     declare v_dummy bigint;
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_customer_reserve';
+    declare v_lf char(1) = x'0A';
 begin
 
     -- Randomly chooses customer reserve (which is NOT yet sold) and CANCEL it
@@ -1425,17 +1744,95 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            ( select id_selected
-                              from sp_get_random_id(
-                                'v_cancel_customer_reserve' -- a_view_for_search
-                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                ,:c_raise_exc_when_no_found
-                                ,:c_can_skip_order_clause
-                                            )
-                            )
-                          );
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+            'v_cancel_customer_reserve' -- 1
+           ,cast(null as dm_dbobj)      -- 2
+           ,cast(null as dm_dbobj)      -- 3
+           ,c_raise_exc_when_no_found   -- 4
+           ,c_can_skip_order_clause     -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1..5
+        )
+        (
+            'v_cancel_customer_reserve' -- 1
+           ,cast(null as dm_dbobj)      -- 2
+           ,cast(null as dm_dbobj)      -- 3
+           ,c_raise_exc_when_no_found   -- 4
+           ,c_can_skip_order_clause     -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_customer_reserve' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
+
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1492,23 +1889,24 @@ begin
 
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.doc_id, r.worker_id, r.base_doc_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
+    v_sttm = 'select r.doc_id, r.worker_id, r.base_doc_id,r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ' ,n.qty_ord,       n.qty_avl,       n.qty_res';
+       v_sttm = v_sttm || ' ,n.qty_ord,       n.qty_avl,       n.qty_res';
     else
-       v_stt = v_stt || ' ,null as qty_ord, null as qty_avl, null as qty_res';
+       v_sttm = v_sttm || ' ,null as qty_ord, null as qty_avl, null as qty_res';
 
-    v_stt = v_stt ||' from tmp$result_set r';
+    v_sttm = v_sttm ||' from tmp$result_set r';
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ' left join v_saldo_invnt n on r.ware_id = n.ware_id';
+       v_sttm = v_sttm || ' left join v_saldo_invnt n on r.ware_id = n.ware_id';
 
     -- 17.07.2014: add cond for indexed scan to minimize fetches when multiple
     -- calls of this SP from sp_cancel_adding_invoice:
-    v_stt = v_stt || ' where r.doc_id = :x';
+    v_sttm = v_sttm || ' where r.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id)
+        execute statement (v_sttm) ( x := :doc_list_id)
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          doc_list_id
         ,worker_id
@@ -1567,12 +1965,13 @@ returns (
 as
     declare v_dummy bigint;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_agent_id type of dm_idb;
     declare v_linked_client_order type of dm_idb;
     declare v_this dm_dbobj = 'sp_cancel_write_off';
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
+    declare v_lf char(1) = x'0A';
 begin
 
     -- Randomly chooses waybill (ex. customer reserve after it was sold) and
@@ -1601,17 +2000,96 @@ begin
     -- Choose random doc of corresponding kind ("closed" customer reserve)
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            ( select id_selected from
-                              sp_get_random_id(
-                                'v_cancel_write_off' -- a_view_for_search
-                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                ,:c_raise_exc_when_no_found
-                                ,:c_can_skip_order_clause
-                                              )
-                            )
-                          );
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+            'v_cancel_write_off'      -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )'
+        )
+        (
+            'v_cancel_write_off'      -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_write_off' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
+
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     if (  NOT (a_selected_doc_id is NOT null and a_skip_lock_attempt = 1) ) then
@@ -1643,17 +2121,18 @@ begin
 
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select d.doc_id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail';
+    v_sttm = 'select d.doc_id, d.ware_id, d.qty, d.cost_purchase, d.cost_retail';
     if ( v_ibe = 1 ) then
-       v_stt = v_stt || ',d.worker_id ,d.doc_data_id ,d.qty_avl ,d.qty_res  ,d.qty_out from v_doc_detailed d';
+       v_sttm = v_sttm || ',d.worker_id ,d.doc_data_id ,d.qty_avl ,d.qty_res  ,d.qty_out from v_doc_detailed d';
     else
-       v_stt = v_stt || ',null        ,d.id          ,null      ,null       ,null      from doc_data d';
+       v_sttm = v_sttm || ',null        ,d.id          ,null      ,null       ,null      from doc_data d';
     
-    v_stt = v_stt || ' where d.doc_id = :x';
+    v_sttm = v_sttm || ' where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id )
+        execute statement (v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
         doc_list_id
         ,ware_id
@@ -1861,7 +2340,7 @@ returns (
 as
     declare v_dummy bigint;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_info dm_info;
     declare v_new_doc_state type of dm_idb;
     declare v_old_oper_id type of dm_idb;
@@ -1873,6 +2352,7 @@ as
     declare v_this dm_dbobj = 'sp_add_invoice_to_stock';
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
+    declare v_lf char(1) = x'0A';
 
     declare function fn_internal_enable_reserving() returns boolean deterministic as
     begin
@@ -1931,17 +2411,95 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            (select id_selected
-                             from sp_get_random_id( :v_view_for_search -- a_view_for_search
-                                                    ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                                    ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                                    ,:c_raise_exc_when_no_found
-                                                    ,:c_can_skip_order_clause
-                                                  )
-                            )
-                          );
 
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+            v_view_for_search         -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?,?,?,?,? )' -- 1..5
+        )
+        (
+            v_view_for_search         -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            :v_view_for_search -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
 
     execute procedure sp_upd_in_perf_log(v_this, null, 'doc_id='||doc_list_id); -- 06.07.2014, 4debug
 
@@ -2071,15 +2629,16 @@ begin
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
     if (  v_ibe = 1 ) then
-        v_stt = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
+        v_sttm = 'select v.worker_id, v.agent_id, v.doc_data_id, v.ware_id, v.qty, v.cost_purchase, v.qty_sup, v.qty_avl, v.qty_res'
                 ||' from v_doc_detailed v where v.doc_id = :x';
     else
-        v_stt = 'select h.worker_id, h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,     null,       null '
+        v_sttm = 'select h.worker_id, h.agent_id, d.id,          d.ware_id, d.qty, d.cost_purchase, null,     null,       null '
                 ||' from doc_data d join doc_list h on d.doc_id = h.id where d.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id )
+        execute statement (v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
      into
          worker_id
         ,agent_id
@@ -2169,6 +2728,7 @@ begin
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement (v_stt) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
     into
          worker_id
         ,agent_id
@@ -2224,7 +2784,7 @@ returns (
 as
     declare v_dummy bigint;
     declare v_ibe smallint;
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_info dm_info = '';
     declare v_linked_invoice_id bigint;
     declare v_linked_invoice_state bigint;
@@ -2233,6 +2793,7 @@ as
     declare v_this dm_dbobj = 'sp_cancel_supplier_order';
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
+    declare v_lf char(1) = x'0A';
 begin
 
     -- Randomly chooses our order to supplier and CANCEL it by REMOVING all its
@@ -2268,16 +2829,98 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            (select id_selected from
-                              sp_get_random_id( 'v_cancel_supplier_order' -- a_view_for_search
-                                                ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                                ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                                ,:c_raise_exc_when_no_found
-                                                ,:c_can_skip_order_clause
-                                              )
-                            )
-                          );
+
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+            'v_cancel_supplier_order' -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1..5
+        )
+        (
+            'v_cancel_supplier_order' -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_supplier_order' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
+    end
+
     v_info = 'dh='||doc_list_id;
     -- upd. log with doc id whic is actually handling now:
     --execute procedure sp_upd_in_perf_log( v_this, null, 'dh='||doc_list_id);
@@ -2387,19 +3030,22 @@ begin
 
     -- 16.07.2014: make ES more 'smart': we do NOT need any records from view
     -- v_doc_detailed (==> v_saldo_invnt!) if there is NO debug now (performance!)
-    v_stt = 'select r.worker_id, r.agent_id, r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
+    v_sttm = 'select r.worker_id, r.agent_id, r.doc_data_id,r.ware_id,r.qty,r.cost_purchase,r.cost_retail';
     if ( v_ibe = 1 ) then
-        v_stt = v_stt ||' ,n.qty_clo,n.qty_ord'
+        v_sttm = v_sttm ||' ,n.qty_clo,n.qty_ord'
                       ||' from tmp$result_set r left join v_saldo_invnt n on r.ware_id = n.ware_id';
     else
-        v_stt = v_stt ||' ,null     ,null from tmp$result_set r';
+        v_sttm = v_sttm ||' ,null     ,null from tmp$result_set r';
 
     -- 17.07.2014: add cond for indexed scan to minimize fetches:
-    v_stt = v_stt || ' where r.doc_id = :x';
+    v_sttm = v_sttm || ' where r.doc_id = :x';
 
     -- final resultset (need only in IBE, for debug purposes):
     for
-        execute statement (v_stt) ( x := :doc_list_id )
+        execute statement (v_sttm) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because data not yet committed.
+        -- Moreover, table tmp$result_set is tx-leve GTT ==> its data can be seen
+        -- only within current transaction.
     into
          worker_id
         ,agent_id
@@ -2530,6 +3176,8 @@ begin
     -- final resultset (need only in IBE, for debug purposes):
     for
         execute statement (v_stt) ( x := :doc_list_id )
+        -- 23.11.2020: no sense to add EDS here because we have to return info about
+        -- current doc that not yet committed. EDS-connection will not see this doc!
     into
          worker_id
         ,doc_data_id
@@ -2579,11 +3227,12 @@ returns (
     current_pay_sum type of dm_cost
 )
 as
-    declare v_stt varchar(255);
+    declare v_sttm varchar(8192);
     declare v_source_for_random_id dm_dbobj;
     declare v_source_for_min_id dm_dbobj;
     declare v_source_for_max_id dm_dbobj;
     declare v_can_skip_order_clause smallint;
+    declare v_raise_exc_when_no_found smallint;
     declare v_find_using_desc_index dm_sign;
     declare view_to_search_agent dm_dbobj;
     declare v_non_paid_total type of dm_cost;
@@ -2591,6 +3240,7 @@ as
     declare v_id bigint;
     declare v_dummy bigint;
     declare v_this dm_dbobj = 'sp_payment_common';
+    declare v_lf char(1) = x'0A';
 begin
 
     -- Aux SP - common for both payments from customers and our payments
@@ -2645,6 +3295,8 @@ begin
                 0
               );
 
+    v_raise_exc_when_no_found = 0;
+
     -- Confirmed 12.01.19: performance better when use DESCEND index rather than ascend.
     v_find_using_desc_index =
         decode( a_payment_oper,
@@ -2657,47 +3309,211 @@ begin
     v_round_to = iif( a_payment_oper = fn_oper_pay_from_customer(), -2, -3);
 
     if ( :a_selected_doc_id is null ) then
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
         begin
-            select id_selected
-            from sp_get_random_id(
-                                   :v_source_for_random_id,
-                                   :v_source_for_min_id,
-                                   :v_source_for_max_id,
-                                   0, -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
-                                   :v_can_skip_order_clause, -- 17.07.2014: if = 1, then 'order by id' will be SKIPPED in statement inside fn
-                                   :v_find_using_desc_index -- 11.09.2014
-                                 )
+            v_sttm =
+            q'{ execute block(
+                    a_view_for_search dm_dbobj = ?
+                    ,a_view_for_min_id dm_dbobj = ?
+                    ,a_view_for_max_id dm_dbobj = ?
+                    ,a_raise_exc_when_no_found smallint = ?
+                    ,a_can_skip_order_clause smallint = ?
+                    ,a_find_using_desc_index smallint = ?
+                ) returns(doc_list_id bigint) as
+                begin
+                    -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                    -- NOTE: we have to log timestamp of point just BEFORE query that
+                    -- will work: datediff between this point and next firing of
+                    -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                    -- of IDLE state for this connect in the Ext. Conn. Pool.
+                    execute procedure sp_perf_eds_logging('B');
+    
+                    select id_selected --#EDS#TAG#
+                    from sp_get_random_id(
+                        :a_view_for_search
+                        ,:a_view_for_min_id
+                        ,:a_view_for_max_id
+                        ,:a_raise_exc_when_no_found
+                        ,:a_can_skip_order_clause
+                        ,:a_find_using_desc_index
+                    )
+                    into doc_list_id;
+
+                    -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                    -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                    -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                    -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                    -- for connect, so there we have TWO events: 'I' and 'A').
+                    --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                    suspend;
+                end
+            }';
+            execute statement (v_sttm)
+            (
+                v_source_for_random_id    -- 1
+               ,v_source_for_min_id       -- 2
+               ,v_source_for_max_id       -- 3
+               ,v_raise_exc_when_no_found -- 4
+               ,v_can_skip_order_clause   -- 5
+               ,v_find_using_desc_index   -- 6
+            )
+            -- 20.11.2020
+            -- If config parameter USE_ES is 2 then following line will be
+            -- replaced with uncommented code for run as ES/EDS.
+            -- Host and port will be taken from apropriate config parameters.
+            -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+            -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
             into source_doc_id;
-            if ( source_doc_id is not null ) then
-            begin
-                select agent_id from doc_list h where h.id = :source_doc_id into agent_id;
-            end
         end
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        begin
+            execute statement (
+                'select --#EDS#TAG#' || v_lf
+                || ' id_selected '
+                || 'from sp_get_random_id( ?, ?, ?, ?, ?, ? )' -- 1..6
+            )
+            (
+                v_source_for_random_id    -- 1
+               ,v_source_for_min_id       -- 2
+               ,v_source_for_max_id       -- 3
+               ,v_raise_exc_when_no_found -- 4
+               ,v_can_skip_order_clause   -- 5
+               ,v_find_using_desc_index   -- 6
+            )
+            into source_doc_id;
+        end
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+                               :v_source_for_random_id
+                               ,:v_source_for_min_id
+                               ,:v_source_for_max_id
+                               ,:v_raise_exc_when_no_found -- 19.07.2014: 0 ==> do NOT raise exception if not able to find any ID in view :v_source_for_random_id
+                               ,:v_can_skip_order_clause -- 17.07.2014: if = 1 then 'order by id' will be SKIPPED in statement inside fn
+                               ,:v_find_using_desc_index -- 11.09.2014
+                             )
+        into source_doc_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
     else
-        select :a_selected_doc_id, h.agent_id
-        from doc_list h
-        where h.id = :a_selected_doc_id
-        into source_doc_id, agent_id;
+        source_doc_id = a_selected_doc_id;
 
     if ( source_doc_id is not null ) then
         begin
-            -- Find doc ID (with checking in view v_*** if need) and try to LOCK it.
-            -- Raise exc if no found or can`t lock:
-            -- ::: do NOT ::: execute procedure sp_lock_selected_doc( source_doc_id, 'doc_list', a_selected_doc_id);
+            -- Get unpaid balance of full cost for selected document
+            -- See oltpNN_config, parameter 'use_es'. Can be 0, 1 or 2:
 
-            select h.agent_id from doc_list h where h.id = :a_selected_doc_id into agent_id;
+            /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+            v_sttm=
+            q'{execute block(a_source_doc_id bigint = ?) returns(agent_id bigint) as
+                begin
+                    -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                    -- NOTE: we have to log timestamp of point just BEFORE query that
+                    -- will work: datediff between this point and next firing of
+                    -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                    -- of IDLE state for this connect in the Ext. Conn. Pool.
+                    execute procedure sp_perf_eds_logging('B');
+                    
+                    select h.agent_id from doc_list h where h.id = :a_source_doc_id
+                    into agent_id;
+
+                    -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                    -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                    -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                    -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                    -- for connect, so there we have TWO events: 'I' and 'A').
+                    --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                    suspend;
+                end
+            }';
+            execute statement (v_sttm) ( source_doc_id )
+            -- 20.11.2020
+            -- If config parameter USE_ES is 2 then following line will be
+            -- replaced with uncommented code for run as ES/EDS.
+            -- Host and port will be taken from apropriate config parameters.
+            -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+            -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+            into agent_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+            /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+            execute statement (
+                'select --#EDS#TAG#' || v_lf
+                || ' h.agent_id '
+                || ' from doc_list h where h.id = ?'
+             ) ( source_doc_id )
+            into agent_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+            -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+            -- usual way (use_es = 0): use static PSQL code.
+            select h.agent_id from doc_list h where h.id = :source_doc_id into agent_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
             if ( agent_id is null ) then
-                exception ex_no_doc_found_for_handling using('doc_list', a_selected_doc_id);
+                exception ex_no_doc_found_for_handling using('doc_list', source_doc_id);
                 -- no document found for handling in datasource = '@1' with id=@2
 
             if ( a_total_pay is null ) then
                 begin
-                    select sum( p.snd_cost ) 
+                    -- pay entire [remaining] sum for selected document
+
+                    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+                    v_sttm=
+                    q'{ execute block( a_source_doc_id bigint = ?, a_worker int = ? )
+                            returns( v_non_paid_total dm_cost ) as
+                        begin
+                            select sum( p.snd_cost )
+                            from pdistr p 
+                            where 
+                                p.snd_id = :a_source_doc_id
+                                and p.worker_id is not distinct from :a_worker
+                            into v_non_paid_total;
+                            suspend;
+                        end
+                    }';
+                    execute statement (v_sttm) ( source_doc_id, fn_this_worker_seq_no()  )
+                    -- 20.11.2020
+                    -- If config parameter USE_ES is 2 then following line will be
+                    -- replaced with uncommented code for run as ES/EDS.
+                    -- Host and port will be taken from apropriate config parameters.
+                    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+                    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+                    into v_non_paid_total;
+                    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+                    /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+                    execute statement (
+                        'select --#EDS#TAG#' || v_lf
+                        || ' sum( p.snd_cost ) '
+                        || ' from pdistr p '
+                        || ' where '
+                        || '    p.snd_id = ? '
+                        || '    and p.worker_id is not distinct from ? '
+                    ) ( source_doc_id, fn_this_worker_seq_no() )
+                    into v_non_paid_total;
+                    -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+                    -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+                    -- usual way (use_es = 0): use static PSQL code.
+                    select sum( p.snd_cost )
                     from pdistr p 
                     where 
                         p.snd_id = :source_doc_id 
                         and p.worker_id is not distinct from fn_this_worker_seq_no() -- added 05.10.2018
                     into v_non_paid_total;
+                    -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
                     
                     current_pay_sum = round( v_non_paid_total, v_round_to );
                     if (current_pay_sum < v_non_paid_total) then
@@ -2709,9 +3525,89 @@ begin
                 current_pay_sum = a_total_pay;
 
         end
-    else -- source_doc_id is null
+    else -- source_doc_id is null ==> select random AGENT for this payment action
         begin
+
+            /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+            v_sttm =
+            q'{execute block (
+                    a_view_to_search_agent dm_dbobj = ?
+                    ,a_view_for_min_id dm_dbobj = ?
+                    ,a_view_for_max_id dm_dbobj = ?
+                    ,a_raise_exc_when_no_found smallint = ?
+                ) returns( agent_id bigint ) as
+                begin
+                    -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                    -- NOTE: we have to log timestamp of point just BEFORE query that
+                    -- will work: datediff between this point and next firing of
+                    -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                    -- of IDLE state for this connect in the Ext. Conn. Pool.
+                    execute procedure sp_perf_eds_logging('B');
+
+                    select id_selected from sp_get_random_id
+                    (
+                       :a_view_to_search_agent
+                       ,:a_view_for_min_id
+                       ,:a_view_for_max_id
+                       ,:a_raise_exc_when_no_found
+                    )
+                    into agent_id;
+
+                    -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                    -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                    -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                    -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                    -- for connect, so there we have TWO events: 'I' and 'A').
+                    --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                    suspend;
+                end
+            }';
+            execute statement (v_sttm)
+            (
+                view_to_search_agent   -- 1
+               ,cast(null as dm_dbobj) -- 2
+               ,cast(null as dm_dbobj) -- 3
+               ,0                      -- 4
+            )
+            -- 20.11.2020
+            -- If config parameter USE_ES is 2 then following line will be
+            -- replaced with uncommented code for run as ES/EDS.
+            -- Host and port will be taken from apropriate config parameters.
+            -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+            -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+            into agent_id;
+
+--            if (agent_id is null) then
+--            begin
+--                -- could not choose random agent in SP_GET_RANDOM_ID,
+--                -- but such exception DID NOT pass here because of EDS!
+--                -- We have to raise this exception HERE, not within EDS:
+--                ex_eds_random_id_not_found using(view_to_search_agent);
+--            end
+            -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+            /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+            execute statement (
+                'select --#EDS#TAG#' || v_lf
+                || ' id_selected '
+                || ' from sp_get_random_id( ?, ?, ?, ? )' -- 1..4
+            )
+            (
+                view_to_search_agent   -- 1
+               ,cast(null as dm_dbobj) -- 2
+               ,cast(null as dm_dbobj) -- 3
+               ,0                      -- 4
+            )
+            into agent_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+            -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+            -- usual way (use_es = 0): use static PSQL code.
             select id_selected from sp_get_random_id( :view_to_search_agent, null, null, 0 ) into agent_id;
+            -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
             if ( a_total_pay is null ) then
                 begin
                     if (a_payment_oper = fn_oper_pay_from_customer() ) then
@@ -2843,6 +3739,8 @@ as
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
     declare v_this dm_dbobj = 'sp_cancel_pay_from_customer';
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
 begin
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
@@ -2859,25 +3757,155 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            (select id_selected from
-                             sp_get_random_id( 'v_cancel_customer_prepayment' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,:c_raise_exc_when_no_found
-                                              ,:c_can_skip_order_clause
-                                             )
-                            )
-                          );
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+           'v_cancel_customer_prepayment'   -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG#' || v_lf
+            || ' id_selected '
+            || ' from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1..5
+        )
+        (
+            'v_cancel_customer_prepayment' -- 1
+           ,cast(null as dm_dbobj)         -- 2
+           ,cast(null as dm_dbobj)         -- 3
+           ,c_raise_exc_when_no_found      -- 4
+           ,c_can_skip_order_clause        -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_customer_prepayment' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
+
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     execute procedure sp_lock_selected_doc( doc_list_id, 'v_cancel_customer_prepayment', a_selected_doc_id);
 
+    -- See oltpNN_config, parameter 'use_es'. Can be 0, 1 or 2:
+    /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+    v_sttm =
+    q'{ execute block (a_doc_list_id bigint = ?)
+        returns( agent_id bigint, prepayment_sum dm_cost) as
+        begin
+            -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+            -- NOTE: we have to log timestamp of point just BEFORE query that
+            -- will work: datediff between this point and next firing of
+            -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+            -- of IDLE state for this connect in the Ext. Conn. Pool.
+            execute procedure sp_perf_eds_logging('B');
+
+            select agent_id, cost_retail
+            from doc_list h
+            where h.id = :a_doc_list_id
+            into agent_id, prepayment_sum;
+
+            -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+            -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+            -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+            -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+            -- for connect, so there we have TWO events: 'I' and 'A').
+            --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+            suspend;
+        end
+    }';
+    execute statement (v_sttm) ( doc_list_id )
+    -- 20.11.2020
+    -- If config parameter USE_ES is 2 then following line will be
+    -- replaced with uncommented code for run as ES/EDS.
+    -- Host and port will be taken from apropriate config parameters.
+    -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+    -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+    into agent_id, prepayment_sum;
+    -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+    /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+    execute statement (
+        'select --#EDS#TAG#' || v_lf
+        || ' agent_id, cost_retail'
+        || ' from doc_list h where h.id = ?'
+    ) ( doc_list_id )
+    into agent_id, prepayment_sum;
+    -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+    -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+    -- usual way (use_es = 0): use static PSQL code.
     select agent_id, cost_retail
     from doc_list h
     where h.id = :doc_list_id
     into agent_id, prepayment_sum;
-    
+    -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
     -- finally, remove prepayment doc (decision about corr. `money_turnover_log` - see trigger doc_list_aiud)
     delete from doc_list h where h.id = :doc_list_id;
 
@@ -3001,6 +4029,8 @@ as
     declare v_this dm_dbobj = 'sp_cancel_pay_to_supplier';
     declare c_raise_exc_when_no_found dm_sign = 1;
     declare c_can_skip_order_clause dm_sign = 0;
+    declare v_lf char(1) = x'0A';
+    declare v_sttm varchar(8192);
 begin
 
     -- Check that table `ext_stoptest` (external text file) is EMPTY,
@@ -3017,16 +4047,96 @@ begin
     -- Choose random doc of corresponding kind.
     -- 25.09.2014: do NOT set c_can_skip_order_clause = 1,
     -- performance degrades from ~4900 to ~1900.
-    doc_list_id = coalesce( :a_selected_doc_id,
-                            (select id_selected from
-                             sp_get_random_id( 'v_cancel_payment_to_supplier' -- a_view_for_search
-                                              ,null -- a_view_for_min_id ==> the same as a_view_for_search
-                                              ,null -- a_view_for_max_id ==> the same as a_view_for_search
-                                              ,:c_raise_exc_when_no_found
-                                              ,:c_can_skip_order_clause
-                                            )
-                            )
-                          );
+
+    doc_list_id = a_selected_doc_id;
+    if (doc_list_id is null) then
+    begin
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_2#BEG#
+        v_sttm =
+        q'{ execute block(
+                a_view_for_search dm_dbobj = ?
+                ,a_view_for_min_id dm_dbobj = ?
+                ,a_view_for_max_id dm_dbobj = ?
+                ,a_raise_exc_when_no_found smallint = ?
+                ,a_can_skip_order_clause smallint = ?
+            ) returns(doc_list_id bigint) as
+            begin
+                -- Log precise timestamp when EDS attachment becomes ACTIVE and starts perform its job:
+                -- NOTE: we have to log timestamp of point just BEFORE query that
+                -- will work: datediff between this point and next firing of
+                -- db-level CONNECT trigger which gets RESETTING = tru is actual duration
+                -- of IDLE state for this connect in the Ext. Conn. Pool.
+                execute procedure sp_perf_eds_logging('B');
+
+                select id_selected --#EDS#TAG#
+                from sp_get_random_id(
+                    :a_view_for_search
+                    ,:a_view_for_min_id
+                    ,:a_view_for_max_id
+                    ,:a_raise_exc_when_no_found
+                    ,:a_can_skip_order_clause
+                )
+                into doc_list_id;
+
+                -- Log precise timestamp when EDS attachment is to be finished and thus will be INACTIVE.
+                -- Because This FB instance does not support ALTER SESSION RESET, we add record manually.
+                -- Instead of logging both 'I' and 'A', it is enough to write only 'A' for 'connect' event
+                -- (note: for FB 4.x session reset invokes BOTH triggers for disconnect and then immediately
+                -- for connect, so there we have TWO events: 'I' and 'A').
+                --#SUBST#RESETTING_0#BEG# execute procedure sp_perf_eds_logging('A'); --#SUBST#RESETTING_0#END#
+
+                suspend;
+            end
+        }';
+        execute statement (v_sttm)
+        (
+           'v_cancel_payment_to_supplier' -- 1
+           ,cast(null as dm_dbobj)    -- 2
+           ,cast(null as dm_dbobj)    -- 3
+           ,c_raise_exc_when_no_found -- 4
+           ,c_can_skip_order_clause   -- 5
+        )
+        -- 20.11.2020
+        -- If config parameter USE_ES is 2 then following line will be
+        -- replaced with uncommented code for run as ES/EDS.
+        -- Host and port will be taken from apropriate config parameters.
+        -- #SUBST#EXTPOOL#SUPPORT_1#BEG# WITH AUTONOMOUS TRANSACTION -- #SUBST#EXTPOOL#SUPPORT_1#END#
+        -- #SUBS#CONNSTR#BEG# on external '#host/#port:' || rdb$get_context('SYSTEM', 'DB_NAME') as user current_user password #pwd role current_role -- #SUBS#CONNSTR#END#
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_2#END# */
+
+
+        /* #ACTIVATE#IF#USE_ES_EQU_1#BEG#
+        execute statement (
+            'select --#EDS#TAG# ' || v_lf
+            || ' id_selected '
+            || 'from sp_get_random_id( ?, ?, ?, ?, ? )' -- 1..5
+        )
+        (
+            'v_cancel_payment_to_supplier' -- 1
+           ,cast(null as dm_dbobj)         -- 2
+           ,cast(null as dm_dbobj)         -- 3
+           ,c_raise_exc_when_no_found      -- 4
+           ,c_can_skip_order_clause        -- 5
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_1#END# */
+
+        -- #ACTIVATE#IF#USE_ES_EQU_0#BEG#
+        -- usual way (use_es = 0): use static PSQL code.
+        select id_selected
+        from sp_get_random_id(
+            'v_cancel_payment_to_supplier' -- a_view_for_search
+            ,null -- a_view_for_min_id ==> the same as a_view_for_search
+            ,null -- a_view_for_max_id ==> the same as a_view_for_search
+            ,:c_raise_exc_when_no_found
+            ,:c_can_skip_order_clause
+        )
+        into doc_list_id;
+        -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+    end
 
     -- Try to LOCK just selected doc, raise exc if can`t:
     execute procedure sp_lock_selected_doc( doc_list_id, 'v_cancel_payment_to_supplier', a_selected_doc_id);
@@ -3572,7 +4682,7 @@ end
 
 --------------------------------------------------------------------------------
 
-create or alter procedure tmp_aggregate_perf_data_autogen( a_ignore_stop_flag dm_sign = 0 )
+create or alter procedure tmp_aggregate_perf_log_autogen( a_ignore_stop_flag dm_sign = 0 )
 returns (
     msg dm_info
 ) as
@@ -3603,6 +4713,20 @@ as
     declare v_info dm_info;
     declare v_this dm_dbobj = 'srv_fill_mon';
 begin
+    -- Called from "main .sql" after business action completed: AGGREGATES mon counters
+    -- which were gathered in SP srv_fill_tmp_mon.
+    -- Also called from SP srv_log_mon_for_traced_units
+    -- |---------------------------------------------------------------------------------------------------------------|
+    -- |Purpose                                             |Source table            |Target table (with totalled data)|
+    -- |----------------------------------------------------|------------------------|---------------------------------|
+    -- |Get aggregated data with performance for UNITS      |tmp$mon_log             |mon_log                          |
+    -- |Get aggregated data with perf. for UNITS and TABLES |tmp$mon_log_table_stats |mon_log_table_stats              |
+    -- |---------------------------------------------------------------------------------------------------------------|
+
+    -- Usually this SP is called with a_rowset NOT null which leads to gather
+    -- data only for current attachment.
+    -- In rare cases (for debug ?) it can be called with a_rowset = null
+    -- which means gathering of data for all attachments.
     rows_added = -1;
 
     if ( fn_remote_process() NOT containing 'IBExpert'
@@ -3624,8 +4748,9 @@ begin
     execute procedure sp_add_perf_log(1, v_this);
 
     v_curr_trn = current_transaction;
-    if ( a_rowset is NULL  ) then -- gather data from ALL attachments (separate call of this SP)
+    if ( a_rowset is NULL  ) then
         begin
+            -- gather data from ALL attachments (separate call of this SP for developer/debug purpoces)
             in autonomous transaction do
             begin
                 insert into mon_log(
@@ -3672,82 +4797,64 @@ begin
                 )
                 -- 09.08.2014
                 select     
+                     v.sec
                     ----------------------- ALL attachments: set #1
-                    --current_time dts
-                    datediff(second from current_date-1 to current_timestamp ) sec
                     -- mon$attachments(1):
-                    ,a.mon$user mon_user
-                    ,a.mon$attachment_id attach_id
+                    ,v.mon_user
+                    ,v.attach_id
                     ----------------------- ALL attachments: set #2
                     -- mon$io_stats:
-                    ,i.mon$page_reads reads
-                    ,i.mon$page_writes writes     
-                    ,i.mon$page_fetches fetches     
-                    ,i.mon$page_marks marks     
+                    ,v.reads
+                    ,v.writes
+                    ,v.fetches
+                    ,v.marks
                     ----------------------- ALL attachments: set #3
                     -- mon$record_stats:     
-                    ,r.mon$record_inserts ins_cnt
-                    ,r.mon$record_updates upd_cnt     
-                    ,r.mon$record_deletes del_cnt     
-                    ,r.mon$record_backouts bk_outs     
-                    ,r.mon$record_purges purges     
-                    ,r.mon$record_expunges expunges     
-                    ,r.mon$record_seq_reads seq_reads     
-                    ,r.mon$record_idx_reads idx_reads     
+                    ,v.ins_cnt
+                    ,v.upd_cnt
+                    ,v.del_cnt
+                    ,v.bk_outs
+                    ,v.purges
+                    ,v.expunges
+                    ,v.seq_reads
+                    ,v.idx_reads
                     ----------------------- ALL attachments: set #4
-                    ,r.mon$record_rpt_reads
-                    ,r.mon$backversion_reads -- since rev. 60012, 28.08.2014 19:16
-                    ,r.mon$fragment_reads
+                     -- since rev. 60012, 28.08.2014 19:16
+                    ,v.rec_rpt_reads
+                    ,v.bkv_reads
+                    ,v.frg_reads
                     ----------------------- ALL attachments: set #5
-                    ,r.mon$record_locks
-                    ,r.mon$record_waits
-                    ,r.mon$record_conflicts
+                    ,v.rec_locks
+                    ,v.rec_waits
+                    ,v.rec_confl
                     ----------------------- ALL attachments: set #6
                     -- mon$memory_usage:
-                    ,u.mon$memory_used used_memory     
-                    ,u.mon$memory_allocated alloc_by_OS     
+                    ,v.used_memory
+                    ,v.alloc_by_os
                     ----------------------- ALL attachments: set #7
                     -- mon$attachments(2):
-                    ,a.mon$stat_id       stat_id
-                    ,a.mon$server_pid    server_PID     
-                    ,a.mon$remote_pid    remote_PID     
+                    ,v.stat_id
+                    ,v.server_pid
+                    ,v.remote_pid
+                    ,v.remote_ip
                     ----------------------- ALL attachments: set #8
-                    ,a.mon$remote_address remote_IP     
                     -- aux info:     
-                    ,right(a.mon$remote_process,30) remote_process     
+                    ,v.remote_process
                     ,:v_curr_trn
                     ,:v_this
                     ,'all_attaches'
-                from mon$attachments a     
-                --left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id     
-                left join mon$memory_usage u on a.mon$stat_id=u.mon$stat_id     
-                left join mon$io_stats i on a.mon$stat_id=i.mon$stat_id     
-                left join mon$record_stats r on a.mon$stat_id=r.mon$stat_id     
-                where     
-                  a.mon$attachment_id<>current_connection 
-                  order by 
-                  iif( a.mon$user in ('Garbage Collector', 'Cache Writer'  )
-                      ,1 
-                      , iif( a.mon$remote_process containing 'gfix'
-                            ,2 
-                            ,iif( a.mon$remote_process containing 'nbackup'
-                                  or a.mon$remote_process containing 'gbak'
-                                  or a.mon$remote_process containing 'gstat'
-                                 ,3 
-                                 ,1000+a.mon$attachment_id
-                                 )
-                            )
-                      )
+                    from v_srv_fill_mon v
+                    where     
+                        v.attach_id <> current_connection
                 ;
                 v_total_stat_added_rows = row_count;
-            end -- in AT
+            end -- in AUTONOMOUS transaction
         end
     else -- input arg :a_rowset is NOT null ==> gather data from tmp$mon_log (were added there in calls before and after application unit from tmp_random_run.sql)
         begin
             insert into mon_log(
                 ---------------- CURRENT attachment only: set #1
                 rowset,
-                --dts,
                 sec,
                 usr,
                 att_id,
@@ -3800,7 +4907,7 @@ begin
                 -------------------------------  set #1: dts, sec, usr, att_id
                  t.rowset
                 --,current_time
-                ,datediff(second from current_date-1 to current_timestamp )
+                ,max(t.sec) -- old: datediff(second from current_date-1 to current_timestamp )
                 ,current_user
                 ,current_connection
                 ,max( t.trn_id )
@@ -3975,6 +5082,17 @@ as
     declare v_table_stat_added_rows int;
     declare v_info dm_info;
 begin
+
+    -- Top-level SP for gathering data from monitor tables, is launched
+    -- BEFORE and AFTER each business action.
+    -- See calls in auto generated sql script !tmpdir!\sql\tmp_random_run.sql
+    -- NB: code of this SP not compatible with FB 2.5 because of new columns
+    -- in mon$record_versions. Do not move this code in oltp_common_sp.sql!
+    -- Example for debug (run all following statements and check tmp$mon_log):
+    -- select * from srv_fill_tmp_mon(1, 1, 'sp_client_order')
+    -- select * from tmp$mon_log
+    -- select * from srv_fill_tmp_mon(1, 1, 'sp_client_order')
+
     rows_added = -1;
 
     if ( fn_remote_process() NOT containing 'IBExpert'
@@ -3999,8 +5117,9 @@ begin
     v_curr_trn = iif( v_mult = 1, current_transaction, null);
 
     insert into tmp$mon_log( -- NB: on commit PRESERVE rows!
+        sec
         -- mon$io_stats:
-        pg_reads
+       ,pg_reads
        ,pg_writes
        ,pg_fetches
        ,pg_marks
@@ -4013,11 +5132,10 @@ begin
        ,rec_expunges
        ,rec_seq_reads
        ,rec_idx_reads
-
+        -- FB 3.x+, since rev. 60012, 28.08.2014 19:16
        ,rec_rpt_reads
-       ,bkv_reads -- mon$backversion_reads, since rev. 60012, 28.08.2014 19:16
+       ,bkv_reads
        ,frg_reads
-
        ,rec_locks
        ,rec_waits
        ,rec_confl
@@ -4035,47 +5153,44 @@ begin
        ,trn_id
     )
     select
+         v.sec
         -- mon$io_stats:
-         i.mon$page_reads
-        ,i.mon$page_writes
-        ,i.mon$page_fetches
-        ,i.mon$page_marks
+        ,v.reads
+        ,v.writes
+        ,v.fetches
+        ,v.marks
         -- mon$record_stats:     
-        ,r.mon$record_inserts
-        ,r.mon$record_updates
-        ,r.mon$record_deletes
-        ,r.mon$record_backouts
-        ,r.mon$record_purges
-        ,r.mon$record_expunges
-        ,r.mon$record_seq_reads
-        ,r.mon$record_idx_reads
-    
-        ,r.mon$record_rpt_reads
-        ,r.mon$backversion_reads -- since rev. 60012, 28.08.2014 19:16
-        ,r.mon$fragment_reads
-    
-        ,r.mon$record_locks
-        ,r.mon$record_waits
-        ,r.mon$record_conflicts
-        ------------------------
-        ,u.mon$memory_used
-        ,u.mon$memory_allocated
-        ,a.mon$stat_id
-        ,a.mon$server_pid
-        ------------------------
+        ,v.ins_cnt
+        ,v.upd_cnt
+        ,v.del_cnt
+        ,v.bk_outs
+        ,v.purges
+        ,v.expunges
+        ,v.seq_reads
+        ,v.idx_reads
+        -- FB 3.x+, since rev. 60012, 28.08.2014 19:16
+        ,v.rec_rpt_reads
+        ,v.bkv_reads
+        ,v.frg_reads
+        ,v.rec_locks
+        ,v.rec_waits
+        ,v.rec_confl
+        -- mon$memory_usage:
+        ,v.used_memory
+        ,v.alloc_by_os
+        -- mon$attachments:
+        ,v.stat_id
+        ,v.server_pid
+        -- add info:
         ,:a_rowset
         ,:a_unit
         ,:a_info
         ,:a_gdscode
         ,:v_mult
         ,:v_curr_trn
-    from mon$attachments a
-    --left join mon$statements s on a.mon$attachment_id = s.mon$attachment_id     
-    left join mon$memory_usage u on a.mon$stat_id=u.mon$stat_id     
-    left join mon$io_stats i on a.mon$stat_id=i.mon$stat_id     
-    left join mon$record_stats r on a.mon$stat_id=r.mon$stat_id     
-    where     
-      a.mon$attachment_id = current_connection;
+    from v_srv_fill_mon v
+    where
+        v.attach_id = current_connection;
 
     v_total_stat_added_rows = row_count;
 
@@ -4332,6 +5447,132 @@ end
 
 ^ -- report_stat_per_tables
 
+--/*
+create or alter procedure report_extpool_usage_chronology returns (
+    minute_since_test_start smallint
+    ,avg_pool_active int
+    ,avg_pool_idle int
+    ,attach_total_cnt bigint
+    ,reset_total_cnt bigint
+    ,detach_total_cnt bigint
+) as
+    declare v_resetting_support smallint;
+    declare v_con_pool_support smallint;
+begin
+    
+    select
+         min( iif(s.mcode = 'RESETTING_SUPPORT', s.svalue, null) )
+        ,min( iif(s.mcode = 'CONN_POOL_SUPPORT', s.svalue, null) )
+    from settings s
+    where s.mcode in ('RESETTING_SUPPORT', 'CONN_POOL_SUPPORT')
+    into v_resetting_support, v_con_pool_support;
+    
+    for
+        select
+            t.minute_since_test_start
+            ,t.avg_pool_active
+            ,t.avg_pool_idle
+
+            -- number of 'local' attaches from isql (NOT external ones which always are from 'firebird'):
+            ,g.evt_n_total_cnt
+
+            -- number of session resets which can occur only when FB instance supports RESETTING variable.
+            -- NOTE: ALTER SESSION RESET occurs every time when EDS attachment is finished and External Pool
+            -- is supported. In this case BOTH triggers fire before connection state is changed from active
+            -- to idle:: 1) on DISCONNECT and 2) on CONNECT.
+            -- NO triggers to be executed when this connection state is changed from idle to active.
+            -- Because of this, there is no sense to log trigger on DISCONNECT (event_type = 'I') and we have
+            -- to log only CONNECT-trigger (event_type='A').
+            -- Column perf_eds_agg.evt_I_total_cnt always contain 0, so we take in account another column:
+            -- perf_eds_agg.evt_A_total_cnt:
+            ,iif( :v_resetting_support = 1,  g.evt_a_total_cnt, 0 )
+
+            -- number of 'local' detaches (NOT ones external which were from 'firebird'):
+            ,g.evt_d_total_cnt
+        from (
+            select
+                t.minute_since_test_start
+                ,avg(t.pool_active) as avg_pool_active
+                ,avg(t.pool_idle) as avg_pool_idle
+            from v_perf_estimated t
+            where t.minute_since_test_start >= 0
+            group by 1
+        ) t
+        left join v_perf_eds_agg g on t.minute_since_test_start = g.minute_since_test_start
+        order by minute_since_test_start
+        into
+            minute_since_test_start
+            ,avg_pool_active
+            ,avg_pool_idle
+            ,attach_total_cnt
+            ,reset_total_cnt
+            ,detach_total_cnt
+    do
+        suspend;
+end
+^
+
+create or alter procedure report_extpool_lifetime(a_sample_size int = null) returns (
+     ext_connection_seq_no int
+    ,avg_idle_seconds numeric(12,3)
+    ,max_idle_seconds numeric(12,3)
+    ,max_life_seconds numeric(12,3)
+) as
+begin
+
+    -- Use data that accumulated v_perf_eds_life_agg, see SP tmp_aggregate_perf_eds_autogen.
+    -- Final report name: "External connections life activity, per attachments" (in .txt and .html)
+
+    -- NOTE: if ExtConnPoolLifeTime is too short then number of closed idle connections will be HUGE.
+    -- This leads to lot of unique ID values in perf_eds_split_NN and, after aggregation, in perf_eds_life_agg.
+    -- There is no sense to include all of them in this report because nobody can read such big table (and dense chart).
+    -- Because of this, it was decided to limit rows in the sample from v_perf_eds_life_agg:
+
+    a_sample_size = iif( a_sample_size is null or a_sample_size <= 1, 300, a_sample_size);
+
+    for
+        select
+             row_number()over()
+            ,avg_idle
+            ,max_idle
+            ,max_life
+        from
+        (
+            select
+                 a.att
+                ,a.avg_idle
+                ,a.max_idle
+                ,a.max_life
+            from (
+                select
+                     a.att as att
+                    ,cast( max(avg_idle_ms) / 1000.000 as numeric(12,3) ) as avg_idle
+                    ,cast( max(1.000 * max_idle_ms) / 1000.000 as numeric(12,3) ) as max_idle
+                    ,cast( 1.000 * max(datediff(millisecond from a.dts_born to a.dts_gone)) / 1000 as numeric(12,3) ) max_life
+                from v_perf_eds_life_agg a
+                where max_idle_ms > 0
+                group by 1
+            ) a
+            -- 16.12.2020: number of distinct 'att' values depends on frequency of session resets.
+            -- This value can be very large if ExtPoolLifeTime is too small.
+            -- For example, run of 15 ISQL for 10 minutes (with ExtPoolSize=15 and ExtPoolLifeTime=15)
+            -- can produce more than 5'000 resets.
+            -- We have to limit this output by reasonable quantity of rows:
+            order by a.att
+            rows (:a_sample_size+1)
+        )
+        into
+            ext_connection_seq_no
+            ,avg_idle_seconds
+            ,max_idle_seconds
+            ,max_life_seconds
+    do
+        suspend;
+
+end
+^ -- report_extpool_usage_chronology
+-- commit; select current_timestamp,count(distinct att) from V_PERF_EDS_LIFE_AGG;
+--*/
 
 set term ;^
 commit;
