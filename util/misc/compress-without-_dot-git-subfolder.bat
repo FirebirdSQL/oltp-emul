@@ -1,1 +1,1 @@
-7z u -mx9 -mfb273 -xr"!.*" -stl oltp-emul .
+7z u -mx9 -mfb273 -xr"!.*" -x"!.\oltp-emul.7z" -stl oltp-emul .

@@ -87,7 +87,8 @@ catch_err() {
         exit 1
     fi
   else
-	sho "Result: SUCCESS." $log4all
+    sho "Result: SUCCESS." $log4all
+    rm -f $tmperr
   fi
 }
 
@@ -190,8 +191,11 @@ log4all=$this_script_log
 
 sho "Intro $this_script_full_name. Current dir: $(pwd)"
 
+####################################################
+###    p a r s e     o l t p 4 0 _ c o n f i g   ###
+####################################################
 sho "Start parsing config $oltp40_config"
-awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=" > $this_script_tmp
+awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=" > $this_script_tmp
 
 while IFS='=' read lhs rhs
 do
@@ -227,8 +231,7 @@ done<$this_script_tmp
 
 sho "Finished parsing config $oltp40_config"
 
-#awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?="
-#awk '$1=$1' $oltp30_config | grep "^[^#]" | grep -i -E "mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?="
+############################################
 
 if [[ -z "FB4X_FBK" ]]; then
     sho "Parameter 'results_storage_fbk' must be defined in OLTP-EMUL config file '${oltp40_config}'"
@@ -245,9 +248,13 @@ else
     exit 1
 fi
 
-sho "Start parsing config $oltp40_config"
+####################################################
+###    p a r s e     o l t p 3 0 _ c o n f i g   ###
+####################################################
 
-awk '$1=$1' $oltp30_config | grep "^[^#]" | grep -i -E "mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=">$this_script_tmp
+sho "Start parsing config $oltp30_config"
+
+awk '$1=$1' $oltp30_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=">$this_script_tmp
 while IFS='=' read lhs rhs
 do
     if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
@@ -269,10 +276,9 @@ do
         fi
         echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
     fi
-####done < <( awk '$1=$1' $oltp30_config | grep "^[^#]" | grep -i -E "mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?="  )
 done<$this_script_tmp
 
-sho "Finished parsing config $oltp40_config"
+sho "Finished parsing config $oltp30_config"
 
 if [[ -z "FB3X_FBK" ]]; then
     sho "Parameter 'results_storage_fbk' must be defined in OLTP-EMUL config file '${oltp30_config}'"
@@ -429,6 +435,7 @@ else
         sho "Can not remove temporary database $DB_OVERALL_FILE"
         exit 1
     fi
+    
     # NB: do not use embedded access here otherwise DB file will be owned by root rather then firebird:
     echo "create database 'localhost:$DB_OVERALL_FILE' user '$DBA_USER' password '$DBA_PSWD'; alter database set linger to 0; commit; set list on; select * from mon\$database;" > $this_script_sql
 
@@ -461,8 +468,13 @@ for fbk_name in "${dbarr[@]}"
 do
     dbname_only=$(basename $fbk_name)
     dbname_only=${dbname_only%.*}
-    oltp_tmp_restored=$(dirname "${fbk_name}")/${dbname_only}.tmp.fdb
+    oltp_tmp_restored=$(dirname "${fbk_name}")/${dbname_only}.$RANDOM.tmp.fdb
 
+    if [[ ! -f $fbk_name ]]; then
+        sho "Backup file $fbk_name does not exist. Skip iteration."
+        continue
+    fi
+    
     run_cmd="$HEAD_FBC/gbak -rep $fbk_name localhost:${oltp_tmp_restored} $dbauth"
     display_intention "Attempt to restore previously saved results" "$run_cmd" "$this_script_log" "$this_script_err"
     eval "$run_cmd" 1>$this_script_tmp 2>$this_script_err
@@ -489,10 +501,15 @@ do
 
     run_cmd="$HEAD_FBC/isql -q $dbconn $dbauth -i $this_script_sql -ch utf8"
     display_intention "Gather results from $oltp_tmp_restored" "$run_cmd" "$this_script_log" "$this_script_err"
+
+
+    ################################################################################################################
+    ###   g a t h e r    r e s u l t s    f r o m    $ f b k _ n a m e    to   $ D B _ O V E R A L L _ F I L E   ###
+    ################################################################################################################
+    # call SP sp_gather_results, see it in oltp_overall_report_DDL.sql:
     eval "$run_cmd" 1>$this_script_tmp 2>$this_script_err
     catch_err $this_script_err "Probably source and target tables have mismatched DDL."
     rm -f $this_script_sql
-
 
     # trim all spaces:
     grep . $this_script_tmp | sed 's/ *$//g' >>$log4all
@@ -539,7 +556,6 @@ export MAIN_RPT_FILE=$MAIN_RPT_FILE
 
 run_cmd="${PYTHON_BINARY} $this_script_directory/${this_script_name_only}.py"
 display_intention "Launch Python and generate HTML reports" "$run_cmd" "$this_script_log" "$this_script_err"
-
 eval "$run_cmd" 2>$this_script_err
 catch_err $this_script_err "Check errors log."
 
@@ -553,6 +569,9 @@ fi
 ### b64 -> zip -> html ###
 ##########################
 
+broken_b64_cnt=0
+broken_zip_cnt=0
+
 b64list=$DETAILS_DIR/*.b64
 for b in $b64list
 do
@@ -560,8 +579,19 @@ do
     decoded_zip=$DETAILS_DIR/${decoded_zip%.*}
     run_cmd="base64 --decode $b >$decoded_zip"
     display_intention "Decode data from base64 to results of compression. File: $b" "$run_cmd" "$this_script_log" "$this_script_err"
+
+    ####################################################################################
+    ###  d e c o d e     f r o m     b a s e 6 4    to    .z i p / .7 z  / .z s t d  ###
+    ####################################################################################
     eval "$run_cmd" 1>$this_script_tmp 2>$this_script_err
-    catch_err $this_script_err "Check errors log."
+
+    catch_err $this_script_err "Check errors log." 0
+    if [[ -s "$tmperr" ]]; then
+        broken_b64_cnt=$((broken_b64_cnt+1))
+        sho "SKIP extraction because of problems with decoding from base64 format"
+        continue
+    fi
+    
     cat $this_script_tmp
     cat $this_script_tmp>>$log4all
     rm -f $b
@@ -572,26 +602,64 @@ do
 
     html_detl_name=$DETAILS_DIR/${unpacked_html}.html
 
+    if [[ $html_detl_name == *"crash"* ]]; then
+        # DO NOT delete this file, it is preliminary created HTML with heading info about crash
+        # We have to APPEND stack trace text to this file rather than to overwrite it.
+        echo "<pre>" >>$html_detl_name
+    else
+        rm -f $html_detl_name
+    fi
+
     if [[ "$compressed_ext" == "zip" ]]; then
-       extract_cmd="$DECOMPRESS_ZIP e -tzip -so $decoded_zip > $html_detl_name"
+       # ### ACHTUNG ###
+       # Value of $DECOMPRESS_ZIP must be always equal to $DECOMPRESS_7Z and is 7za utility.
+       # DO NOT use '-tzip' as command switch for 7za when extract files that were compressed
+       # by /usr/bin/gzip: this leads to "Open ERROR: Can not open the file as [zip] archive"
+       # Fortunately, 7-Zip can properly detect type of archieve without any hints (when extracts)
+       extract_cmd="$DECOMPRESS_ZIP e -so $decoded_zip >> $html_detl_name"
     elif [[ "$compressed_ext" == "7z" ]]; then
-       extract_cmd="$DECOMPRESS_7Z e -so $decoded_zip > $html_detl_name"
-    elif [[ "$compressed_ext" == "zstd" ]]; then
-       extract_cmd="$DECOMPRESS_ZST -d $decoded_zip -o $html_detl_name"
+       extract_cmd="$DECOMPRESS_7Z e -so $decoded_zip >> $html_detl_name"
+    elif [[ "$compressed_ext" == "zstd" || "$compressed_ext" == "zst"  ]]; then
+       extract_cmd="$DECOMPRESS_ZST -d $decoded_zip -c >> $html_detl_name"
     fi
     display_intention "Decompress html content" "$extract_cmd" "$this_script_log" "$this_script_err"
+    ###################################################################################
+    ###  d e c o m p r e s s    a n d    w r i t e    t o    . h t m l   f i l e    ###
+    ###################################################################################
     eval "$extract_cmd" 1>$this_script_tmp 2>$this_script_err
     if [[ $? -ne 0 ]]; then
+        broken_zip_cnt=$((broken_zip_cnt+1))
         sho "WARNING: could not extract data from $decoded_zip and/or save it to $html_detl_name"
         cat $this_script_err
+        cat $this_script_err>>$log4all
     else
         sho "Completed OK."
         rm -f $decoded_zip
     fi
-    cat $this_script_err>>$log4all
+
+    if [[ $html_detl_name == *"crash"* ]]; then
+	cat <<- EOF ->>$html_detl_name
+		</pre>
+		</body>
+		</html>
+	EOF
+    fi
+
     rm -f $this_script_tmp $this_script_err
 
 done
+
+if [[ $broken_b64_cnt -eq 0 ]]; then
+    sho "All files in base64 format have been decoded successfully."
+else
+    sho "### ACHTUNG ### Total files that could not be decoded from base-64: $broken_b64_cnt"
+fi
+
+if [[ $broken_zip_cnt -eq 0 ]]; then
+    sho "All decoded files have been decompressed successfully."
+else
+    sho "### ACHTUNG ### Total files that could not be decompressed: $broken_zip_cnt"
+fi
 
 #####################################################################
 ###   c o m p r e s s     a n d    u p l o a d      r e p o r t   ###

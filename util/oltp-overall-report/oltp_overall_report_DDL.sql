@@ -18,6 +18,8 @@ recreate table all_fb_perf_trace_pivot(id int);
 recreate table all_fb_perf_stat_per_units(id int);
 recreate table all_fb_perf_stat_per_tables(id int);
 recreate table all_fb_results_reports(id int);
+recreate table all_fb_crash_data(id int);
+recreate table all_fb_crash_list(id int);
 recreate table ddl_outcome(id int);
 commit;
 
@@ -311,10 +313,35 @@ recreate table all_fb_results_reports(
      id bigint              -- PK, column_2
     ,run_id bigint not null -- compound FK, column_1
     ,fb_build_no int        -- compound FK, column_2 ; PK, column_1
-    ,txt varchar(8190) character set utf8
-    ,zip2b64 varchar(80) 
+    ,txt varchar(80) -- result of converting HTML report to base64 without compression
+    ,zip2b64 varchar(80) -- compresse HTML report, converted to base64 (filled by SQL INSERT statements for each line of base64 text)
     ,constraint all_fb_results_reports_pk primary key(fb_build_no, id)
     ,constraint all_fb_results_reports_fk foreign key(run_id, fb_build_no) references all_fb_overall on delete cascade
+);
+
+recreate table all_fb_crash_list(
+    id bigint not null -- PK, column_2
+    ,run_id bigint not null  -- compound FK, column_1
+    ,fb_build_no int        -- compound FK, column_2 ; PK, column_1
+    ,dumpname varchar(255)
+    ,dumpsize bigint
+    ,dumptime timestamp
+    ,crashed_binary varchar(255) -- name of binary that crashed: '/opt/fb40/bin/firebird' etc
+    ,stack_trace_validation_result varchar(255) -- additional info about problems with gathering stack-trace (missed/invalid .debug package; truncated dump etc)
+    ,stack_trace_size bigint
+    ,constraint all_fb_crash_list_pk primary key(fb_build_no, id)
+    ,constraint all_fb_crash_list_fk foreign key(run_id, fb_build_no) references all_fb_overall on delete cascade
+);
+
+recreate table all_fb_crash_data(
+    id bigint not null -- PK, column_2
+    ,run_id bigint not null  -- compound FK, column_1
+    ,fb_build_no int        -- compound FK, column_1 ; PK, column_1
+    ,crash_id bigint not null -- compound FK, column_2: references to all_fb_crash_list(.fb_build_no,.id)
+    ,txt2b64 varchar(80) -- result of converting stack trace to base 64, without compression
+    ,zip2b64 varchar(80) -- compressed stack trace, converted to base64 (filled by SQL INSERT statements for each line of base64 text)
+    ,constraint all_fb_crash_data_pk primary key(fb_build_no, id)
+    ,constraint all_fb_crash_data_fk foreign key(fb_build_no, crash_id) references all_fb_crash_list on delete cascade
 );
 
 commit;
@@ -441,6 +468,16 @@ as
     ------------------------------------------------------
     declare txt type of column all_fb_results_reports.txt;
     declare zip2b64 type of column all_fb_results_reports.zip2b64; -- 28.06.2020
+    ------------------------------------------------------
+    declare dumpname type of column all_fb_crash_list.dumpname;
+    declare dumpsize type of column all_fb_crash_list.dumpsize;
+    declare dumptime type of column all_fb_crash_list.dumptime;
+    declare crashed_binary type of column all_fb_crash_list.crashed_binary;
+    declare stack_trace_validation_result type of column all_fb_crash_list.stack_trace_validation_result;
+    declare stack_trace_size type of column all_fb_crash_list.stack_trace_size;
+    declare crash_id type of column all_fb_crash_data.crash_id;
+    declare txt2b64 type of column all_fb_crash_data.txt2b64;
+    ------------------------------------------------------
     declare v_last_gathered_run_id bigint;
     declare v_rows_changed int;
 begin
@@ -1020,6 +1057,108 @@ begin
         end -- "child: results_reports ==> child: all_fb_results_reports"
         msg = cast('now' as timestamp) || '. Completed merge ' || v_rows_changed || ' rows into child table ALL_FB_RESULTS_REPORTS for run_id=' || run_id; suspend;
 
+        -- ############################## child: results_crash_list ==> child: all_fb_crash_list #################
+        -- Obtain records from table 'results_crash_list' with run_id = :run_id.
+        -- NB: primary key of child table is COMPOUND: (build_no, id). It is necessary because ID column can have the same value
+        -- in different databases.
+        v_rows_changed = 0;
+        for
+        execute statement
+            (
+              'select
+            	    id
+		    ,dumpname
+		    ,dumpsize
+		    ,dumptime
+		    ,crashed_binary
+		    ,stack_trace_validation_result
+		    ,stack_trace_size
+                from results_crash_list e
+                where e.run_id = ?
+              '
+            ) 
+            ( :run_id ) 
+        on external ( eds_dsn ) as user eds_usr password eds_pwd
+        into 
+             id
+	    ,dumpname
+	    ,dumpsize
+	    ,dumptime
+	    ,crashed_binary
+	    ,stack_trace_validation_result
+	    ,stack_trace_size
+        do begin
+            update or insert into all_fb_crash_list(
+                 id
+                ,run_id     
+                ,fb_build_no
+		,dumpname
+		,dumpsize
+		,dumptime
+		,crashed_binary
+		,stack_trace_validation_result
+		,stack_trace_size
+            ) values (
+                 :id           -------------- PK part2
+                ,:run_id       -------------- FK part1, defined in query to results_overall
+                ,:fb_build_no  -------------- FK part2, defined in query to results_overall ; PK part1
+		,:dumpname
+		,:dumpsize
+		,:dumptime
+		,:crashed_binary
+		,:stack_trace_validation_result
+		,:stack_trace_size
+            ) matching (fb_build_no, id)
+            ;
+            v_rows_changed = v_rows_changed + 1;
+        end -- "child: results_crash_list ==> child: all_fb_crash_list"
+        msg = cast('now' as timestamp) || '. Completed merge ' || v_rows_changed || ' rows into child table ALL_FB_CRASH_LIST for run_id=' || run_id; suspend;
+
+
+        -- ############################## child: results_crash_data ==> child: all_fb_crash_data #################
+        -- Obtain records from table 'results_crash_data' with run_id = :run_id.
+        -- NB: primary key of child table is COMPOUND: (build_no, id). It is necessary because ID column can have the same value
+        -- in different databases.
+        v_rows_changed = 0;
+        for
+        execute statement
+            (
+              'select
+            	    id
+            	    ,crash_id
+            	    ,txt2b64
+            	    ,zip2b64
+                from results_crash_data e
+                where e.run_id = ?
+              '
+            ) 
+            ( :run_id ) 
+        on external ( eds_dsn ) as user eds_usr password eds_pwd
+        into 
+             id
+             ,crash_id
+             ,txt2b64
+             ,zip2b64
+        do begin
+            update or insert into all_fb_crash_data(
+                 id
+                ,run_id
+                ,fb_build_no
+                ,crash_id
+                ,txt2b64
+                ,zip2b64
+            ) values (
+                 :id           -------------- PK part2
+                ,:run_id       -------------- FK part1, defined in query to results_overall
+                ,:fb_build_no  -------------- FK part2, defined in query to results_overall ; PK part1
+                ,:crash_id
+		,:txt2b64
+		,:zip2b64
+            ) matching (fb_build_no, id)
+            ;
+            v_rows_changed = v_rows_changed + 1;
+        end -- "child: results_crash_data ==> child: all_fb_crash_data"
+        msg = cast('now' as timestamp) || '. Completed merge ' || v_rows_changed || ' rows into child table ALL_FB_CRASH_DATA for run_id=' || run_id; suspend;
 
     end -- loop "main: results_overall ==> main: all_fb_overall"
 
@@ -1079,7 +1218,10 @@ begin
                 ,o.fb_engine
                  || '.' || cast(o.fb_build_no as varchar(10)) fb3x_vers
                 ,o.perf_score fb3x_perf_score
-                ,o.test_finish_state fb3x_outcome
+                ,coalesce(  o.test_finish_state
+                           ,nullif((select count(*) from all_fb_crash_list k where k.run_id = o.run_id and k.fb_build_no = o.fb_build_no),0 ) || ' crash(es) detected'
+                         )
+                 as fb3x_outcome
                 ,o.report_compress_cmd fb3x_compress_cmd
                 ,coalesce( max(c.memo_used_all), 0) fb3x_used_all
                 ,coalesce( max(c.memo_used_by_attachments), 0) fb3x_used_by_att
@@ -1108,7 +1250,11 @@ begin
                 ,o.fb_engine
                  || '.' || cast(o.fb_build_no as varchar(10)) fb4x_vers
                 ,o.perf_score fb4x_perf_score
-                ,o.test_finish_state fb4x_outcome
+                --,o.test_finish_state fb4x_outcome
+                ,coalesce(  o.test_finish_state
+                           ,nullif((select count(*) from all_fb_crash_list k where k.run_id = o.run_id and k.fb_build_no = o.fb_build_no),0 ) || ' crash(es) detected'
+                         )
+                 as fb4x_outcome
                 ,o.report_compress_cmd fb4x_compress_cmd
                 ,coalesce( max(c.memo_used_all), 0) fb4x_used_all
                 ,coalesce( max(c.memo_used_by_attachments), 0) fb4x_used_by_att

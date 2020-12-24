@@ -14,7 +14,8 @@
 # Values of <usr> and <pwd> will be used here for create/open database
 # with overall results using client library from <fbc> folder.
 # Database from <results_storage_fbk> will be restored for gathering
-# results of runs on FB 4.x, see below parameter 'DB_OVERALL_FILE'
+# results of runs on FB 4.x, see variable 'DB_OVERALL_FILE'
+# in oltp_overall_report batch scenario
 #
 oltp40_config=../../src/oltp40_config.nix
 

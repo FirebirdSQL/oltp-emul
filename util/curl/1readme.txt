@@ -6,5 +6,5 @@ for two purposes:
 1) download fresh FB snapshot from official site;
 2) send e-mail with compressed snapshot for possible quick access to it later.
 
-Extraction from .zip files will be done by %systemroot%\system32\cscript utility
-(temporary .vbs script will be generated and applied every time).
+You do not have to install any package to decompress from .zip: extraction will be done
+by %systemroot%\system32\cscript utility (by generating temporary .vbs script).

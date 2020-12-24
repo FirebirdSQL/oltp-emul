@@ -12,7 +12,7 @@ from collections import defaultdict
 import difflib
 import html
 import locale
-
+import base64
 # yum -y install python-pip
 # pip install --upgrade pip
 # pip install fdb
@@ -115,32 +115,45 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
 
     run_id = str(rec[ fb_prefix+'run_id'])
     build_no = rec[ fb_prefix+'vers'].split('.')[-1]
+    decode_from_b64 = False
 
     if not rec[ fb_prefix + 'compress_cmd']:
+        # This text was converted to base-64 format WITHOUT compression
+        # (e.g. on POSIX when test config parameter 'report_compressor' is commented out)
+        # Now we have to decode it to be readable view and store directly to .html
         detl_ext = '.html'
+        decode_from_b64 = True
     else:
         
         #print("rec[ fb_prefix+'compress_cmd' ]=",rec[ fb_prefix+'compress_cmd' ])
 
         if '/' in rec[ fb_prefix+'compress_cmd' ]:
-            # /usr/bin/zip ; /usr/bin/7za ; /usr/bin/zstd
+            # Test ran on Linux, report was compressed by one of folowing:
+            # /usr/bin/gzip ;  /usr/bin/7za ; /usr/bin/zstd ; /usr/bin/zip
             compress_base = rec[ fb_prefix+'compress_cmd'].split('/')[-1].lower()
         else:
-            # c:\...\7z.exe ; c:\...\zstd.exe etc
+            # Test ran on Windows, report was compressed by one of folowing:
+            # c:\...\7z.exe ; c:\...\zstd.exe ; cscript <vbs_for_ZIP>
             compress_base = os.path.splitext(rec[ fb_prefix+'compress_cmd'].split('\\')[-1])[0].lower()
         
-        #print('compress_base=',compress_base)
 
-        if compress_base in ('7z', '7za'):
+        if compress_base in ('7z', '7za', 'gzip'):
+            # NB: 'gzip' not present as standalone utility for Windows.
+            # 7-Zip can extract from compressed file created by gzip even if extenstion
+            # of such (compressed) file was changed to .7z
+            # (warning will be issued in this case but extraction will be completed OK).
             detl_ext = '.7z'
-        elif compress_base == 'zst':
+        elif compress_base in ('zstd', 'zst'):
+            # !!NB!! compressor 'zstd' expected extension of file '.zst', NOT '.zstd' !
             detl_ext = '.zst'
         else:
             detl_ext = '.zip'
 
+	# NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
+	# for all files that have this extension and run decoding of them to readable text!
         detl_ext += '.b64'
-        #print('detl_ext=',detl_ext)
-        #print('')
+
+        print('run_id=',run_id,', build_no=',build_no,'; compress_cmd=',rec[ fb_prefix+'compress_cmd' ],'; compress_base=',compress_base,'; detl_ext=',detl_ext)
 
   
     # Extract report for this OLTP-EMUL run and store in html_path
@@ -157,14 +170,33 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
         detl_file = os.path.join(html_path, file_pref + detl_ext )
         html_file = os.path.join(html_path, file_pref + '.html')
 
-        if not rec[ fb_prefix+'compress_cmd']:
-            # field fbNN_compress_cmd is NULL --> output raw text from 'txt' field directly to .html-file
+        if decode_from_b64: # not rec[ fb_prefix+'compress_cmd']:
+            # field fbNN_compress_cmd is NULL --> we have to decode text in base-64 format
+            # that was previously encoded in 'oltp_isql_run_worker' batch scenario for POSIX:
+            # while read line; do
+			#     echo "insert into results_reports(run_id, txt) values(${v_run_id}, '${line}');">>$psql
+		    # done < <( cat $htm_with_params_in_name | base64 )
+		    # ::: NB::: On Windows this can not occur because any text is compressed even when parameter
+		    # 'compress_cmd' is commented out: batch oltp_isql_run_worker.bat creates temporary .vbs script
+		    # and uses built-in ability to compress text/html to .zip format.
+
+            # Do this from 'txt' field directly to .html-file:
             f = codecs.open( detl_file, 'w', encoding='utf-8')
             for t in [ t for t in detl_rows if t['TXT'] ]:
-                f.write( t['TXT'] + '\n' )
+                f.write( base64.b64decode( t['TXT'] ).decode("utf-8") )
             f.close()
         else:
-            # field fbNN_compress_cmd is NOT null --> output base64 data from 'zip2b64' field, then decode + decompress it to html
+            # field fbNN_compress_cmd is NOT null --> output base64 data from 'zip2b64' field.
+            # Decoding it to binary (.zip/.7z/.zst) and decompressing to html will be done 
+            # by batch scenario AFTER this .py script completed.
+            # ::: NB :::
+            #####################################################################################
+            # detl_file must have extension = '.b64' because batch scenario after this .py script
+            # (oltp_overall_report.bat / oltp_overall_report.sh ) will search all files with this mask
+            # for decoding them to apropriate target:
+            # Windows: for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do ...
+            # POSIX:   b64list=$DETAILS_DIR/*.b64 ; for b in $b64list do ...
+            #####################################################################################
             f = codecs.open( detl_file, 'w')
             for t in [t for t in detl_rows if  t['ZIP2B64'] ]:
                 f.write( t['ZIP2B64'] + '\n' )
@@ -176,7 +208,133 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
 
 # end of extract_detailed_report
 
+#--------------------------
+
+# 19.12.2020
+def extract_stack_traces( con, rec, fb_prefix, html_path ):
+    # fb_prefix = 'fb3x_', 'fb4x_'
+
+    run_id = str(rec[ fb_prefix+'run_id'])
+    build_no = rec[ fb_prefix+'vers'].split('.')[-1]
+
+    if not rec[ fb_prefix + 'compress_cmd']:
+        # NB: stack trace text was preliminary converted to base64 format.
+        # we have decode it (here), output file will be readable
+        detl_ext = '.b64'
+    else:
+        # stack trace was preliminary compressed and cthen converted to base64 format.
+        #print("rec[ fb_prefix+'compress_cmd' ]=",rec[ fb_prefix+'compress_cmd' ])
+
+        if '/' in rec[ fb_prefix+'compress_cmd' ]:
+            # /usr/bin/zip ; /usr/bin/7za ; /usr/bin/zst
+            compress_base = rec[ fb_prefix+'compress_cmd' ].split('/')[-1].lower()
+        else:
+            # c:\...\7z.exe ; c:\...\zstd.exe etc
+            compress_base = os.path.splitext(rec[ fb_prefix+'compress_cmd' ].split('\\')[-1])[0].lower()
+        
+        #print('compress_base=',compress_base)
+
+        if compress_base in ('7z', '7za'):
+            detl_ext = '.7z'
+        elif compress_base in( 'zstd', 'zst'):
+            detl_ext = '.zst'
+        else:
+            detl_ext = '.zip'
+
+	# NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
+	# for all files that have this extension and run decoding of them to readable text!
+        detl_ext += '.b64'
+  
+    # Extract 'heading info' about all crashes occured durint this OLTP-EMUL run
+    ########################
+    c_crash_list = con.cursor()
+    c_crash_list_sql='''
+      select id,dumpname,dumpsize,dumptime,crashed_binary,stack_trace_validation_result,stack_trace_size
+      from all_fb_crash_list
+      where fb_build_no = ? and run_id = ?
+    '''
+    c_crash_list.execute( c_crash_list_sql, (build_no, run_id,) )
+    crashes_list = c_crash_list.fetchallmap()
+    c_crash_list.close()
+    
+    #c_report = con.cursor()
+    #c_report.execute( 'select txt, zip2b64 from sp_show_report_data( ?, ?)', (build_no, run_id, ) )
+    #detl_rows=c_report.fetchallmap()
+    #c_report.close()
+
+    # Output arg: list of .b64 files, for each record of all_fb_crash_list
+    htm_crashes_info_list = []
+    b64_stack_traces_list = []
+    
+    for crash_rec in crashes_list:
+        file_pref = '_'.join( ('oltp-crash-build',build_no, 'run', run_id, 'id', str(crash_rec['ID']) ) )
+        dumpname=crash_rec['DUMPNAME']
+        dumpsize=crash_rec['DUMPSIZE']
+        dumptime=crash_rec['DUMPTIME']
+        crashed_binary=crash_rec['crashed_binary'.upper()]
+        stack_trace_validation_result=crash_rec['stack_trace_validation_result'.upper()]
+        stack_trace_size=crash_rec['stack_trace_size'.upper()]
+
+        # oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
+        html_file = os.path.join(html_path, file_pref + '.' + dumptime.strftime("%Y%m%d_%H%M%S.%f")[:19] + '.html')
+        # oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.zip.b64
+        detl_file = os.path.join(html_path, file_pref + '.' + dumptime.strftime("%Y%m%d_%H%M%S.%f")[:19] + detl_ext )
+
+        htm_crashes_info_list.append( html_file )
+        b64_stack_traces_list.append( detl_file )
+
+        f_heading_info = codecs.open( html_file, 'w', encoding='utf-8')
+        
+        html_text='''\
+        <html>
+        <head>
+        <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+        <meta http-equiv="cache-control" content="no-cache">
+        <meta http-equiv="pragma" content="no-cache">
+        </head>
+        <body>
+        Dump file:
+        <li>Name: %(dumpname)s</li>
+        <li>Size: %(dumpsize)s</li>
+        <li>Time: %(dumptime)s</li>
+        Crashed binary: %(crashed_binary)s
+        Stack trace:
+        <li>Validation result: %(stack_trace_validation_result)s</li>
+        <li>Size: %(stack_trace_size)s</li>
+        <p>
+        <!-- </body> -->
+        <!-- </html> -->
+        ''' % locals()
+        f_heading_info.write(
+            #base64.b64encode( bytes(htm2b64, 'utf-8') )
+            html_text
+            #os.linesep.join( html_text.split() )
+        )
+        f_heading_info.close()
+
+        # Obtain stack trace data: it is in base64 format and represent compressed text (.7z/.zst/.zip)
+        # This data are store in the file with extension '.b64':
+        f_stack_trace = codecs.open( detl_file, 'w')
+        c_crash_data = con.cursor()
+        c_crash_data_sql='select txt2b64, zip2b64 from all_fb_crash_data where fb_build_no = ? and run_id = ?'
+        c_crash_data.execute( c_crash_data_sql, (build_no, run_id,) )
+        crashes_data = c_crash_data.fetchallmap()
+        c_crash_data.close()
+        for stack_trace_rec in crashes_data:
+            if not rec[ fb_prefix+'compress_cmd' ]:
+                f_stack_trace.write( stack_trace_rec['TXT2B64']+'\n' )
+            else:
+                f_stack_trace.write( stack_trace_rec['ZIP2B64']+'\n' )
+        f_stack_trace.close()
+    
+    # Return LIST of .html files which will be later completer with stack trace data.
+    # A new file is created or each FB crash.
+    #return (htm_crashes_info_list, b64_stack_traces_list)
+    return htm_crashes_info_list
+# end of extract_stack_traces
+
 #------------------------------------
+
 def write_chart_script_beg( main_html_file, attrib_map ):
 
     divName = attrib_map['divName'] # mandatory: perf_memo_used_all_div etc
@@ -673,16 +831,24 @@ for r in data_in_descending_order:
     fb3x_run_id, fb3x_build_no, fb4x_run_id,fb4x_build_no = None,None, None,None
     fb3x_detl_file, fb4x_detl_file = None, None
     fb3x_detl_rows, fb4x_detl_rows = {}, {}
+    fb3x_stack_traces_list, fb4x_stack_traces_list = [], []
     if r['fb3x_vers']:
-
         # Extract report for this OLTP-EMUL run and store in DETLPATH
         fb3x_html_file = extract_detailed_report( con, r, 'fb3x_', DETLPATH )
 
-    if r['fb4x_vers']:
+        # Extract stack traces for crashes that occured during this run:
+        fb3x_stack_traces_list = extract_stack_traces( con, r, 'fb3x_', DETLPATH )
 
+    if r['fb4x_vers']:
         # Extract report for this OLTP-EMUL run and store in DETLPATH
         fb4x_html_file = extract_detailed_report( con, r, 'fb4x_', DETLPATH )
 
+        # Extract stack traces for crashes that occured during this run:
+        fb4x_stack_traces_list = extract_stack_traces( con, r, 'fb4x_', DETLPATH )
+
+    #print('fb3x_stack_traces_list=',fb3x_stack_traces_list)
+    #print('fb4x_stack_traces_list=',fb4x_stack_traces_list)
+    
     col_idx=-1
     for f in r:
         v_style=''
@@ -731,6 +897,32 @@ for r in data_in_descending_order:
                 v = v.lower()
                 if 'crash' in v:
                     c_list += ' fbx_outcome_crash'
+                    # 19.12.2020: extract stack-traces (which were gathered during test finish
+                    # for every dumps occured within time interval from test lunch to finish)
+                    # to separate .html files and provide links to it.
+                    stack_trace_html_files = []
+                    if f.lower().startswith('fb3x'): # r['fb3x_vers']:
+                        stack_trace_html_files = fb3x_stack_traces_list
+                    elif f.lower().startswith('fb4x'): # r['fb4x_vers']:
+                        stack_trace_html_files = fb4x_stack_traces_list
+
+                    for s in stack_trace_html_files:
+                        # Get name of file, extract from it part that points to timestamp of dump (in YYYYmmDD_HHMMSS.zzz form)
+                        # and provide URL to this stack trace:
+                        
+                        # Extract name of full path+file:
+                        # /var/tmp/oltp_overall_report/details/oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
+                        # ==> oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
+                        stk_file_name = os.path.split( s )[1]
+                        # Get timestamp of dump by extracting last 3 tokens and take first two of them:
+                        #  oltp-cras***.20201219_094111.649.html ==> ['20201219_094111', '649'] ==> '20201219_094111.649'
+                        dump_time_str = '.'.join( stk_file_name.split('.')[-3::][:2] )
+                        dump_time_obj = datetime.datetime.strptime( dump_time_str, '%Y%m%d_%H%M%S.%f' )
+                        # Convert to format dd.mm.YYYY HH:MM:SS.zzz
+                        dump_time_url = dump_time_obj.strftime('%d.%m.%Y %H:%M:%S.%f')[:23]
+                        
+                        v += '\n<li><a style="text-decoration:none" href="' + DETLPREF + '/' + stk_file_name + '" target="_blank">' + dump_time_url +'</a></li>'
+                    
                 elif 'abnormal' in v:
                     c_list += ' fbx_outcome_abend'
                 elif 'premature' in v:

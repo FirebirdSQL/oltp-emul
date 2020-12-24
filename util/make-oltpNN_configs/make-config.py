@@ -1,5 +1,6 @@
 import os
 import sys
+import msvcrt
 import re
 
 whoami = os.path.realpath(sys.argv[0])
@@ -8,14 +9,15 @@ for os_name in ('win', 'nix'):
 
     for fb in ('25', '30', '40'):
 
-        os_suffix = '_'+os_name  # '_nix' if sys.platform.startswith('linux') or sys.platform.startswith('freebsd') else '_win'
+        os_suffix = '_'+os_name
+
         fb_suffix = '_'+fb+'x'
 
         cfgname='oltp' + fb + '_config.' + os_suffix[1:]
 
         if os.path.isfile( cfgname ):
             fc = open( os.path.join( os.path.split(whoami)[0], cfgname ), 'r' )
-            cfgvalues = [ c.strip() for c in fc.readlines() if c.strip() and c.strip()[0]<>'#' ]
+            cfgvalues = [ c.strip() for c in fc.readlines() if c.strip() and c.strip()[0] != '#' ]
             fc.close()
         else:
             cfgvalues = []
@@ -26,11 +28,16 @@ for os_name in ('win', 'nix'):
         fn.close()
 
         # ['intro00', 'intro01', 'fbc', 'dbnm', ...,  'gather_hardware_info', 'intro08', 'use_mtee', 'is_embed']
-        p_order = [ p for p in all_comments if p.startswith('params_order') ][0].strip().split(':')[1].split(';')
-
+        p_order = [ p[1:].strip() for p in all_comments if p.lstrip().startswith('#') ]
+        #print(p_order)
 
         # fo = open( '.'.join( ( os.path.splitext(whoami)[0], fb, 'tmp' ) ), 'w' )
         fo = open(  os.path.join( os.path.split(whoami)[0],  'oltp' + fb + '_config.' + os_name + '.tmp' ), 'w' )
+
+        if os_name == 'nix':
+            msvcrt.setmode(fo.fileno(), os.O_BINARY)
+        else:
+            msvcrt.setmode(fo.fileno(), os.O_TEXT)
 
         indent = 0
         for p_name in p_order:
@@ -41,10 +48,14 @@ for os_name in ('win', 'nix'):
             p_comments = [ x for x in all_comments if x.split(':')[0] in ( prefix_for_comments ) ]
             p_defaults = [ x for x in all_comments if x.split(':')[0] in ( prefix_for_defaults ) ]
 
-            DBGNAME =  '' # 'results_storage_fbk'
+            DBGNAME = '' # 'separate_workers'
             if p_name == DBGNAME:
                 print('prefix_for_defaults = ',prefix_for_defaults)
+                print('prefix_for_comments = ',prefix_for_comments)
                 print('p_defaults=',p_defaults)
+                print('p_comments:')
+                for p in p_comments:
+                    print(' '*4, p.rstrip())
 
             c_text = ''
             for c in p_comments:
@@ -93,7 +104,7 @@ for os_name in ('win', 'nix'):
 
             if p_name == DBGNAME:
                 print('default p_value=',p_default)
-                exit(1)
+                #exit(1)
 
             #print('>'+p_name+'<',':::',prefix_for_comments)
 

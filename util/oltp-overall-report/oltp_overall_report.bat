@@ -80,7 +80,11 @@ set htmfile=!LOGDIR!\%~n0.tmp.html
 
 del !joblog! 2>nul
 
-for /f "tokens=1-2 delims== " %%a in ('findstr /r /v /c:"#" !oltp40_config! ^| findstr /i /c:"=" ^| findstr /i /r /c:"usr[ ]*=" /c:"pwd[ ]*=" /c:"fbc[ ]*=" /c:"mon_unit_perf[ ]*=" /c:"results_storage_fbk[ ]*="') do (
+@rem ####################################################
+@rem ###    p a r s e     o l t p 4 0 _ c o n f i g   ###
+@rem ####################################################
+
+for /f "tokens=1-2 delims== " %%a in ('findstr /r /v /c:"#" !oltp40_config! ^| findstr /i /c:"=" ^| findstr /i /r /c:"tmpdir[ ]*=" /c:"dbnm[ ]*=" /c:"usr[ ]*=" /c:"pwd[ ]*=" /c:"fbc[ ]*=" /c:"mon_unit_perf[ ]*=" /c:"results_storage_fbk[ ]*="') do (
     if /i "%%a" == "usr" (
         set DBA_USER=%%b
     )
@@ -109,7 +113,11 @@ if "!FB4x_FBK!"=="" (
     goto final
 )
 
-for /f "tokens=1-2 delims== " %%a in ('findstr /r /v /c:"#" !oltp30_config! ^| findstr /i /c:"=" ^| findstr /i /r /c:"mon_unit_perf[ ]*=" /c:"results_storage_fbk[ ]*="') do (
+@rem ####################################################
+@rem ###    p a r s e     o l t p 3 0 _ c o n f i g   ###
+@rem ####################################################
+
+for /f "tokens=1-2 delims== " %%a in ('findstr /r /v /c:"#" !oltp30_config! ^| findstr /i /c:"=" ^| findstr /i /r /c:"dbnm[ ]*="  /c:"mon_unit_perf[ ]*=" /c:"results_storage_fbk[ ]*="') do (
     if /i "%%a" == "mon_unit_perf" (
         set o30_mon_perf=%%b
     )
@@ -138,7 +146,7 @@ for /f %%a in ("!FB4x_FBK!") do (
 
 for /d %%f in (!FB4x_FBK!,!FB3x_FBK!) do (
     if not exist %%f (
-        call :sho "File %%f not exists. Run OLTP-EMUL at leat one time for this file be created with results of run." !joblog!
+        call :sho "File %%f not exists. Run OLTP-EMUL at least one time for this file be created with results of run." !joblog!
         goto final
     )
 )
@@ -499,8 +507,12 @@ set PYTHON_CALLER_JOBLOG=!joblog!
 !PYTHON_HOME!\python %~dpn0.py 2>!tmperr!
 call :catch_err run_cmd !joblog! !tmperr! !tmplog!
 
+set /a broken_b64_cnt=0
+set /a broken_zip_cnt=0
+
 for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do (
     for /f %%b in ("!DETAILS_DIR!\%%a") do (
+
         set decoded_zip=!DETAILS_DIR!\%%~nb
         set run_cmd=certutil -decode !DETAILS_DIR!\%%a !decoded_zip!
 
@@ -509,51 +521,145 @@ for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do (
         if exist !decoded_zip! (
             call :sho "WARNING: could not drop file !decoded_zip! from disk. Perhaps it is opened by another process." !joblog!
         ) else (
-            @rem decode from b64 with assigning required extension: .7z, .zst, .zip:
-            cmd /c !run_cmd! 1>!tmplog! 2>!tmperr!
-            call :catch_err run_cmd !joblog! !tmperr! !tmplog!
-            del !tmplog!
-            del !DETAILS_DIR!\%%a
-        )
+            @rem Now we decode from b64 with assigning required extension: .7z, .zst, .zip.
+            @rem ::: NB ::: certutil redirects errors to STDOUT! We have to check output for strings
+            @rem with word 'FAILED:' or ' ERROR_', e.g.:
+            @rem DecodeFile returned The data is invalid. 0x8007000d (WIN32: 13 ERROR_INVALID_DATA)
+            @rem CertUtil: -decode command FAILED: 0x8007000d (WIN32: 13 ERROR_INVALID_DATA)
+            @rem CertUtil: The data is invalid.
 
-        set extract_cmd=UNKNOWN
-        for /f %%c in ("!decoded_zip!") do (
-            set html_detl_name=!DETAILS_DIR!\%%~nc.html
-            set compressed_ext=%%~xc
+            cmd /c !run_cmd! 1>!tmperr! 2>&1
+            findstr /m /i /c:" FAILED:" /c:" ERROR_" !tmperr! 1>nul
+            if NOT errorlevel 1 (
 
-            if /i "!compressed_ext!"==".zip" (
-                set extract_cmd="!DECOMPRESS_7Z! e -tzip -so !decoded_zip! ^> !html_detl_name!"
-            ) else if /i "!compressed_ext!"==".7z" (
-                set extract_cmd="!decompress_7z! e -so !decoded_zip! ^> !html_detl_name!"
+                @rem     set run_cmd=!%1!
+                @rem     set main_log=%2
+                @rem     set err_file=%3
+                @rem     set tmp_file=%4
+                @rem     set addi_call=%5
+                @rem     set do_abend=%6
+
+                call :catch_err run_cmd !joblog! !tmperr! !tmplog! n/a 0
+                @rem                1       2       3        4      5  6
             ) else (
-                set extract_cmd="!decompress_zst! -d !decoded_zip! -o !html_detl_name!"
+                del !tmperr!
             )
 
-            call :sho "Decompress html content, command:" !joblog!
-            @rem echo compressed_ext=!compressed_ext!, check cmd: !extract_cmd!
-            echo !extract_cmd!
-            echo !extract_cmd! >>!joblog!
-            @rem DO NOT >>> call :sho "!extract_cmd!" !joblog!
+            if exist !tmperr! (
 
-            @rem ############################################################
-            @rem ### Decompress OLTP-EMUL report: .zip/.7z/.zstd --> HTML ###
-            @rem ############################################################
-            cmd /c !extract_cmd! 1>!tmplog! 2>!tmperr!
-            if errorlevel 1 (
-                call :sho "ACHTUNG: could not extract data from !decoded_zip!" !joblog!
-                type !tmperr!
-                type !tmperr! >>!joblog!
+                set /a broken_b64_cnt=!broken_b64_cnt!+1
+                set broken_b64_name=!DETAILS_DIR!\broken.%%~nxb
 
-                call :final
+                call :sho "### ACHTUNG ### could not decode data from base-64 format." !joblog!
+                call :sho "Problem occured with: !broken_b64_name!" !joblog!
+                move !DETAILS_DIR!\%%a !broken_b64_name!
 
             ) else (
-                @rem do NOT use here: zst writes to STDERR its actions! ==> call :catch_err run_cmd !joblog! !tmperr! !tmplog!
-                del !tmplog!
-                del !decoded_zip!
-                call :sho "Completed." !joblog!
+                del !DETAILS_DIR!\%%a
             )
         )
+
+
+        if exist !decoded_zip! (
+            set extract_cmd=UNKNOWN
+            for /f %%c in ("!decoded_zip!") do (
+                set html_detl_name=!DETAILS_DIR!\%%~nc.html
+                set compressed_ext=%%~xc
+
+                set is_stack_trace=0
+                echo !html_detl_name! | findstr /i /c:"crash" > nul
+                if NOT errorlevel 1 (
+                    set is_stack_trace=1
+                )
+
+                if .!is_stack_trace!.==.1. (
+                    @rem DO NOT delete this file, it is preliminary created HTML with heading info about crash
+                    @rem We have to APPEND stack trace text to this file rather than to overwrite it.
+                    echo ^<pre^> >> !html_detl_name!
+                ) else (
+                    del !html_detl_name! 2>nul
+                )
+
+                @rem All following extract commands must use DOUBLE ARROW (">>") for redirecting:
+                @rem ############################################################################
+                if /i "!compressed_ext!"==".zip" (
+                    @rem ### ACHTUNG ###
+                    @rem Value of $DECOMPRESS_ZIP must be always equal to $DECOMPRESS_7Z and is 7za utility.
+                    @rem DO NOT use '-tzip' as command switch for 7za when extract files that were compressed
+                    @rem by /usr/bin/gzip: this leads to "Open ERROR: Can not open the file as [zip] archive"
+                    @rem Fortunately, 7-Zip can properly detect type of archieve without any hints (when extracts)
+                    set extract_cmd="!DECOMPRESS_7Z! e -y -so !decoded_zip! ^>^> !html_detl_name!"
+                ) else if /i "!compressed_ext!"==".7z" (
+                    set extract_cmd="!decompress_7z! e -y -so !decoded_zip! ^>^> !html_detl_name!"
+                ) else (
+                    set extract_cmd="!decompress_zst! -f -c -d !decoded_zip! ^>^> !html_detl_name!"
+                )
+
+                call :sho "Decompress html content, command:" !joblog!
+                echo !extract_cmd!
+                echo !extract_cmd! >>!joblog!
+                @rem DO NOT >>> call :sho "!extract_cmd!" !joblog!
+
+                @rem ############################################################
+                @rem ### Decompress OLTP-EMUL report: .zip/.7z/.zst --> HTML ###
+                @rem ############################################################
+
+                cmd /c !extract_cmd! 1>!tmplog! 2>!tmperr!
+                set elev=!errorlevel!
+
+                if !elev! NEQ 0 (
+                    call :sho "### ACHTUNG ### could not extract data from !decoded_zip!" !joblog!
+                    set broken_zip_name=!DETAILS_DIR!\broken.%%~nxc
+                    call :sho "Problem occured with: broken_zip_name" !joblog!
+                    move !decoded_zip! !broken_zip_name!
+
+                    @rem     set run_cmd=!%1!
+                    @rem     set main_log=%2
+                    @rem     set err_file=%3
+                    @rem     set tmp_file=%4
+                    @rem     set addi_call=%5
+                    @rem     set do_abend=%6
+
+                    call :catch_err !extract_cmd! !joblog! !tmperr! !tmplog! n/a 0
+                    
+                    set /a broken_zip_cnt=!broken_zip_cnt!+1
+
+                ) else (
+                    @rem do NOT use here: zst writes to STDERR its actions! ==> call :catch_err run_cmd !joblog! !tmperr! !tmplog!
+                    del !tmplog!
+                    del !decoded_zip!
+                    call :sho "Completed." !joblog!
+
+                    if .!is_stack_trace!.==.1. (
+                        (
+                            echo ^</pre^>
+                            echo ^</body^>
+                            echo ^</html^>
+                            echo.
+                        ) >> !html_detl_name!
+                    )
+
+                )
+
+            )
+            @rem for /f %%c in ("!decoded_zip!") do
+        ) else (
+            call :sho "No file to be extracted from, skip decompression." !joblog!
+        )
+        @rem exist !decoded_zip!
     )
+)
+
+if !broken_b64_cnt! EQU 0 (
+    call :sho "All files have been decoded successfully." !joblog!
+) else (
+    call :sho "### ACHTUNG ### Total files that could not be decoded from base-64: !broken_b64_cnt!" !joblog!
+)
+
+if !broken_zip_cnt! EQU 0 (
+    call :sho "All decoded files have been decompressed successfully." !joblog!
+) else (
+    call :sho "### ACHTUNG ### Total files that could not be decompressed: !broken_zip_cnt!" !joblog!
 )
 
 @rem =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
