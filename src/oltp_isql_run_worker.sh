@@ -1971,7 +1971,7 @@ do
           else
               sho "SID=$sid. Firebird is alive, test can be continued. Check: crash_during_run=$crash_during_run" $sts
               cat $tmpauxlog>>$sts
-              rm -f $tmpauxtmp $tmpsiderr
+              rm -f $tmpauxtmp $tmpauxlog $tmpauxerr $tmpsiderr
 
               # Here we make empty ISQL worker STDERR log because otherwise this
               # check for crashes will detect again problem that already gone:

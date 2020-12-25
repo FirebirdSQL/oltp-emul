@@ -3955,7 +3955,7 @@ run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpa4r"
 display_intention "Update DDL to 'used_in_replication' parameter, step-2: apply generated DDL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
 catch_err $tmperr "Could not update DDL according to current value of 'used_in_replication' parameter. Check STDERR log $tmperr"
-
+rm -f $tmpa4r
 
 # Multiplier for input argument to sleep UDF for getting delays in SECONDS.
 # Value will be adjusted after test call of sleep UDF that must present in the script "$sleep_ddl" from config:
