@@ -75,17 +75,16 @@ execute block as
   declare c_view cursor for (
     with
     a as(
-      select rf.rdb$relation_name view_name, rf.rdb$field_position fld_pos,  trim(rf.rdb$field_name) fld_name
-      --rf.rdb$field_name fld_name
+      select rf.rdb$relation_name view_name, rf.rdb$field_position fld_pos
+            ,iif( trim(rf.rdb$field_name) = upper(trim(rf.rdb$field_name)), trim(rf.rdb$field_name), '"' || trim(rf.rdb$field_name) || '"') as fld_name
       from rdb$relation_fields rf
-      join rdb$relations rr
-      on rf.rdb$relation_name=rr.rdb$relation_name
+      join rdb$relations rr on rf.rdb$relation_name=rr.rdb$relation_name
       where
       coalesce(rf.rdb$system_flag,0)=0 and coalesce(rr.rdb$system_flag,0)=0 and rr.rdb$relation_type=1
     )
     select view_name,
            cast( 'create or alter view '||trim(view_name)||' as select '
-                 ||list( fld_pos||' '||trim(lower(  fld_name  )) )
+                 ||list( fld_pos||' '|| fld_name )
                  ||' from rdb$database' as varchar(8190)
                ) view_ddl
     from a
