@@ -190,11 +190,13 @@ tmpdir_all:    # Folder for storing .sql scenarios, STDOUT and STDERR logs of ev
 tmpdir_all:    # Trailing backslash is optional.
 tmpdir_all_win:    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
 tmpdir_all_nix:    # Allows referencing to existing OS environment variable by using dollar sign.
+tmpdir_all_nix:    # Apropriate access must be granted to this directory before test start:
+tmpdir_all_nix:    #     chown <your_linux_account>:firebird <tmpdir>
 tmpdir_all:    # Examples:
-tmpdir_all_win:    # tmpdir = C:\temp\logs.oltp%(fb)s
-tmpdir_all_win:    # tmpdir = !temp!\logs.oltp%(fb)s
-tmpdir_all_nix:    # tmpdir = /var/tmp/logs.oltp%(fb)s
-tmpdir_all_nix:    # tmpdir = $TMP/logs.oltp%(fb)s
+tmpdir_all_win:    #     tmpdir = C:\temp\logs.oltp%(fb)s
+tmpdir_all_win:    #     tmpdir = !temp!\logs.oltp%(fb)s
+tmpdir_all_nix:    #     tmpdir = /var/tmp/logs.oltp%(fb)s
+tmpdir_all_nix:    #     tmpdir = $TMP/logs.oltp%(fb)s
 tmpdir_all:    #
 tmpdir_all:    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
 tmpdir_all_win:    # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
