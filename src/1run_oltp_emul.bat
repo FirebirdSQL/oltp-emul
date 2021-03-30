@@ -2076,7 +2076,7 @@ goto:eof
 
       @rem Show warning about Windows Defender - it can drastically reduce speed of SQL generating
       @rem =======================================================================================
-      call :display_win_defender_notes screen
+      call :display_win_defender_notes screen !tmp_gen_wrk_msg! !log4tmp!
 
 
       del %generated_sql% 2>nul
@@ -2085,7 +2085,7 @@ goto:eof
           echo -- ### WARNING: DO NOT EDIT ###
           echo -- GENERATED AUTO BY %~f0.
           echo.
-          call :display_win_defender_notes sql
+          call :display_win_defender_notes sql  !tmp_gen_wrk_msg! !log4tmp!
           echo.
       ) >> %generated_sql%
 
@@ -3093,14 +3093,27 @@ goto:eof
     if .%mode%.==.sql. (
         set prefix= --
     )
-    echo!prefix! ----------------------------------------------------------------------------------------------------
-    echo!prefix! NOTE: in case when this script is generated too slow consider adding folder '%tmpdir%'
-    echo!prefix! to the list of items that must be excluded from Windows Defender Antivirus scan.
-    echo!prefix! See instructions here:
-    echo!prefix!     https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
-    echo!prefix! Registry key for folders that must be excluded:
-    echo!prefix!     HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths
-    echo!prefix! ----------------------------------------------------------------------------------------------------
+    set tmpmsg=%2
+    set joblog=%3
+    (
+        echo!prefix! ----------------------------------------------------------------------------------------------------
+        echo!prefix! NOTE: in case when this script is generated too slow consider adding folder '%tmpdir%'
+        echo!prefix! to the list of items that must be excluded from Windows Defender Antivirus scan.
+        echo!prefix! You can do it in two ways:
+        echo!prefix! 1. Direct modification of Windows Registry:
+        echo!prefix!    1.1 Find the key for folders that must be excluded:
+        echo!prefix!        HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths
+        echo!prefix!    1.2 Add parameter with name = %tmpdir%, set its type to DWORD and set value to 0.
+        echo!prefix! 2. Windows Defender GUI:
+        echo!prefix!    2.1 Press "Start" / "Run" and then type: 'windowsdefender:' (without single quotes^)
+        echo!prefix!    2.2 Follow instructions from this page:
+        echo!prefix!        https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
+        echo!prefix! ----------------------------------------------------------------------------------------------------
+    ) >!tmpmsg!
+    type !tmpmsg!
+    type !tmpmsg!>>!joblog!
+    del !tmpmsg!
+
 goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
@@ -3427,7 +3440,7 @@ goto:eof
 
                 @rem here we can occur only when use_fscache = -1, i.e. parameter UseFileSystemCache is commented
                 if .!fs_thresh!.==.-1. (
-                    call :sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out. You have to remove uncomment one of them. Test can NOT run." %log4tmp%
+                    call :sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out. You have to uncomment one of them. Test can NOT run." %log4tmp%
                     call :final
                 ) else (
                     if not .!test_can_run!.==.1. (
