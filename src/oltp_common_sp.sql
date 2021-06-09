@@ -3925,6 +3925,7 @@ end
 
 ^ -- sys_list_to_rows
 
+
 create or alter procedure sys_get_proc_ddl (
     a_proc varchar(31),
     a_mode smallint = 1,
@@ -3952,27 +3953,33 @@ begin
         -- select src from sys_get_proc_ddl('', 1) -- output all procs with ODIGIN body (finalizing update)
         
         with
-        s as(
+        --inp as (select 1 as a_mode, 1 as a_include_setterm, 'SP_TEST' as a_proc from rdb$database)
+        inp as (select :a_mode as a_mode, :a_include_setterm as a_include_setterm, :a_proc as a_proc from rdb$database)
+        ,s as(
             select
                 m.mon$sql_dialect db_dialect
-                ,:a_mode mode -- -1=only SP name and its parameters, 0 = name+parameters+empty body, 1=full text
-                ,:a_include_setterm add_set_term -- 1 => include `set term ^;` clause
+                ,inp.a_mode mode -- -1=only SP name and its parameters, 0 = name+parameters+empty body, 1=full text
+                ,inp.a_include_setterm add_set_term -- 1 => include `set term ^;` clause
                 ,r.rdb$character_set_name db_default_cset
                 ,p.rdb$procedure_name p_nam
                 ,ascii_char(10) d
                 ,replace(cast(p.rdb$procedure_source as blob sub_type 1), ascii_char(13), '') p_src
+                --,replace(cast(p.rdb$procedure_source as varchar(8190)), ascii_char(13), '') p_src
                 ,(
                     select
-                        coalesce(sum(iif(px.rdb$parameter_type=0,1,0))*1000 + sum(iif(px.rdb$parameter_type=1,1,0)),0)
+                        coalesce(sum(iif(px.rdb$parameter_type=0,1,0))*10000 + sum(iif(px.rdb$parameter_type=1,1,0)),0)
                     from rdb$procedure_parameters px
                     where px.rdb$procedure_name = p.rdb$procedure_name
                 ) pq -- cast(pq/1000 as int) = qty of IN-args, mod(pq,1000) = qty of OUT args
             from mon$database m -- put it FIRST in the list of sources!
-            join rdb$database r on 1=1
-            join rdb$procedures p on 1=1
-            where p.rdb$procedure_name starting with upper(:a_proc) -- substitute with some name if needed
+            cross join inp
+            cross join rdb$database r
+            cross join rdb$procedures p
+            where
+                p.rdb$procedure_name starting with upper( inp.a_proc ) -- substitute with some name if needed
         )
-        --select * from s
+        --        select * from s
+
         ,r as(
             select
                 db_dialect
@@ -3985,14 +3992,14 @@ begin
                 ,d
                 ,pq
                 ,p_src
-                ,cast(pq/1000 as int) pq_in
-                ,mod(pq,1000) pq_ou
+                ,cast(pq/10000 as int) pq_in
+                ,mod(pq,10000) pq_ou
                 ,p.eof k
             from s
             left join sys_list_to_rows(p_src, d) p on 1=1
         )
-        --select * from r
-        
+        --        select * from r
+
         ,p as(
             select
                 db_dialect
@@ -4003,43 +4010,77 @@ begin
                 ,word
                 ,r.pq_in
                 ,r.pq_ou
-                ,pt -- ip=0, op=1
+                ,pt -- param. type: input=0, output=1
+                ,pp.rdb$parameter_mechanism ppar_mechan -- 1=type of (table.column, domain, other...)
                 ,pp.rdb$field_source ppar_fld_src
+                -- ptype_explicit:
+                -- 0 => parameter is defined as reference to domain or 'type of ...'
+                -- 1 => parameter if defined as datatype: 'int', 'varchar(NN)' etc.
+                ,iif( pp.rdb$parameter_mechanism = 1 or pp.rdb$field_source NOT starting with upper('RDB$'), 0, 1 ) as ptype_explicit
                 ,pp.rdb$parameter_name par_name
                 ,pp.rdb$parameter_number par_num
                 ,pp.rdb$parameter_type par_ty
                 ,pp.rdb$null_flag p_not_null -- 1==> not null
-                ,pp.rdb$parameter_mechanism ppar_mechan -- 1=type of (table.column, domain, other...)
                 ,pp.rdb$relation_name ppar_rel_name
                 ,pp.rdb$field_name par_fld
-                ,case f.rdb$field_type
-                    when 7 then 'smallint'
-                    when 8 then 'integer'
+                ,f.rdb$field_type fld_ty
+                ,f.rdb$field_length fld_ln
+                ,f.rdb$field_precision fld_pr
+                ,f.rdb$field_scale fld_sc
+                ,case f.rdb$field_type -- src\jrd\align.h 
+                    when 7 then
+                        case f.rdb$field_sub_type
+                            when 0 then 'smallint'
+                            when 1 then 'numeric(' || f.fld_precision_and_scale || ')'
+                            -- NEVER occurs: when 2 then 'decimal(' ...
+                            else f.unknown_subtype_msg
+                        end
+                    when 8 then -- 'integer'
+                        case f.rdb$field_sub_type
+                            when 0 then 'integer'
+                            when 1 then 'numeric(' || f.fld_precision_and_scale || ')'
+                            when 2 then 'decimal(' || f.fld_precision_and_scale || ')'
+                            else f.unknown_subtype_msg
+                        end
                     when 10 then 'float'
-                    --when 14 then 'char(' || cast(cast(f.rdb$field_length / iif(ce.rdb$character_set_name=upper('utf8'),4,1) as int) as varchar(5)) || ')'
+                    when 12 then 'date'
+                    when 13 then 'time'
                     when 14 then 'char(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
                     when 16 then -- dialect 3 only
                         case f.rdb$field_sub_type
                             when 0 then 'bigint'
-                            when 1 then 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                            when 2 then 'decimal(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
-                            else 'unknown'
+                            when 1 then 'numeric(' || f.fld_precision_and_scale || ')'
+                            when 2 then 'decimal(' || f.fld_precision_and_scale || ')'
+                            else f.unknown_subtype_msg
                         end
-                    when 12 then 'date'
-                    when 13 then 'time'
+                    -- added in FB 3.x and 4.x:
+                    when 23 then 'boolean'
+                    when 24 then 'decfloat(16)'
+                    when 25 then 'decfloat(34)'
+                    when 26 then -- 'int128'
+                        case f.rdb$field_sub_type
+                            when 0 then 'int128'
+                            when 1 then 'numeric(' || f.fld_precision_and_scale || ')'
+                            when 2 then 'decimal(' || f.fld_precision_and_scale || ')'
+                            else f.unknown_subtype_msg
+                        end
+
                     when 27 then -- dialect 1 only
                         case f.rdb$field_scale
                             when 0 then 'double precision'
                             else 'numeric(15,' || cast(-f.rdb$field_scale as varchar(6)) || ')'
                         end
+                    when 28 then 'time with time zone'
+                    when 29 then 'timestamp with time zone'
                     when 35 then iif(db_dialect=1, 'date', 'timestamp')
                     when 37 then 'varchar(' || cast(cast(f.rdb$field_length / ce.rdb$bytes_per_character as int) as varchar(5)) || ')'
                     when 261 then 'blob sub_type ' || f.rdb$field_sub_type || ' segment size ' || f.rdb$segment_length
-                    else 'unknown'
+                    else 'unknown field_type: ' || coalesce( f.rdb$field_type, '[null]' )
                 end
                 as fddl
                 ,f.rdb$character_set_id fld_source_cset_id
                 ,f.rdb$collation_id fld_coll_id
+                ,pp.rdb$collation_id pp_coll_id  -- 07.06.2021
                 ,ce.rdb$character_set_name fld_src_cset_name
                 ,co.rdb$collation_name fld_collation
                 ,cast(f.rdb$default_source as varchar(1024)) fld_default_src
@@ -4049,10 +4090,10 @@ begin
             join (
                 select -2 pt from rdb$database -- 'set term ^;'
                 union all select -1 from rdb$database -- header stmt: 'create or alter procedure ...('
-                union all select  0 from rdb$database -- input pars
+                union all select  0 from rdb$database -- input args; NB! if DEFAULT clause is used then all comments after it will be included here!
                 union all select  5 from rdb$database -- 'returns ('
-                union all select 10 from rdb$database -- output pars
-                union all select 20 from rdb$database -- 'as'
+                union all select 10 from rdb$database -- output args
+                union all select 20 from rdb$database -- ') as' (if out args exist) or 'as'
                 union all select 50 from rdb$database -- source code
                 union all select 100 from rdb$database -- '^set term ;^'
             ) x on
@@ -4060,23 +4101,30 @@ begin
                 i = 0 and x.pt = -1 -- header
                 or i =0 and x.pt = 0 and pq_in > 0 -- input args, if exists
                 or i =0 and x.pt in(5,10) and pq_ou > 0 -- output args, if exists ('returns(' line)
-                or i =0 and x.pt = 20 -- 'AS'
+                or i =0 and x.pt = 20 --  closing parenthesis after last out arg (if they exist) + "as", i.e.:  ") as" | "as"
                 or pt = 50
                 or i = 0 and x.pt in(-2, 100) and add_set_term = 1 -- 'set term ^;', final '^set term ;^'
             left join rdb$procedure_parameters pp on
                 r.p_nam = pp.rdb$procedure_name
                 and (x.pt = 0 and pp.rdb$parameter_type = 0 or x.pt = 10 and pp.rdb$parameter_type = 1)
             --x.pt=pp.rdb$parameter_type-- =0 => in, 1=out
-            left join rdb$fields f on
-                pp.rdb$field_source = f.rdb$field_name
+            left join -- rdb$fields f on
+                (
+                    select
+                        f.*
+                       ,f.rdb$field_precision || ',' || cast(-f.rdb$field_scale as varchar(6)) fld_precision_and_scale
+                       ,'rdb$field_type=' || f.rdb$field_type || ' - has unknown sub_type: ' || coalesce(f.rdb$field_sub_type, '[null]') as unknown_subtype_msg
+                    from rdb$fields f
+                ) f
+                on pp.rdb$field_source = f.rdb$field_name
             left join rdb$collations co on
                 f.rdb$character_set_id = co.rdb$character_set_id
-                and f.rdb$collation_id = co.rdb$collation_id
+                --and f.rdb$collation_id = co.rdb$collation_id
+                and coalesce(pp.rdb$collation_id, f.rdb$collation_id) = co.rdb$collation_id -- 07.06.2021
             left join rdb$character_sets ce on
                 co.rdb$character_set_id = ce.rdb$character_set_id
         )
-        --select * from p
-        
+
         ,fin as(
             select
                 db_dialect
@@ -4087,60 +4135,61 @@ begin
                 ,i
                 ,par_num
                 ,case
-                 when pt=-2 then 'set term ^;'
-                 when pt=100 then '^set term ;^'
-                 when pt=-1 then 'create or alter procedure ' || trim(p_nam) || trim(iif(pq_in>0,' (',''))
-                 when pt=5 then 'returns ('
-                 when pt=20 then 'AS'
-                 when pt in(0,10) then --in or out argument definition
-                     '    '
-                     ||trim(par_name)||' '
-                     ||lower(trim( iif(nullif(p.ppar_mechan,0) is null, -- ==> parameter is defined with direct reference to base type, NOT like 'type of ...'
-                                       iif(ppar_fld_src starting with 'RDB$', p.fddl, ppar_fld_src),
-                                       ' type of '||coalesce('column '||trim(ppar_rel_name)||'.'||trim(par_fld), ppar_fld_src)
+                     when pt=-2 then 'set term ^;'
+                     when pt=-1 then 'create or alter procedure ' || trim(p_nam) || trim(iif(pq_in>0,' (',''))
+                     when pt=5 then trim( iif(pq_in>0, ') ', '') || 'returns (' )
+                     when pt in(0,10) then --in or out argument definition
+                         '    '
+                         || trim(par_name)||' '
+                         || lower(trim( iif( nullif(p.ppar_mechan,0) is null, -- ==> parameter is defined as direct reference to base type, NOT like 'type of ...'
+                                             iif(ppar_fld_src starting with 'RDB$', p.fddl, ppar_fld_src),
+                                             ' type of '||coalesce('column '||trim(ppar_rel_name)||'.'||trim(par_fld), ppar_fld_src)
+                                            )
+                                      ) -- trim
+                                  ) -- lower
+
+                         || iif(  nullif(p.fld_src_cset_name,upper('NONE')) is null -- field of non-text type or charset was not specified
+                                  -- NON-text field declaration:
+                                 ,''
+                                  -- text field declaration (char, nchar, varchar, blob):
+                                 ,iif(  p.ptype_explicit = 0 -- parameter is declared as reference to domain  ("a_id dm_idb") or using "TYPE OF <table.column|domain>"
+                                       ,''
+                                       ,trim(trailing from ' character set ' || p.fld_src_cset_name)
+                                     )
+                                )
+                         || trim(trailing from iif(p.p_not_null=1, ' not null', ''))
+                         || trim(trailing from iif(p.fld_collation is distinct from p.fld_src_cset_name, ' collate '||trim(p.fld_collation), ''))
+                         || coalesce(
+                              ' '||trim(
+                                   iif( ppar_fld_src starting with upper('RDB$') ----- adding "default ..." clause
+                                        ,coalesce(ppar_default_src, fld_default_src) -- this is only for 2.5; on 3.0 default values always are stored in ppar_default_src
+                                        ,ppar_default_src
                                       )
-                                 )
-                            ) -- parameter type
-                     ||iif(nullif(p.ppar_mechan,0) is not null -- parameter is defined as: "type of column|domain"
-                           or
-                           ppar_fld_src NOT starting with 'RDB$' -- parameter is defined by DOMAIN: "a_id dm_idb"
-                           or
-                           nullif(p.fld_src_cset_name,upper('NONE')) is null -- field of non-text type or charset was not specified
-                           --coalesce(p.fld_src_cset_name, p.db_default_cset) is not distinct from p.db_default_cset
-                           ,trim(trailing from iif(p.p_not_null=1, ' not null', ''))
-                           ,' character set '||trim(p.fld_src_cset_name)
-                             ||trim(trailing from iif(p.p_not_null=1, ' not null', ''))
-                             ||iif(p.fld_collation is distinct from p.fld_src_cset_name, ' collate '||trim(p.fld_collation), '')
-                          )
-                     ||coalesce(
-                          ' '||trim(
-                               iif( ppar_fld_src starting with upper('RDB$'), ----- adding "default ..." clause
-                                    coalesce(ppar_default_src, fld_default_src), -- this is only for 2.5; on 3.0 default values always are stored in ppar_default_src
-                                    ppar_default_src
                                   )
-                              )
-                        ,'')
-                     ||iif(pt=0 and par_num=pq_in-1 or pt=10 and par_num=pq_ou-1,')',',')
-                  when k=-1 then coalesce(nullif(word,'')||';','') -- nb: some sp can finish with empty line!
-                  else word
-                end word
+                            ,'')
+                         || iif(pt=0 and par_num=pq_in-1 or pt=10 and par_num=pq_ou-1 ,'',',')
+                     when pt=20 then trim(iif(pq_in>0 or pq_ou>0, ') ', '') || 'AS')
+                     when pt=100 then '^set term ;^'
+                     when k=-1 then coalesce( nullif(word,'') || ';','' ) -- nb: some sp can finish with empty line!
+                     else word
+                end as word
                 ,pt
                 ,ppar_fld_src
                 ,par_name
                 ,par_ty
                 ,pq_in
                 ,pq_ou
-                --,f.rdb$field_type ftyp ,f.rdb$field_length flen,f.rdb$field_scale fdec
                 ,p.fddl
                 ,p.fld_src_cset_name
                 ,p.fld_collation
                 ,k
+                ,p.ptype_explicit
                 --,'#'l,f.*
             from p
             left join rdb$fields f on p.ppar_fld_src = f.rdb$field_name
         )
-        --select * from fin order by p_nam,pt,par_num,i
-        
+        -- select * from fin order by p_nam,pt,par_num,i
+
         select --mode,p_nam,
             cast(
             case
@@ -4164,8 +4213,8 @@ begin
         suspend;
 
 end
-
 ^ -- sys_get_proc_ddl
+
 
 create or alter procedure sys_get_view_ddl (
     A_VIEW varchar(31) = '',

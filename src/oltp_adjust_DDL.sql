@@ -674,128 +674,127 @@ execute block returns(" " varchar(32765)) as
     declare v_lf char(1);
     declare v_separate_workers smallint = null;
     declare v_old_index_name varchar(31);
+    declare v_has_some_docs smallint = 0;
 begin
     v_lf = ascii_char(10);
-   
-    if ( NOT exists(select * from doc_list) ) then
+
+    select count(*) from (select 1 x from doc_list rows 1) into v_has_some_docs;
+
+    -- ===== step-1: DROP OLD indexes if they exist =====
+    for 
+        select ri.rdb$index_name
+        from rdb$indices ri
+        where ri.rdb$index_name in ( 
+                   upper('doc_list_worker_optype') 
+                  ,upper('pdistr_worker_snd_id') 
+                  ,upper('pstorned_worker_id') 
+                  ,upper('pdistr_snd_id') 
+              )
+        into v_old_index_name
+    do begin
+        " " = v_lf || 'drop index ' || trim(v_old_index_name) || ';' ;
+        suspend;
+    end
+
+    -- ===== step-2: DROP OLD constraints if they exist =====
+
+    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5' ) then
+        begin
+            -- drop check constraint 'worker_id_nn' that was added before:
+            if ( exists( select 1 from 
+                         rdb$relation_constraints rc 
+                         where 
+                             rc.rdb$relation_name = upper('doc_list') 
+                             and rc.rdb$constraint_type = upper('check') 
+                             and rc.rdb$constraint_name = upper('worker_id_nn')
+                       )
+               ) then
+            begin
+                " " = v_lf || 'alter table doc_list drop constraint worker_id_nn;'
+                   || v_lf || 'commit;' 
+                ;
+                suspend;
+            end
+        end
+    else
+        begin
+            -- drop NOT_NULL field constraint that was added before:
+            if ( exists( select 1 from 
+                         rdb$relation_fields rf
+                         where 
+                             rf.rdb$relation_name = upper('doc_list') 
+                             and rf.rdb$field_name = upper('worker_id')
+                             and rf.rdb$null_flag = 1
+                       )
+               ) then
+            begin
+                " " = v_lf || 'alter table doc_list alter column worker_id drop NOT null;'
+                   || v_lf || 'commit;' 
+                ;
+                suspend;
+            end
+        end
+
+    " " = v_lf || 'commit;';
+    suspend;
+
+
+    -- Value 'v_separate_workers' is defined by config parameter 'separate_workers': 1 or 0.
+    select s.svalue
+    from settings s
+    where s.working_mode = upper('COMMON') and s.mcode = upper('SEPARATE_WORKERS')
+    into v_separate_workers;
+    if ( v_separate_workers is null ) then
+        exception ex_record_not_found;
+                            
+    -- 05.10.2018: moved here from batch files:
+    if ( v_separate_workers = 1 ) then
         begin
 
-            -- ===== step-1: DROP OLD indexes if they exist =====
-            for 
-                select ri.rdb$index_name
-                from rdb$indices ri
-                where ri.rdb$index_name in ( 
-                           upper('doc_list_worker_optype') 
-                          ,upper('pdistr_worker_snd_id') 
-                          ,upper('pstorned_worker_id') 
-                          ,upper('pdistr_snd_id') 
-                      )
-                into v_old_index_name
-            do begin
-                " " = v_lf || 'drop index ' || trim(v_old_index_name) || ';' ;
+            -- ===== step-3: CREATE indexes that is need when workers MUST BE separated  =====
+
+            -- we have to add index on field WORKER_ID, tables: DOC_LIST, PDISTR, PSTORNED.
+            -- This field contains 'sequential number' of each ISQL and serves for separating
+            -- scope of documents which can be handled by "this" ISQL session.
+
+            " " = 'create index doc_list_worker_optype on doc_list(worker_id, optype_id);' || v_lf ||
+                  'commit;' ;
+            suspend;
+
+            if ( v_has_some_docs = 0 ) then
+            begin
+                -- 09.06.2021
+                -- We can add NOT-NULL constraint on doc_list.worker_id only when there are no documents.
+                -- Otherwise we have to leave existing documents with worker_id = null:
+
+                if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5' ) then
+                    " " = 'alter table doc_list add constraint worker_id_nn check( worker_id is not null );' ;
+                else
+                    " " = 'alter table doc_list alter column worker_id set NOT null;' ;
+
+                " " = " " || v_lf || 'commit;' ;
                 suspend;
             end
 
-            -- ===== step-2: DROP OLD constraints if they exist =====
-
-            if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5' ) then
-                begin
-                    -- drop check constraint 'worker_id_nn' that was added before:
-                    if ( exists( select 1 from 
-                                 rdb$relation_constraints rc 
-                                 where 
-                                     rc.rdb$relation_name = upper('doc_list') 
-                                     and rc.rdb$constraint_type = upper('check') 
-                                     and rc.rdb$constraint_name = upper('worker_id_nn')
-                               )
-                       ) then
-                    begin
-                        " " = v_lf || 'alter table doc_list drop constraint worker_id_nn;'
-                           || v_lf || 'commit;' 
-                        ;
-                        suspend;
-                    end
-                end
-            else
-                begin
-                    -- drop NOT_NULL field constraint that was added before:
-                    if ( exists( select 1 from 
-                                 rdb$relation_fields rf
-                                 where 
-                                     rf.rdb$relation_name = upper('doc_list') 
-                                     and rf.rdb$field_name = upper('worker_id')
-                                     and rf.rdb$null_flag = 1
-                               )
-                       ) then
-                    begin
-                        " " = v_lf || 'alter table doc_list alter column worker_id drop NOT null;'
-                           || v_lf || 'commit;' 
-                        ;
-                        suspend;
-                    end
-                end
-
-            " " = v_lf || 'commit;';
+            ---------------------------------------------------------------------------------------------
+            " " = 'create index pdistr_worker_snd_id on pdistr(worker_id, snd_id);' || v_lf ||
+                  'commit;' ;
             suspend;
-
-
-            -- Value 'v_separate_workers' is defined by config parameter 'separate_workers': 1 or 0.
-            select s.svalue
-            from settings s
-            where s.working_mode = upper('COMMON') and s.mcode = upper('SEPARATE_WORKERS')
-            into v_separate_workers;
-            if ( v_separate_workers is null ) then
-                exception ex_record_not_found;
-                                    
-            -- 05.10.2018: moved here from batch files:
-            if ( v_separate_workers = 1 ) then
-                begin
-
-                    -- ===== step-3: CREATE indexes that is need when workers MUST BE separated  =====
-
-                    -- we have to add index on field WORKER_ID, tables: DOC_LIST, PDISTR, PSTORNED.
-                    -- This field contains 'sequential number' of each ISQL and serves for separating
-                    -- scope of documents which can be handled by "this" ISQL session.
-
-                    " " = 'create index doc_list_worker_optype on doc_list(worker_id, optype_id);' || v_lf ||
-                          'commit;' ;
-                    suspend;
-                    if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5' ) then
-                        " " = 'alter table doc_list add constraint worker_id_nn check( worker_id is not null );' ;
-                    else
-                        " " = 'alter table doc_list alter column worker_id set NOT null;' ;
-
-                    " " = " " || v_lf || 'commit;' ;
-                    suspend;
-                    ---------------------------------------------------------------------------------------------
-                    " " = 'create index pdistr_worker_snd_id on pdistr(worker_id, snd_id);' || v_lf ||
-                          'commit;' ;
-                    suspend;
-                    ---------------------------------------------------------------------------------------------
-                    " " = 'create index pstorned_worker_id on pstorned(worker_id);' || v_lf ||
-                          'commit;' ;
-                    suspend;
-                end -- v_separate_workers = 1
-            else -- :::::::::::::::::::::::::::::::::::: v_separate_workers = 0 :::::::::::::::::::::::::::::::::::
-                begin
-                    -- ===== step-3: CREATE indexes that is need when workers are NO separated  =====
-
-                    -- NB: it seems that index on doc_list(optype_id) is HARMFUL because of too low selectivity!
-                    -- Benchmark is needed; index creation is deferred.
-                    " " =    v_lf || 'create index pdistr_snd_id on pdistr(snd_id);' 
-                          || v_lf || 'commit;' ;
-                    suspend;
-                end -- v_separate_workers = 0
-
-        end -- NOT exists(select * from doc_list) ==> we CAN change indices DDL for doc_list, pdistr, pstorned
-
-    else
-
+            ---------------------------------------------------------------------------------------------
+            " " = 'create index pstorned_worker_id on pstorned(worker_id);' || v_lf ||
+                  'commit;' ;
+            suspend;
+        end -- v_separate_workers = 1
+    else -- :::::::::::::::::::::::::::::::::::: v_separate_workers = 0 :::::::::::::::::::::::::::::::::::
         begin
-            " " = '-- SKIP changing DDL of indices for tables DOC_LIST et al.: at least one document already does exist!';
-            suspend;
-        end -- EXISTS at least one record in doc_list --> we can NOT change indices for doc_list, pdistr, pstorned
+            -- ===== step-3: CREATE indexes that is need when workers are NO separated  =====
 
+            -- NB: it seems that index on doc_list(optype_id) is HARMFUL because of too low selectivity!
+            -- Benchmark is needed; index creation is deferred.
+            " " =    v_lf || 'create index pdistr_snd_id on pdistr(snd_id);' 
+                  || v_lf || 'commit;' ;
+            suspend;
+        end -- v_separate_workers = 0
 
 end
 ^
