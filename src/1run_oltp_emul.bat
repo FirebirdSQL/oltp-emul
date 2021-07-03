@@ -1155,7 +1155,7 @@ call :show_db_and_test_params !conn_pool_support! %log4tmp% %log4all%
     echo "execute block as"
     echo "begin"
     if .!conn_pool_support!.==.1. (
-        echo "    if (
+        echo "    if ("
         echo "        exists(select * from rdb$triggers where rdb$trigger_name = upper('TRG_DISCONNECT') )"
         echo "        and exists(select * from rdb$relations where rdb$relation_name = upper('PERF_EDS') )"
         echo "        ) then"
