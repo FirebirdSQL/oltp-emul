@@ -5,7 +5,7 @@
 # git clone --config core.autocrlf=false https://github.com/FirebirdSQL/oltp-emul .
 # 
 # This file is used to launch ISQL sessions on POSIX for test server with running
-# Firebird 4.x 
+# Firebird 5.x 
 # Parameters are extracted by '1run_oltp_emul.sh' command scenario.
 ####################################################################
 
@@ -38,7 +38,7 @@
    #     https://firebirdsql.org/manual/ubusetup.html
    #     https://www.firebirdsql.org/file/documentation/reference_manuals/user_manuals/html/ubusetup.html 
    # Command for list FB-related files that were installed on Ubuntu/Debian:
-   #     dpkg -L firebird4.0-server
+   #     dpkg -L firebird5.0-server
    #
    # clu = isql-fb
 
@@ -52,12 +52,12 @@
    # (test will try to create temporary database in this folder for some checks and then drop it).
    #
    # Examples:
-   # dbnm = /var/db/oltp_40.fdb
-   # dbnm = $TMP/data/oltp_40.fdb
+   # dbnm = /var/db/oltp_50.fdb
+   # dbnm = $TMP/data/oltp_50.fdb
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #
-   dbnm = /var/db/oltp_40.fdb
+   dbnm = /var/db/oltp_50.fdb
 
 
    # Parameters for remote connection and authentication.
@@ -96,12 +96,12 @@
    # Apropriate access must be granted to this directory before test start:
    #     chown <your_linux_account>:firebird <tmpdir>
    # Examples:
-   #     tmpdir = /var/tmp/logs.oltp40
-   #     tmpdir = $TMP/logs.oltp40
+   #     tmpdir = /var/tmp/logs.oltp50
+   #     tmpdir = $TMP/logs.oltp50
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #
-   tmpdir = /var/tmp/logs.oltp40
+   tmpdir = /var/tmp/logs.oltp50
 
 
    # Condition for removing or preserving ISQL logs in <tmpdir> after test finish.
@@ -747,8 +747,8 @@
    # NOTE: *BACKUP* must be speficied here rather then .fdb file!
    #
    # Examples:
-   # results_storage_fbk = $(dirname "$dbnm")/oltp_40_results.fbk
-   # results_storage_fbk = /var/db/oltp_40-results-storage.fbk
+   # results_storage_fbk = $(dirname "$dbnm")/oltp_50_results.fbk
+   # results_storage_fbk = /var/db/oltp_50-results-storage.fbk
    #
    # results_storage_fbk = <no value defined>
 
@@ -789,7 +789,7 @@
    # It is recommended to store this database in the same directory as <dbnm> and change its state to 'full shutdown'
    # or at least make it read only.
    #
-   etalon_dbnm = $(dirname "$dbnm")/oltp_40.etalone.fdb
+   etalon_dbnm = $(dirname "$dbnm")/oltp_50.etalone.fdb
 
 
    # Create report in HTML format (along with plain text) ? Avaliable options: 1 = yes, 0 = no.
@@ -831,9 +831,9 @@
    #     * Total RAM size, Gb;
    #     * Timestamp when test started.
    # Example of report name when this parameter is 'regular':
-   #     YYYYmmDD_HHMM_score_07011_build_2241_ss40__3h00m_100_att_fw__on_cpu4_ram32.txt
+   #     YYYYmmDD_HHMM_score_07182_build__192_ss50__3h00m_100_att_fw__on_cpu4_ram32.txt
    # Example of report name when this parameter is 'benchmark':
-   #     ss40_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
+   #     ss50_fw_off_split_most__sel_1st_one_index_score_07182_build__192__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
    #
    # Available options when uncommented: regular | benchmark

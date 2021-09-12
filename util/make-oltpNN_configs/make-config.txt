@@ -80,6 +80,7 @@ intro00_nix: # This file is used to launch ISQL sessions on POSIX for test serve
 intro00_25x_all: # Firebird 2.5.x
 intro00_30x_all: # Firebird 3.x
 intro00_40x_all: # Firebird 4.x 
+intro00_50x_all: # Firebird 5.x 
 intro00_win: # Parameters are extracted by '1run_oltp_emul.bat' command scenario.
 intro00_win: # Text-based values can refer to OS environment variables or previously defined
 intro00_win: # parameters using exclamation sign, e.g.:  some_parameter = !some_known_variable!
@@ -101,6 +102,7 @@ fbc_all_win:    # Example:
 fbc_25x_win:    # fbc = C:\Firebird25\bin
 fbc_30x_win:    # fbc = C:\Firebird30
 fbc_40x_win:    # fbc = C:\Firebird40
+fbc_50x_win:    # fbc = C:\Firebird50
 fbc_all_nix:    # Examples:
 fbc_all_nix:    # fbc = /opt/firebird/bin
 fbc_all_nix:    # fbc = /usr/bin
@@ -112,6 +114,7 @@ fbc_all:    #
 fbc_def_25x_win:    fbc = C:\Firebird25\bin
 fbc_def_30x_win:    fbc = C:\Firebird30
 fbc_def_40x_win:    fbc = C:\Firebird40
+fbc_def_50x_win:    fbc = C:\Firebird50
 fbc_def_nix:    fbc = /opt/firebird/bin
 
 
@@ -128,6 +131,7 @@ clu_all_nix:    # Command for list FB-related files that were installed on Ubunt
 clu_25x_nix:    #     dpkg -L firebird2.5-classic or dpkg -L firebird2.5-superclassic
 clu_30x_nix:    #     dpkg -L firebird3.0-server
 clu_40x_nix:    #     dpkg -L firebird4.0-server
+clu_50x_nix:    #     dpkg -L firebird5.0-server
 clu_all_nix:    #
 clu_def_nix:    # clu = isql-fb
 
@@ -173,7 +177,7 @@ port_nix:    #
 port_nix:    # Ubuntu/Debian notes: if your FB instance was installed from repository then you can check port by
 port_nix:    # issuing command:
 port_nix:    #     grep -i "RemoteServicePort" /etc/firebird/<@.@>/firebird.conf
-port_all:    # -- where <@.@> marks major FB version (2.5; 3.0; 4.0).
+port_nix:    # - where <@.@> marks major FB version (2.5; 3.0; 4.0; 5.0).
 port_all:    #
 port_def_all:    port = 3050
 
@@ -399,6 +403,9 @@ sleep_ddl_all:    #     UDF usage can not be avoided if parameter 'mon_unit_perf
 sleep_ddl_40x_all:    #
 sleep_ddl_40x_all:    #     By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
 sleep_ddl_40x_all:    #     You have to add it or uncomment manually.
+sleep_ddl_50x_all:    #
+sleep_ddl_50x_all:    #     By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
+sleep_ddl_50x_all:    #     You have to add it or uncomment manually.
 sleep_ddl_all:    #
 sleep_ddl_def_win:    sleep_ddl = .\oltp_sleepUDF_win.sql
 sleep_ddl_def_nix:    sleep_ddl = ./oltp_sleepUDF_nix.sql
@@ -486,6 +493,8 @@ separate_workers_30x_all:    # NOTE. When this parameter is 1 and 'use_es' is 2 
 separate_workers_30x_all:    # 'mon_query_role' ; 'mon_usr_prefix' ; 'mon_usr_passwd'.
 separate_workers_40x_all:    # NOTE. When this parameter is 1 and 'use_es' is 2 then all following parameters must be uncommented:
 separate_workers_40x_all:    # 'mon_query_role' ; 'mon_usr_prefix' ; 'mon_usr_passwd'.
+separate_workers_50x_all:    # NOTE. When this parameter is 1 and 'use_es' is 2 then all following parameters must be uncommented:
+separate_workers_50x_all:    # 'mon_query_role' ; 'mon_usr_prefix' ; 'mon_usr_passwd'.
 separate_workers_all:    # Recommended value: 1
 separate_workers_all:    #
 separate_workers_def_all:    separate_workers = 1
@@ -555,6 +564,8 @@ mon_unit_perf_all:    # NOTE: delays for mon_unit_perf=2 between transactions wi
 mon_unit_perf_all:    # e.g. when we make delays via UDF, without calls to external OS commands.
 mon_unit_perf_40x_all:    # By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
 mon_unit_perf_40x_all:    # You have to add it or uncomment manually.
+mon_unit_perf_50x_all:    # By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
+mon_unit_perf_50x_all:    # You have to add it or uncomment manually.
 mon_unit_perf_all:    #
 mon_unit_perf_def_all:    mon_unit_perf = 0
 
@@ -1024,10 +1035,12 @@ file_name_with_test_params_all:    # Example of report name when this parameter 
 file_name_with_test_params_25x_all:    #     YYYYmmDD_HHMM_score_00957_build_27152_sc%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
 file_name_with_test_params_30x_all:    #     YYYYmmDD_HHMM_score_06543_build_31236_ss%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
 file_name_with_test_params_40x_all:    #     YYYYmmDD_HHMM_score_07011_build_2241_ss%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
+file_name_with_test_params_50x_all:    #     YYYYmmDD_HHMM_score_07182_build__192_ss%(fb)s__3h00m_100_att_fw__on_cpu4_ram32.txt
 file_name_with_test_params_all:    # Example of report name when this parameter is 'benchmark':
 file_name_with_test_params_25x_all:    #     sc%(fb)s_fw_off_split_most__sel_1st_one_index_score_02545_build_27152__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
 file_name_with_test_params_30x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_06915_build_31236__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
 file_name_with_test_params_40x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
+file_name_with_test_params_50x_all:    #     ss%(fb)s_fw_off_split_most__sel_1st_one_index_score_07182_build__192__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
 file_name_with_test_params_all:    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
 file_name_with_test_params_all:    #
 file_name_with_test_params_all:    # Available options when uncommented: regular | benchmark

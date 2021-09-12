@@ -60,29 +60,42 @@ set fname=%8
 @rem set build=WI-T4.0.0.1227
 @rem set build=WI-V3.0.4.33054
 
-echo %build% | findstr /r /i /c:"-[V,T]2.5.[0-9].[0-9]" >nul
+@rem since 12.09.2021:
+set fb=UNKNOWN
+echo %build% | findstr /i /r /c:"[V,T]2.5.[0-9]" > nul
 if NOT errorlevel 1 (
     set fb=25
-) else (
-    echo %build% | findstr /r /i /c:"-[V,T]3.[0-9].[0-9]" >nul
+)
+if /i .!fb!.==.UNKNOWN. (
+    echo %build% | findstr /i /r /c:"[V,T]3.[0-9].[0-9]" > nul
     if NOT errorlevel 1 (
         set fb=30
-    ) else (
-        echo %build% | findstr /r /i /c:"-[V,T]4.[0-9].[0-9]" >nul
-        if NOT errorlevel 1 (
-            set fb=40
-        ) else (
-            echo.
-            echo Could not define numbers in major FB version: 25, 30 or 40.
-            echo.
-            echo ########################################################
-            echo Ensure that this batch is called from 1run_oltp_emul.bat 
-            echo ########################################################
-            echo.
-            pause
-            goto fin
-        )
     )
+)
+if /i .!fb!.==.UNKNOWN. (
+    echo %build% | findstr /i /r /c:"[V,T]4.[0-9].[0-9]" > nul
+    if NOT errorlevel 1 (
+        set fb=40
+    )
+)
+if /i .!fb!.==.UNKNOWN. (
+    echo %build% | findstr /i /r /c:"[V,T]5.[0-9].[0-9]" > nul
+    if NOT errorlevel 1 (
+        set fb=50
+    )
+)
+
+if /i .!fb!.==.UNKNOWN. (
+    echo.
+    echo Could not parse major version from string "%build%".
+    echo Expected value: 25, 30, 40 or 50.
+    echo.
+    echo ########################################################
+    echo Ensure that this batch is called from 1run_oltp_emul.bat 
+    echo ########################################################
+    echo.
+    pause
+    goto fin
 )
 
 

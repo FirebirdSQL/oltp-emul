@@ -59,7 +59,6 @@
    #     netstat -a -n -o -b -p TCP -p TCPv6 | findstr /i /c:"LISTENING" | findstr /i /c:<port>
    # Output will contain PID of process at last token. Put this value in the command:
    #     wmic process where "ProcessID=<PID>" get ExecutablePath /format:list
-   # -- where <@.@> marks major FB version (2.5; 3.0; 4.0).
    #
    port = 3050
 
@@ -76,8 +75,8 @@
    # Trailing backslash is optional.
    # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
    # Examples:
-   # tmpdir = C:\temp\logs.oltp30
-   # tmpdir = !temp!\logs.oltp30
+   #     tmpdir = C:\temp\logs.oltp30
+   #     tmpdir = !temp!\logs.oltp30
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"

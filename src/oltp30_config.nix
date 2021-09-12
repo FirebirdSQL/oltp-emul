@@ -77,7 +77,7 @@
    # Ubuntu/Debian notes: if your FB instance was installed from repository then you can check port by
    # issuing command:
    #     grep -i "RemoteServicePort" /etc/firebird/<@.@>/firebird.conf
-   # -- where <@.@> marks major FB version (2.5; 3.0; 4.0).
+   # - where <@.@> marks major FB version (2.5; 3.0; 4.0; 5.0).
    #
    port = 3050
 
@@ -93,9 +93,11 @@
    # Folder for storing .sql scenarios, STDOUT and STDERR logs of every working isql session.
    # Trailing backslash is optional.
    # Allows referencing to existing OS environment variable by using dollar sign.
+   # Apropriate access must be granted to this directory before test start:
+   #     chown <your_linux_account>:firebird <tmpdir>
    # Examples:
-   # tmpdir = /var/tmp/logs.oltp30
-   # tmpdir = $TMP/logs.oltp30
+   #     tmpdir = /var/tmp/logs.oltp30
+   #     tmpdir = $TMP/logs.oltp30
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #

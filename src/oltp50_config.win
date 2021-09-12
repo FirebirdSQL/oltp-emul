@@ -2,11 +2,15 @@
 # OLTP-EMUL test for Firebird database. Configuration parameters.
 # To get the actual version of test, enter command:
 # 
-# git clone --config core.autocrlf=false https://github.com/FirebirdSQL/oltp-emul .
+# git clone --config core.autocrlf=true https://github.com/FirebirdSQL/oltp-emul .
 # 
-# This file is used to launch ISQL sessions on POSIX for test server with running
-# Firebird 4.x 
-# Parameters are extracted by '1run_oltp_emul.sh' command scenario.
+# This file is used to launch ISQL sessions on Windows for test server with running
+# Firebird 5.x 
+# Parameters are extracted by '1run_oltp_emul.bat' command scenario.
+# Text-based values can refer to OS environment variables or previously defined
+# parameters using exclamation sign, e.g.:  some_parameter = !some_known_variable!
+# Text-based values can refer to OS environment variables or previously defined
+# parameters using dollar sign, e.g.:  some_parameter = $some_evaluable_expression
 ####################################################################
 
 
@@ -16,48 +20,30 @@
 
 
    # Folder with Firebird console utilities (isql, fbsvcmgr, gfix, gbak).
-   # For builds that are published on official Firebird site such folder is /opt/firebird/bin/
-   # For builds that are installed from Ubuntu/Debian repository this folder is /usr/bin/
    # Trailing backslash is optional.
-   # Examples:
-   # fbc = /opt/firebird/bin
-   # fbc = /usr/bin
+   # Example:
+   # fbc = C:\Firebird50
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+   # If FB binaries are in directory like "C:\Program files (x86)\Firebird Database Server" 
+   # then make copy of this folder to something like C:\firebird.
    #
-   fbc = /opt/firebird/bin
+   fbc = C:\Firebird50
 
-
-   # LINUX ONLY. OPTIONAL FOR CentOS/RH. Command-line utility for operate as ISQL.
-   # Actual only for builds installed from Ubuntu/Debian repository.
-   # These builds have ISQL utility with different name: 'isql-fb' instead of usual 'isql'.
-   # Full name of this utility will be evaluated as concatenation of <fbc> and <clu> values.
-   # String '<fbc>/isql' will be used to call ISQL if you leave this parameter commented.
-   #
-   # More details about used directories when FB is installed from Ubuntu/Debian repository:
-   #     https://firebirdsql.org/manual/ubusetup.html
-   #     https://www.firebirdsql.org/file/documentation/reference_manuals/user_manuals/html/ubusetup.html 
-   # Command for list FB-related files that were installed on Ubuntu/Debian:
-   #     dpkg -L firebird4.0-server
-   #
-   # clu = isql-fb
 
 
    # Full path and file name of database. DO NOT USE ALIAS. Use only ASCII characters.
-   # Existing OS variable can be referred here by using dollar sign.
-   # It is recommended to read Filesystem Hierarchy Standard before you decide where to put
-   # database and temporary files:
-   #     https://refspecs.linuxfoundation.org/FHS_3.0/fhs-3.0.pdf
+   # Existing OS variable can be referred here by enclosing it into exclamation marks.
    # Firebird service account must have full access to the folder of specified database <dbnm>
    # (test will try to create temporary database in this folder for some checks and then drop it).
    #
    # Examples:
-   # dbnm = /var/db/oltp_40.fdb
-   # dbnm = $TMP/data/oltp_40.fdb
+   # dbnm = C:\temp\oltp_50.fdb
+   # dbnm = !TEMP!\oltp_50.fdb
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
    #
-   dbnm = /var/db/oltp_40.fdb
+   dbnm = C:\data\oltp_50.fdb
 
 
    # Parameters for remote connection and authentication.
@@ -70,14 +56,9 @@
 
    # Port that is listening by Firebird instance on <host>.
    # In order to check which process is listening to selected port, type (locally on server):
-   #     netstat --tcp --listening --program --numeric | grep <port>
-   # Output will contain PID of process at last token (delimited by '/'). Put this value in the command:
-   #     ps ax | grep " <PID>" | grep -v grep
-   #
-   # Ubuntu/Debian notes: if your FB instance was installed from repository then you can check port by
-   # issuing command:
-   #     grep -i "RemoteServicePort" /etc/firebird/<@.@>/firebird.conf
-   # - where <@.@> marks major FB version (2.5; 3.0; 4.0; 5.0).
+   #     netstat -a -n -o -b -p TCP -p TCPv6 | findstr /i /c:"LISTENING" | findstr /i /c:<port>
+   # Output will contain PID of process at last token. Put this value in the command:
+   #     wmic process where "ProcessID=<PID>" get ExecutablePath /format:list
    #
    port = 3050
 
@@ -92,16 +73,26 @@
 
    # Folder for storing .sql scenarios, STDOUT and STDERR logs of every working isql session.
    # Trailing backslash is optional.
-   # Allows referencing to existing OS environment variable by using dollar sign.
-   # Apropriate access must be granted to this directory before test start:
-   #     chown <your_linux_account>:firebird <tmpdir>
+   # Allows referencing to existing OS environment variable by enclosing it into exclamation marks.
    # Examples:
-   #     tmpdir = /var/tmp/logs.oltp40
-   #     tmpdir = $TMP/logs.oltp40
+   #     tmpdir = C:\temp\logs.oltp50
+   #     tmpdir = !temp!\logs.oltp50
    #
    # WARNING. DO NOT use names with spaces, parenthesis or non-ascii characters.
+   # If your TEMP variable is like "C:\Documents and Settings\User\Local Settings\Temp"
+   # then do NOT use here reference to it (!temp!) and specify something like C:\TEMP instead.
    #
-   tmpdir = /var/tmp/logs.oltp40
+   # NOTE: test uses <tmpdir> for writing to lot of temporary files, mostly by issuing 'ECHO' command.
+   # On some Windows versions writing to these files can be drastically slow because Windows Defender
+   # checks every writing operation that is produced by 'ECHO' commands that are issued by batch scenario.
+   # In this case consider adding folder <tmpdir> to the list of items that must be excluded from
+   # Windows Defender Antivirus scan.
+   # See instructions here:
+   #    https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
+   # Registry key for folders that must be excluded:
+   #    HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths
+   #
+   tmpdir = C:\temp\logs.oltp50
 
 
    # Condition for removing or preserving ISQL logs in <tmpdir> after test finish.
@@ -194,20 +185,10 @@
    # * if number of sessions not exceeds [max_cps] then delay will be evaluated as random value between 1 and 4 seconds.
    # * if number of sessions greater that this parameter then delay will be evaluated as: 1 + session_id / <max_cps>
    #
-   # NOTE. If you intend to launch more than 1000 sessions then consider to adjust following settings in /etc/sysctl.conf:
-   # net.core.somaxconn = 2000
-   # net.core.netdev_max_backlog = 2000
-   # net.core.tcp_max_syn_backlog = 2000
-   # net.ipv4.ip_local_port_range = 15000 61000
-   # net.ipv4.tcp_tw_reuse = 1
-   # net.ipv4.tcp_max_tw_buckets = 1440000
-   # See also:
-   # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L111
-   # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L284
-   # http://lxr.linux.no/#linux+v3.2.8/Documentation/networking/ip-sysctl.txt#L464
-   # https://www.centos.org/docs/5/html/5.1/Deployment_Guide/s3-proc-sys-net.html
-   # http://docs.continuent.com/tungsten-clustering-6.0/performance-networking.html
-   # https://access.redhat.com/solutions/41776
+   # NOTE. If you intend to launch more than 1000 sessions then consider to adjust Windows registry settings:
+   # * goto HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\TCPIP\Parameter
+   # * create a new REG_DWORD value with name: TcpTimedWaitDelay. Set it to 60.
+   # * create a new REG_DWORD value with name: MaxUserPort. Set it to 32768 (this defines ephemeral port range).
    #
    # Recommended value: 20...30
    #
@@ -228,8 +209,9 @@
    # This leads to maximal (non-realistic) level of workload.
    # Delay statement will be inserted in .sql script by '1run_oltp_emul'; the form of this statement depends on value of
    # parameter 'sleep_ddl':
-   # 1) If parameter 'sleep_ddl' is commented (undefined) then OS call ("shell sleep <sleep_max>;") will be added after each
-   #    transaction commit in order to pause SQL execution.
+   # 1) If parameter 'sleep_ddl' is commented (undefined) then temporary .vbs script will be created in the <tmpdir> folder
+   #    and Windows built-in utility 'cscript.exe' will be invoked with passing required delay to this .vbs:
+   #    %systemroot%\system32\cscript.exe //nologo //e:vbscript //t:NNN <tmpdir>\<tmp_vbs> <sleep_max>
    #    This leads to excessive OS workload when number of sessions is more than ~300.
    # 2) Otherwise special UDF for delay will be invoked from separate execute block after each transaction commit.
    #    This UDF must be declared in SQL-script which name is defined by <sleep_ddl> parameter (see this config).
@@ -240,7 +222,7 @@
 
 
    # When we want to insert delays between subsequent business actions then parameter sleep_max > 0 must be specified.
-   # Delays can be done either by external OS command (i.e. "shell ... ;") or by UDF invocation.
+   # Delays can be done either by external OS command (i.e. "shell cscript <vbs_scenario_for_delay> ;") or by UDF invocation.
    # Calls to external OS command from dozen of sessions leads to valuable load, especially when number of sessions more than 300.
    # This can be avoided if delays are done via UDF calls.
    #
@@ -254,25 +236,19 @@
    #
    # -- must be written on the SINGLE LINE in this script ( <UDF_name> will be searched in this line as its 4th word).
    #
-   # This UDF implementation (.so file) must be stored in the server-side folder, usually in $FIREBIRD_HOME$/UDF.
+   # This UDF implementation (.dll file) must be stored in the server-side folder, usually in %FIREBIRD_HOME%\UDF.
    # Also, UDF calls must be enabled in firebird.conf by specifying: UDFaccess = restrict UDF
-   # NOTES for Ubuntu/Debian.
-   #     If your FB instance was installed from Ubuntu/Debian repository then put .so file to /usr/lib/firebird/<@.@>/UDF/
-   #     where '@.@' marks major version of FB, i.e.:
-   #     UdfAccess parameter for such FB instance must have *absolute* value rather then relative, i.e.:
    # See description for parameter 'UDFaccess' in standard firebird.conf for details.
-   #
-   # Test provides its own UDF and appropriate declaration script named 'oltp_sleepUDF_nix.sql'.
-   # Unpack file ./util/udf64/SleepUDF.so.tar.gz  and put file SleepUDF.so in any folder that is allowed by 'UDFaccess' parameter.
-   # from firebird.conf.
-   #
+   # Test provides its own UDF and appropriate declaration script named: 'oltp_sleepUDF_win.sql'.
+   # Unpack file .\util\udf64\SleepUDF.dll.zip and put file SleepUDF.dll in any folder that is allowed by
+   # 'UDFaccess' parameter from firebird.conf.
    # NOTES.
    #     UDF usage can not be avoided if parameter 'mon_unit_perf' has value 2. You can NOT leave 'sleep_ddl' commented out in this case.
    #
    #     By default, UDF usage is deprecated in Firebird 4.0+ and parameter UDFacces and absent in its firebird.conf.
    #     You have to add it or uncomment manually.
    #
-   sleep_ddl = ./oltp_sleepUDF_nix.sql
+   sleep_ddl = .\oltp_sleepUDF_win.sql
 
 
    # Should SET TRANSACTION statement include NO AUTO UNDO clause ? Avaliable values: 1=yes, 0=no
@@ -395,6 +371,22 @@
    detailed_info = 0
 
 
+   # WINDOWS ONLY.
+   # Exceptions that will raise during test work do not have timestamp information.
+   # This can make it difficult to find the causes of errors.
+   # One may to use console splitter MTEE.EXE that has ability to prefix each STDOUT/STDERR line
+   # with exact timestamp. You do not have to search or install this utility: it is already supplied
+   # with this test in .zip file and will be extracted if needed to the folder defined by <tmpdir>
+   # parameter of this config.
+   # Following parameter sets how MTEE console splitter will be used:
+   #     0 - do not use console splitter (default)
+   #     1 - provide timestamp prefix only for messages that goes to STDERR before saving this stream;
+   #     2 - provide timestamp prefix only for all messages and MERGE data of STDERR with STDOUT.
+   #
+   # It is recommended to change this parameter only for debug/research purposes. Normally it must be 0.
+   #
+   use_mtee = 0
+
 
    # Setting for enabling queries to monitor tables in order to make detailed performance analysis.
    # When 0 then monitor tables are not queried.
@@ -479,6 +471,21 @@
    mon_query_interval = 60
 
 
+   # WINDOWS ONLY.
+   # Should 1st of launching ISQL instances also start asynchronously FBSVCMGR with opening TRACE session ?
+   # If yes then final report will have result of parsing trace log for that ISQL session activity with
+   # aggregate data about each business action. Also, average values will be calculated for:
+   # 1) speed of fetches and marks per second;
+   # 2) ratios reads / fetches and writes / marks.
+   # These values will be divided for 10 equal time intervals in order to see changes 
+   # in performance that could occur during <test_time> phase of test.
+   # There is no performance penalty when single trace session is active so one may safely
+   # to set this value to 1. Note though that if you will interrupt test by brute kill all
+   # ISQL sessions than you have also to kill process of FBSVCMGR which can remain active.
+   # Currently implemented only for Windows.
+   #
+   trc_unit_perf = 0
+
 
 #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 #  SETTINGS FOR PREMATURE TERMINATION OF WORK BEFORE TIME EXPIRE
@@ -524,7 +531,7 @@
    # OPTIONAL.
    # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
    # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
-   # '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
+   # '!tmpdir!/1stoptest.tmp.bat' which is created every time when test starts by script '1run_oltp_emul.bat'.
    # This script works normally for most cases except extremely high workload when establishing of new connect is difficult.
    #
    # When extremely high workload is used then following message can appear on every attempt to establish new attachment:
@@ -545,7 +552,8 @@
    #        queried by every attachment as 'stop flag'.
    #     2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
    #
-   #     <tmpdir>/1stoptest.tmp.sh
+   # By default this parameter is UNDEFINED, i.e. only temporary batch can be used for stop test prematurely:
+   #     <tmpdir>\1stoptest.tmp.bat 
    #
    # use_external_to_stop = <no value defined>
 
@@ -568,6 +576,9 @@
    #     sync - if you want to test performance for database that is not involved in replication;
    #     async - if you plan to use DB which will be replicated to other host.
    #             (note that in such case you must set parameter 'used_in_replication' to 1).
+   # When value is 'async', ensure that firebird.conf contains following uncommented parameters:
+   #     MaxUnflushedWrites = -1
+   #     MaxUnflushedWriteTime = -1
    #
    create_with_fw = sync
 
@@ -606,7 +617,7 @@
    # Instead of generating dosuments by single attachment it is much more properly (and faster) to assign some big value 
    # to 'warm_time' parameter (say, 1440 which means to run for 1 day) and also set 'test_time' to 0 (zero). 
    # When size of database will reach value that you consider as enough then just stop the test by running batch 
-   # '$tmpdir/1stoptest.tmp.sh' which always is created when test starts.
+   # '!tmpdir!\1stoptest.tmp.bat' which always is created when test starts.
    #
    init_docs = 0
 
@@ -747,35 +758,36 @@
    # NOTE: *BACKUP* must be speficied here rather then .fdb file!
    #
    # Examples:
-   # results_storage_fbk = $(dirname "$dbnm")/oltp_40_results.fbk
-   # results_storage_fbk = /var/db/oltp_40-results-storage.fbk
+   # results_storage_fbk = C:\data\oltp_50-results-storage.fbk
    #
    # results_storage_fbk = <no value defined>
 
 
+   # OPTIONAL. WINDOWS ONLY.
+   # Path and name of .zip file with utility for compressing HTML report before
+   # storing it in the database defined by <results_storage_fbk> parameter.
+   #
+   # Apropriate .zip file must present in {OLTP_ROOT}\util\compressors\ directory.
+   # Path must be specified RELATIVELY current folder. Do not change it if uncomment.
+   # Currently two compressors are provided in this test package: 7-Zip and Z-Standard.
+   #
+   # You don't need to extract these binaries because script will do it every time
+   # at the end of test, before its finish.
+   # Extraction of HTML report will be done by 'oltp_overall_report' scenario.
+   # The utility that is used for extraction is selected based on format of compression:
+   #     * 7z, zip or gzip ==> 7z.exe;
+   #     * Z-Standard ==> zstd.exe.
+   # Format that was used to compress source HTML is stored in <results_storage_fbk>,
+   # separately for each test run.
+   #
+   # If this parameter remains undefined then standard ZIP format will be used.
+   # Note that 7-Zip and zstd provide much higher compression than ZIP.
+   # Otherwise one and only one of following lines must be uncommented:
+   #
+   # report_compressor=..\util\compressors\7z.exe.zip
+   # report_compressor=..\util\compressors\zstd.exe.zip
+   # report_compressor = <no value defined>
 
-   # OPTIONAL. LINUX ONLY.
-   # Utility to compress HTML report and (if FB crash occured) stack trace of dump.
-   # Compressed result will be saved in the database defined by <results_storage_fbk>.
-   # By default, GZIP utility will be used that must present on most Linux instances.
-   # Supported compressors: gzip, p7zip, zstd and zip
-   # If none of them can be found then HTML report will be stored without compression.
-   # Extraction of HTML report will be done by 'oltp_overall_report' scenario which supposes
-   # that apropriate packages already was installed, namely:
-   #     'gzip'  - to extract from .gz; binary for extraction: /usr/bin/7za
-   #     'p7zip' - to extract from .7z, .gz and .zip; binary for extraction: /usr/bin/7za
-   #     'zstd'  - to extract from .zstd; binary for extraction: /usr/bin/zstd
-   # Note that 7za and zstd provide much higher compression than ZIP or GZIP.
-   # This parameter can be left commented out if you don't plan to run test on regular basis
-   # with transferring its (compressed) results to scenario 'oltp_overall_report'.
-   #
-   # Examples:
-   # report_compress_cmd=/usr/bin/gzip
-   # report_compress_cmd=/usr/bin/7za
-   # report_compress_cmd=/usr/bin/zstd
-   # report_compress_cmd=/usr/bin/zip
-   #
-   # report_compress_cmd = <no value defined>
 
 
    # This parameter is used in 'oltp-scheduled' scenario and points to the name of etalone DB which serves
@@ -784,12 +796,12 @@
    #     Statement failed, SQLSTATE = 22021
    #     COLLATION NAME_COLL for CHARACTER SET UTF8 is not installed
    # In this case try following command:
-   #     <fbc>/gfix -icu <etalon_dbnm>
+   #     <fbc>\gfix.exe -icu <etalon_dbnm>
    # NOTE.
    # It is recommended to store this database in the same directory as <dbnm> and change its state to 'full shutdown'
    # or at least make it read only.
    #
-   etalon_dbnm = $(dirname "$dbnm")/oltp_40.etalone.fdb
+   etalon_dbnm = C:\data\oltp_50.etalone.fdb
 
 
    # Create report in HTML format (along with plain text) ? Avaliable options: 1 = yes, 0 = no.
@@ -831,9 +843,9 @@
    #     * Total RAM size, Gb;
    #     * Timestamp when test started.
    # Example of report name when this parameter is 'regular':
-   #     YYYYmmDD_HHMM_score_07011_build_2241_ss40__3h00m_100_att_fw__on_cpu4_ram32.txt
+   #     YYYYmmDD_HHMM_score_07182_build__192_ss50__3h00m_100_att_fw__on_cpu4_ram32.txt
    # Example of report name when this parameter is 'benchmark':
-   #     ss40_fw_off_split_most__sel_1st_one_index_score_07989_build_2241__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
+   #     ss50_fw_off_split_most__sel_1st_one_index_score_07182_build__192__3h00m_100_att_YYYYmmDD_HHMM_cpu4_ram32.txt
    #     (where 'YYYYmmDD_HHMM' is timestamp of test start)
    #
    # Available options when uncommented: regular | benchmark
@@ -843,10 +855,10 @@
 
    # Suffix for adding at the end of report name. CHANGE this value to some useful info about host location, 
    # operating system, hardware specifics, FB instance etc.
-   # For example, use value of 'hostname' command.
+   # For example, use value of %COMPUTERNAME% environment variable
    # You do not need to specify here number of CPU cores or RAM size: they will be added to file name by test itself.
    #
-   file_name_this_host_info = linux_hostname
+   file_name_this_host_info = !COMPUTERNAME!
 
 
    # Do we want to include in the report details about server hardware and OS ?
@@ -854,13 +866,6 @@
    # This setting has sense only when you launch ISQL sessions at the server which you are 
    # interesting on, i.e. when value of 'host' parameter is localhost or 127.0.0.1
    # Some kind of information can be inaccessible if you work as user without admin rights.
-   # NOTE: scenario that is launched by cron will see PATH=/usr/bin:/bin, i.e. some utilities from /usr/sbin
-   # will not be avaliable. Some of these utilities ((e.g. fdisk and dmidecode) are used to gather hardware data.
-   # This can be solved if cron job line will contain: " . /etc/profile; " before the command that is to be launched.
-   # Example:
-   # 0   10,20     *       *       *     . /etc/profile; /opt/oltp-emul/1run_oltp_emul.sh 30 100
-   #
-   # See also: https://unix.stackexchange.com/questions/148133/how-to-set-crontab-path-variable
    #
    gather_hardware_info = 1
 

@@ -33,6 +33,7 @@ set fb=%1
 if .%fb%.==.25. goto chk2
 if .%fb%.==.30. goto chk2
 if .%fb%.==.40. goto chk2
+if .%fb%.==.50. goto chk2
 call :no_arg1 !abendlog!
 
 :chk2
@@ -339,6 +340,8 @@ for %%v in (%varlist%) do (
 
 if .%err_setenv%.==.1. goto no_env
 
+
+
 @rem 04.05.2020 do NOT ever leave this parameter undefined!
 if not defined sleep_min (
     set sleep_min=0
@@ -436,28 +439,7 @@ if %mon_unit_perf% EQU 2 (
 
 if not .%fb%. == .25. (
     
-    set some_undefined=1
-    if not "%mon_query_role%"=="" if not "%mon_usr_prefix%"=="" if not "%mon_usr_passwd%"=="" (
-        set some_undefined=0
-    ) else (
-        if "%mon_query_role%"=="" if "%mon_usr_prefix%"=="" if "%mon_usr_passwd%"=="" (
-            set some_undefined=0
-        )
-    )
-
-    echo Param: ^|mon_usr_prefix^|, value: ^|%mon_usr_prefix%^|
-    echo Param: ^|mon_usr_passwd^|, value: ^|%mon_usr_passwd%^|
-    echo Param: ^|mon_query_role^|, value: ^|%mon_query_role%^|
-
-    if !some_undefined! EQU 1 (
-        call :sho "CONFIGURATION ISSUE. Parameters 'mon_usr_prefix', 'mon_usr_passwd' and 'mon_query_role' must be either all defined or all commented out." !log4tmp!
-        if .%can_stop%.==.1. (
-            echo.
-            echo Press any key to FINISH this batch. . .
-            pause>nul
-            goto final
-        )
-    )
+    call :chk_mon_usr_pwd_role
 
     if NOT "%mon_usr_prefix%"=="" (
         if not "%mon_usr_prefix:~-1%"=="_" (
@@ -1155,7 +1137,7 @@ call :show_db_and_test_params !conn_pool_support! %log4tmp% %log4all%
     echo "execute block as"
     echo "begin"
     if .!conn_pool_support!.==.1. (
-        echo "    if ("
+        echo "    if (
         echo "        exists(select * from rdb$triggers where rdb$trigger_name = upper('TRG_DISCONNECT') )"
         echo "        and exists(select * from rdb$relations where rdb$relation_name = upper('PERF_EDS') )"
         echo "        ) then"
@@ -1678,14 +1660,16 @@ goto :end_of_test
         echo.
         echo Please specify:
         echo.
-        echo arg #1 =  25 ^| 30 ^| 40 -- version of Firebird which will be tested:
-        echo           ^^    ^^    ^^
+        echo arg #1 =  25 ^| 30 ^| 40  ^| 50 -- major version of Firebird which will be tested:
+        echo           ^^    ^^    ^^     ^^
+        echo           ^|    ^|    ^|     ^|
+        echo           ^|    ^|    ^|     +------ Firebird 5.x
         echo           ^|    ^|    ^|
-        echo           ^|    ^|    +--- Firebird 4.0
+        echo           ^|    ^|    +------------- Firebird 4.x
         echo           ^|    ^|
-        echo           ^|    +------------ Firebird 3.0
+        echo           ^|    +------------------- Firebird 3.x
         echo           ^|
-        echo.          +--------------------- Firebird 2.5
+        echo.          +------------------------- Firebird 2.5.x
         echo.
         echo arg #2 =  ^<N^> -- number of ISQL sessions to be started;
         echo.
@@ -3099,15 +3083,23 @@ goto:eof
         echo!prefix! ----------------------------------------------------------------------------------------------------
         echo!prefix! NOTE: in case when this script is generated too slow consider adding folder '%tmpdir%'
         echo!prefix! to the list of items that must be excluded from Windows Defender Antivirus scan.
-        echo!prefix! You can do it in two ways:
-        echo!prefix! 1. Direct modification of Windows Registry:
-        echo!prefix!    1.1 Find the key for folders that must be excluded:
+        echo!prefix! You can do it in several ways:
+        echo!prefix! 1. Windows Defender GUI:
+        echo!prefix!    1.1 Press ^<Win-Key^> + S and type in opened field: cmd
+        echo!prefix!    1.2 Right click on appearing link to command prompt and choose: "Run As Administrator"
+        echo!prefix!    1.3 Session of cmd.exe with elevated access must be launched. Type there:
+        echo!prefix!        "C:\Program Files\Windows Defender\msascui.exe"
+        echo!prefix!    1.4 In opening window goto "Settings" and follow instructions from one of these pages:
+        echo!prefix!        Windows 10:
+        echo!prefix!            https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
+        echo!prefix!        Windows 8 or 8.1:
+        echo!prefix!            https://answers.microsoft.com/en-us/protect/forum/all/how-to-exclude-a-filefolder-from-windows-defender/f32ee18f-a012-4f02-8611-0737570e8eee
+        echo!prefix! 2. Start cmd.exe with elevated access and type there:
+        echo!prefix!        powershell -Command Add-MpPreference -ExclusionPath "%tmpdir%"
+        echo!prefix! 3. Direct modification of Windows Registry:
+        echo!prefix!    3.1 Find the key for folders that must be excluded:
         echo!prefix!        HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths
-        echo!prefix!    1.2 Add parameter with name = %tmpdir%, set its type to DWORD and set value to 0.
-        echo!prefix! 2. Windows Defender GUI:
-        echo!prefix!    2.1 Press "Start" / "Run" and then type: 'windowsdefender:' (without single quotes^)
-        echo!prefix!    2.2 Follow instructions from this page:
-        echo!prefix!        https://support.microsoft.com/en-us/help/4028485/windows-10-add-an-exclusion-to-windows-security
+        echo!prefix!    3.2 Add parameter with name = %tmpdir%, set its type to DWORD and set value to 0.
         echo!prefix! ----------------------------------------------------------------------------------------------------
     ) >!tmpmsg!
     type !tmpmsg!
@@ -3226,22 +3218,32 @@ goto:eof
     )
     call :sho "fbb=!fbb!" !log4tmp!
 
-    echo !fbb! | findstr /i /c:"V2.5" /c:"T2.5" > nul
+    set fbv=UNKNOWN
+    echo !fbb! | findstr /i /r /c:"[V,T]2.5.[0-9]" > nul
     if NOT errorlevel 1 (
         set fbv=25
-    ) else (
-        echo !fbb! | findstr /i /c:"V3." /c:"T3." > nul
+    )
+    if /i .!fbv!.==.UNKNOWN. (
+        echo !fbb! | findstr /i /r /c:"[V,T]3.[0-9].[0-9]" > nul
         if NOT errorlevel 1 (
             set fbv=30
-        ) else (
-            echo !fbb! | findstr /i /c:"V4." /c:"T4."
-            if NOT errorlevel 1 (
-                set fbv=40
-            ) else (
-                call :sho "Could not get FB major version from string !fbb!" %log4tmp%
-                goto :final
-            )
         )
+    )
+    if /i .!fbv!.==.UNKNOWN. (
+        echo !fbb! | findstr /i /r /c:"[V,T]4.[0-9].[0-9]" > nul
+        if NOT errorlevel 1 (
+            set fbv=40
+        )
+    )
+    if /i .!fbv!.==.UNKNOWN. (
+        echo !fbb! | findstr /i /r /c:"[V,T]5.[0-9].[0-9]" > nul
+        if NOT errorlevel 1 (
+            set fbv=50
+        )
+    )
+    if /i .!fbv!.==.UNKNOWN. (
+        call :sho "Could not get FB major version from string !fbb!" %log4tmp%
+        goto :final
     )
 
     for /f "delims=. tokens=4" %%b in ("!fbb!") do (
@@ -5651,6 +5653,7 @@ goto:eof
           set result=!src_list:~1,-1!
        )
     )
+
     endlocal & set "%~2=%result%"
 
 goto:eof
@@ -5699,6 +5702,66 @@ goto:eof
         echo !val!>>!tmp_output!
     )
     move !tmp_output! !input_file! 1>nul
+
+goto:eof
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:chk_mon_usr_pwd_role
+
+    echo.
+    call :sho "Internal routine: chk_mon_usr_pwd_role." %log4tmp%
+    echo.
+
+    setlocal
+
+    set some_undefined=1
+    if "%mon_query_role%"=="" (
+        set p1_defined=0
+    ) else (
+        set p1_defined=1
+    )
+
+    if "%mon_usr_prefix%"=="" (
+        set p2_defined=0
+    ) else (
+        set p2_defined=1
+    )
+
+    if "%mon_usr_passwd%"=="" (
+        set p3_defined=0
+    ) else (
+        set p3_defined=1
+    )
+
+    if .!p1_defined!!p2_defined!!p3_defined!.==.000. (
+        set some_undefined=0
+    )
+    if .!p1_defined!!p2_defined!!p3_defined!.==.111. (
+        set some_undefined=0
+    )
+
+    if .1.==.0. (
+        echo Param: ^|mon_usr_prefix^|, value: ^|%mon_usr_prefix%^|
+        echo Param: ^|mon_usr_passwd^|, value: ^|%mon_usr_passwd%^|
+        echo Param: ^|mon_query_role^|, value: ^|%mon_query_role%^|
+        echo !p1_defined!!p2_defined!!p3_defined!
+        echo some_undefined=!some_undefined!
+    )
+
+    if !some_undefined! EQU 1 (
+        call :sho "CONFIGURATION ISSUE. Parameters 'mon_usr_prefix', 'mon_usr_passwd' and 'mon_query_role' must be either all defined or all commented out." !log4tmp!
+        if .%can_stop%.==.1. (
+            echo.
+            echo Press any key to FINISH this batch. . .
+            pause>nul
+            goto final
+        )
+    )
+
+    call :sho "Leaving routine: chk_mon_usr_pwd_role." %log4tmp%
+    
+    endlocal
 
 goto:eof
 
