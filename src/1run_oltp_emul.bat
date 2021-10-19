@@ -622,7 +622,7 @@ if not defined fbb (
     type %tmplog% >> %log4tmp%
     del %tmplog%
 
-    if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
+    if .%can_stop%.==.1. (
         echo.
         echo Press any key to FINISH this batch. . .
         pause>nul
@@ -764,8 +764,9 @@ if .!unavail_db!.==.1. (
 )
 
 :chk4open
-find /c /i "Error while trying to open file" %tmperr% >nul
-if errorlevel 1 (
+if exist !tmperr! (
+    findstr /m /i /c:"Error while trying to open file" !tmperr! > nul
+    if errorlevel 1 (
 
     if .%build_was_cancelled%.==.0. (
 
@@ -824,13 +825,15 @@ if errorlevel 1 (
         echo Database: ^>%dbnm%^< -- DOES exist but its creation was not completed.
         echo.
 
-        if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
+            if .%wait_if_not_exists%.==.1. (
+                if .%can_stop%.==.1. (
             echo ################################################################################
             echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
             echo ################################################################################
             echo.
             pause>nul
         )
+            )
 
         set need_rebuild_db=1
         @rem ==> then we have to invoke :prepare->:make_db_objects subroutines
@@ -842,7 +845,7 @@ if errorlevel 1 (
     @rem db_build_finished_ok = 0 xor 1
 
 
-) else (
+    ) else (
 
     @rem Text "Error while trying to open file" was found in error log.
 
@@ -858,7 +861,9 @@ if errorlevel 1 (
     set need_rebuild_db=1
     @rem ==> then we have to invoke :prepare->:make_db_objects subroutine
 
+    )
 )
+@rem end of: if exist !tmperr!
 
 del %tmpclg% 2>nul
 del %tmperr% 2>nul
@@ -2063,7 +2068,44 @@ goto:eof
       call :display_win_defender_notes screen !tmp_gen_wrk_msg! !log4tmp!
 
 
+      set TIL_FOR_WORK=snapshot
+      if !fb! GEQ 40 (
+          (
+              echo set heading off;
+              echo commit;
+              echo set transaction read committed record_version;
+              echo -- 4 = read committed read consistency; otherwise ReadConsistency = 0:
+              echo -- ReadConsistency        1:default            0:legacy
+              echo -- --------------------------------------------------------------
+              echo -- mon$isolation_mode         4                2 = RC rec_vers
+              echo --                            4                3 = RC NO rec_vers
+              echo -- --------------------------------------------------------------
+              echo select mon$isolation_mode from mon$transactions where mon$transaction_id=current_transaction;
+              echo commit;
+          ) > !tmpsql!
+
+          set run_isql=!fbc!\isql.exe %dbconn% %dbauth% -i !tmpsql! -q -nod
+          cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
+
+          call :catch_err run_isql !tmperr! !tmpsql! n/a
+          @rem                1       2        3      4
+
+          for /f %%a in (!tmpclg!) do (
+              set isol_mode=%%a
+          )
+          if .!isol_mode!.==.4. (
+              set TIL_FOR_WORK=read committed read consistency
+          )
+          for /d %%x in (!tmperr!,!tmpsql!,!tmpclg!) do (
+              del %%x 2>nul
+          )
+
+      )
+
       del %generated_sql% 2>nul
+      if !fb! GEQ 40 (
+          echo SET KEEP_TRAN_PARAMS ON;>>%generated_sql%
+      )
 
       (
           echo -- ### WARNING: DO NOT EDIT ###
@@ -2072,12 +2114,6 @@ goto:eof
           call :display_win_defender_notes sql  !tmp_gen_wrk_msg! !log4tmp!
           echo.
       ) >> %generated_sql%
-
-      set TIL_FOR_WORK=snapshot
-      if !fb! GEQ 40 (
-          set TIL_FOR_WORK=read committed read consistency
-          echo SET KEEP_TRAN_PARAMS ON;>>%generated_sql%
-       )
 
       if /i .%mode%.==.init_pop. (
           (
@@ -3499,7 +3535,7 @@ goto:eof
         )
     )
     for /d %%f in (!tmpsql!,!tmpclg!,!tmperr!) do (
-        del %%f
+        del %%f 2>nul
     )
 
     endlocal
@@ -4534,6 +4570,7 @@ goto:eof
     for /f %%a in ("!tmpsql!") do (
         set tmpclg=%%~dpna.log
         set tmperr=%%~dpna.err
+        set tmptxt=%%~dpna.tmp
     )
     del !tmpsql! 2>nul
 
@@ -4618,6 +4655,9 @@ goto:eof
             set /a fb_build_no=%%b
         )
     )
+    @rem fb_major = V2.5; V3.0; V4.0; T5.0 etc
+    @rem Get first digit of fb_major: 2; 3; 4 or 5:
+    @rem set fb_msubs=!fb_major:~1,1!
 
     @rem :::NOTE:::
     @rem Value of 'fb_build_no' will be written here in the SETTINGS table and further, at the final stage of test,
@@ -4935,27 +4975,8 @@ goto:eof
 
     call :sho "All other parameters are shown in %log4all%." !log4tmp!
 
-    findstr /m /i /c:"DefaultDbCachePages" !tmpclg! >nul
-    if NOT errorlevel 1 (
-        findstr /m /i /c:"FileSystemCacheThreshold" !tmpclg! >nul
-        if errorlevel 1 (
-            (
-                echo ###  A C H T U N G  ###     YOU MUST DEFINE PARAMETER 'FileSystemCacheThreshold'
-                echo.
-                echo You have to EXPLICITLY define parameter 'FileSystemCacheThreshold' in firebird.conf, regardless that it can be commented.
-                echo Please add it and assign value NOT LESS than number of pages that is specified for 'DefaultDbCachePages'.
-                echo NOTE that since Firebird 3.0 both DefaultDbCachePages and FileSystemCacheThreshold can be set per database-level.
-            ) >!tmpclg!
-            type !tmpclg!
-            type !tmpclg! >> %log4all%
-            echo.
-            echo Press any key to FINISH this batch. . .
-            del !tmpclg! 2>nul
-            pause>nul
-            goto final
-        )
-    )
 
+    @rem 07.10.2021: disabled check of DefaultDbCachePages and DefaultDbCachePages, see subroutine 'chk_FSCacheUsage'
     @rem Logging DDL of QDistr / XQD* indices: do NOT run it here, it will appear in final report by call from oltp_run_worker
 
     call :sho "Leaving routine: show_db_and_test_params." %log4tmp%
