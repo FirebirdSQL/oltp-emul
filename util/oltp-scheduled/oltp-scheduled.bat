@@ -542,11 +542,10 @@ if .!upd_fb!.==.1. (
             type !tmplog!>>!joblog!
 
             for /f %%b in ("!href_file!") do (
-                    @rem Firebird-3.0.7.33380-0_x64.7z -- i.e. name of compressed .7z, without "./" prefix
-                    set fb_build_file=%%~nxb
-                    for /f "tokens=5 delims=-." %%i in ("!fb_build_file!") do (
-                        set actual_fb_snapshot=%%i
-                    )
+                @rem Firebird-3.0.7.33380-0_x64.7z -- i.e. name of compressed .7z, without "./" prefix
+                set fb_build_file=%%~nxb
+                for /f "tokens=5 delims=-." %%i in ("!fb_build_file!") do (
+                    set actual_fb_snapshot=%%i
                 )
             )
             @rem for /f %%b in ("!href_file!")
