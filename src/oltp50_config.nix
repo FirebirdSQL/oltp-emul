@@ -846,7 +846,7 @@
    # For example, use value of 'hostname' command.
    # You do not need to specify here number of CPU cores or RAM size: they will be added to file name by test itself.
    #
-   file_name_this_host_info = linux_hostname
+   file_name_this_host_info = $(hostname)
 
 
    # Do we want to include in the report details about server hardware and OS ?
