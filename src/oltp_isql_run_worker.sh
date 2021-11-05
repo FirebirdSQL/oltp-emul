@@ -1395,7 +1395,7 @@ do
         rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
         [[ ${rhs:0:1} == "$" ]] && rhs=$(eval "echo $rhs")
         # echo "lhs=.${lhs}. ; rhs=.${rhs}."
-        declare $lhs=$rhs
+        declare $lhs="$rhs"
         if [ $? -gt 0 ]; then
           echo +++ ACHTUNG +++ SOMETHING WRONG IN YOUR CONFIG FILE
           exit

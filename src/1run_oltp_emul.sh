@@ -12,6 +12,27 @@ sho() {
   echo $dts. $msg>>$log
 }
 
+#----------------------------------------------------------
+
+bulksho() {
+    local tmplog=$1
+    local joblog=$2
+    local keep_tmp=${3:-0}
+    local dts=$(date +'%d.%m.%y %H:%M:%S')
+
+    # we have to set IFS to empty string in order to preserve leading spaces that are stored in the source file indentation
+    # https://stackoverflow.com/questions/7314044/use-bash-to-read-line-by-line-and-keep-space
+    # 'while IFS=... read...' - makes IFS be changed locally, only for duration of this loop:
+    while IFS='' read -r line
+    do
+        echo $dts. "${line}" # NB: must enclose in quotes for disabling 'evaluation' of '*' or other wildcard characters!
+        echo $dts. "$line" >> $joblog
+    done < <(cat $tmplog)
+    [[ $keep_tmp -eq 0 ]] && rm -f $tmplog
+}
+
+#----------------------------------------------------------
+							    
 display_intention() {
     local msg=$1
     local run_cmd=$2
@@ -31,6 +52,8 @@ cat <<- EOF ->>$log4all
 EOF
 }
 
+#----------------------------------------------------------
+
 log_elapsed_time() {
   # 4 debug only
   local s1=$s1
@@ -42,6 +65,8 @@ log_elapsed_time() {
   #echo $msg
   echo $msg >>$plog
 }
+
+#----------------------------------------------------------
 
 msg_noarg() {
   clear
@@ -56,6 +81,8 @@ msg_noarg() {
   echo Script is now terminated.
 }
 
+#----------------------------------------------------------
+
 msg_nocfg() {
   echo
   echo Config file \'$1\' either not found or is empty.
@@ -63,6 +90,8 @@ msg_nocfg() {
   echo Script is now terminated.
   exit 1
 }
+
+#----------------------------------------------------------
 
 catch_err() {
   local tmperr=$1
@@ -92,6 +121,8 @@ catch_err() {
   fi
 }
 
+#----------------------------------------------------------
+
 msg_novar() {
   local undef_var=$1
   local cfg_file=$2
@@ -117,6 +148,8 @@ msg_novar() {
   fi
 }
 
+#----------------------------------------------------------
+
 msg_nofile() {
 	cat <<-EOF >$tmplog
 
@@ -136,6 +169,8 @@ msg_nofile() {
   rm -f $tmplog $tmperr
   exit 1
 }
+
+#----------------------------------------------------------
 
 msg_noserv() {
 	cat <<-EOF >$tmplog
@@ -165,6 +200,8 @@ msg_noserv() {
   exit 1
 }
 
+#----------------------------------------------------------
+
 msg_no_build_result() {
 	cat <<-EOF >$tmplog
 
@@ -183,13 +220,15 @@ msg_no_build_result() {
   echo
   echo Could NOT define result of previous building of test database.
   echo Script $1 finished with ERRORS:
-  echo -----------------------------------------
+  echo ------
   cat $2
-  echo -----------------------------------------
+  echo ------
   echo
   echo Script is now terminated.
   exit 1
 }
+
+#----------------------------------------------------------
 
 chk4crash() {
     # Check for indications of FB crash in ERROR log of just completed ISQL.
@@ -878,6 +917,14 @@ EOF
     sho "Generate SQL script for change DDL according to current value of 'create_with_split_heavy_tabs' parameter." $log4all
     cat <<- EOF >>$bld
 		set echo off;
+
+		-- 05.11.2022, strange message on LINUX ony, 3.x and 4.x:
+		-- Statement failed, SQLSTATE = 22021
+		-- COLLATION UNICODE_CI for CHARACTER SET UTF8 is not installed
+		-- After line 329 in file /home/ibase/oemul.4test/src/oltp_split_heavy_tabs_1.sql		
+		-- ==> we must prevent from any further execution after any exception!
+		SET BAIL ON;
+		
 		-- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
 		out $post_handling_out;
 
@@ -920,7 +967,7 @@ EOF
     run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
     display_intention "Build database: final phase." "$run_isql" "$log" "$err"
     $run_isql 1>>$log 2>$err
-    catch_err $err "Could not finish build DB. Check script $bld"
+    catch_err $err "Could not build DB (script: $bld). Try to ERASE file '$dbnm' and repeat."
 
     sho "Creation of database objects COMPLETED." $log4all
 
@@ -1866,6 +1913,12 @@ gen_working_sql() {
 
  local unit_selection_method=random
 
+ local tmpsql=$tmpdir/$FUNCNAME.sql
+ local tmplog=$tmpdir/$FUNCNAME.log
+ local tmperr=$tmpdir/$FUNCNAME.err
+ local run_isql="$isql_name $dbconn -i $tmpsql -q -nod $dbauth"
+ local isol_mode
+
  local verb=50
  #[[ $mode = "init_pop" ]] && verb=10 || verb=50
 
@@ -1875,7 +1928,6 @@ gen_working_sql() {
      echo -e "Mode='$mode': disable sleep* values while add required initial count of documents."
  fi
 
-rm -f $sql
 cat <<- EOF
      Input arguments: 
      1) mode:			$mode
@@ -1894,9 +1946,28 @@ EOF
   fi
 
 TIL_FOR_WORK="snapshot"
+rm -f $sql
+
 if [[ $fb -ge 40 ]]; then
+		cat<<-"EOF" > $tmpsql
+		set heading off;
+		commit;
+		set transaction read committed record_version;
+		-- 4 = read committed read consistency; otherwise ReadConsistency = 0:
+		-- ReadConsistency        1:default            0:legacy
+		-- --------------------------------------------------------------
+		-- mon$isolation_mode         4                2 = RC rec_vers
+		--                            4                3 = RC NO rec_vers
+		-- --------------------------------------------------------------
+		select mon$isolation_mode from mon$transactions where mon$transaction_id=current_transaction;
+		commit;
+		EOF
+		$run_isql 1>$tmplog 2>$tmperr
+		isol_mode=$(grep . $tmplog)
+		if [[ $isol_mode -eq 4 ]]; then
     TIL_FOR_WORK="read committed read consistency"
-    echo "SET KEEP_TRAN_PARAMS ON;">>$sql
+		fi
+		rm -f $tmpsql $tmplog $tmperr
 fi
 
 cat <<- EOF >>$sql
@@ -1904,7 +1975,12 @@ cat <<- EOF >>$sql
 	-- Generated auto by $shname, routine: $FUNCNAME
 	-- SQL script generation started at $(date +'%d.%m.%Y %H:%M:%S')
 EOF
- if  [ "$mode" = "init_pop" ] ; then
+
+if [[ $fb -ge 40 ]]; then
+   	echo "SET KEEP_TRAN_PARAMS ON;">>$sql
+fi
+
+if  [ "$mode" = "init_pop" ] ; then
 	cat <<- EOF >>$sql
 		-- mode='$mode': get data from mon\$database for verifying settings of database
 		-- NB-1: FW must be (temply) set to OFF
@@ -3301,7 +3377,7 @@ do
         rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
         [[ ${rhs:0:1} == "$" ]] && rhs=$(eval "echo $rhs")
         # echo "lhs=.${lhs}. ; rhs=.${rhs}."
-        declare $lhs=$rhs
+        declare $lhs="$rhs"
         if [ $? -gt 0 ]; then
           echo +++ ACHTUNG +++ SOMETHING WRONG IN YOUR CONFIG FILE
           exit
@@ -3660,11 +3736,52 @@ fi
 
 rndname=$RANDOM
 
-cat <<-EOF >>$tmpchk
+cat <<-"EOF" >>$tmpchk
     set heading off;
     set list on;
     set bail on;
-    recreate exception exc_gen_stop_test_invalid 'Test can not start because value of generator ''g_stop_test'' is NOT zero: @1';
+    set term ^;
+    
+    -- Here we check that:
+    -- =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+    -- DB not in 'full shutdown' state or 'read only' mode;
+    -- DB not in any kind of 'maintenance' state;
+    -- There is table 'SEMAPHORES' with column task='all_build_ok';
+    -- We are able to restart generator 'g_stop_test' from 0 // 'ALTER SEQUENCE..' DOES NOT WORK since 4.0.0.2131
+    -- NOTES.
+    -- 1. Adjusting values of SETTINGS table to config parameters will be done in 'inject_actual_setting' subroutine.
+    -- 2. We also have to write some rows in GTT (to be sure that 'firebird' account has sufficient access rights to
+    -- the directory that is specified by FIREBIRD_TMP env. variable). This is done in 'chk_db_access' subroutine.
+    -- =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+
+
+    -- This will fail when DB is in 'full shutdown' state or 'read only' mode:
+    recreate exception exc_db_online_required 'Database is in maintenance state. Online required. CAN NOT PROCEED.'
+    ^
+    
+    -- This will fail if DB is in any kind of 'maintenace' mode (i.e. not in 'online' state):
+    execute block as
+    begin
+        if ( exists(select 1 from mon$database where mon$shutdown_mode <> 0) ) then
+        begin
+            exception exc_db_online_required;
+        end
+    end^
+    drop exception exc_db_online_required
+    ^
+
+    -- Following will fail if table 'SEMAPHORES' does not exist.
+    -- This error is *expected* because previous building DB process could be interrupted
+    -- and we have to restart it in such case:
+    select iif( exists( select * from semaphores where task='all_build_ok' ),
+		        'all_dbo_exists',
+		        'some_dbo_absent'
+	    ) as "build_result="
+    from rdb$database
+    ^
+
+    recreate exception exc_gen_stop_test_invalid 'Test can not start because value of generator ''g_stop_test'' is NOT zero: @1'
+    ^
 
     -- This sequence serves as 'stop-flag' for every ISQL attachment.
     -- Also here we check that database is not in read_only mode.
@@ -3672,9 +3789,11 @@ cat <<-EOF >>$tmpchk
     -- DISABLED 07.08.2020:
     -- alter sequence g_stop_test restart with 0; -- DOES NOT WORK since 4.0.0.2131! gen_id(,0) will return -1 instead of 0!
 
-    select gen_id(g_stop_test,0) gen_stop_before_restart from rdb\$database;
-    -- Added 07.08.2020:
-    set term ^;
+    -- For debug purpoces only:
+    select gen_id(g_stop_test,0) gen_stop_before_restart from rdb$database
+    ^
+
+    -- Added 07.08.2020: RESTART SEQUENCE G_STOP_TEST without 'alter sequence' usage!
     execute block as
         declare c bigint;
     begin
@@ -3683,7 +3802,9 @@ cat <<-EOF >>$tmpchk
     ^
     commit
     ^
-    select gen_id(g_stop_test,0) gen_stop_after_restart from rdb\$database
+
+    -- For debug purpoces only:
+    select gen_id(g_stop_test,0) gen_stop_after_restart from rdb$database
     ^
     execute block as
     begin
@@ -3701,34 +3822,67 @@ cat <<-EOF >>$tmpchk
     commit;
     drop exception exc_gen_stop_test_invalid;
     commit;
-    -- Now we have to:
-    -- 0. Check that all database objects already exist:
-    -- 1. Ensure that Firebird engine *can* add rows to GTT, i.e. it *has* access to $FIREBIRD_TMP directory on server;
-    -- 2. Database is not in read-only mode (updating 'settings' table with actual values of some config params).
-    -- 3. Update some parameters in the database to be match for their actual values from config file
-    --   see invocations of 'inject_actual_setting' subroutine
 
-    select iif( exists( select * from semaphores where task='all_build_ok' ),
-		        'all_dbo_exists',
-		        'some_dbo_absent'
-	    ) as "build_result="
-    from rdb\$database;
 EOF
 
 run_isql="$isql_name $dbconn -i $tmpchk -q -nod -c 256 $dbauth"
 display_intention "Check whether DB is avaliable and has all needed objects." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
-echo check $tmperr
-if grep -q -i "Permission denied" $tmperr; then
-	cat <<- EOF > $log4tmp
-		#########################################################################
-		DBMS account ('firebird') has no sufficient rights to open file that
-		is specified by config parameter 'dbnm' (read/write access is required):
-		$dbnm
-		#########################################################################
-		Content of STDERR file '$tmperr':
+
+if [[ -s $tmperr ]]; then
+	cat<<-EOF > $log4tmp
+	Script finished with at least one error:
+	=======
+	$(cat $tmperr)
+	=======
 	EOF
-	cat $tmperr >>$log4tmp
+	cat $log4tmp
+	cat $log4tmp>>$log4all
+	rm -f $log4tmp
+fi
+
+cat <<-EOF >$log4tmp
+Is a directory
+Permission denied
+unavailable database
+not a valid database
+database .*shutdown
+read-only database
+unsupported on-disk
+EOF
+
+unavail_db=0
+while IFS='' read -r line
+do
+    ptn=${line// /[ \\t]\\+}
+    if grep -q -i "${ptn}" $tmperr; then
+	unavail_db=1
+	break
+    fi
+done < <(cat $log4tmp)
+
+if [[ $unavail_db -eq 1 ]]; then
+	cat<<-EOF > $log4tmp
+		### 
+		###  FOUND UNRESOLVED PROBLEM WITH ACCESS TO DATABASE.
+		### 
+		###  You have to check whether config parameter 'dbnm' points
+		###  to valid directory and/or Firebird database file:
+		###  ${dbnm}
+		### 
+		###  Existing database must have apropriate ODS, pass validation,
+		###  be online and writeable for non-privileged users.
+		### 
+		###  Ensure that your database has no any of following attributes
+		###  in its header:
+		###    'shutdown';
+		###    'single-user maintenance';
+		###    'multi-user maintenance';
+		###    'read only';
+		###    'replica'.
+		### 
+	EOF
+
 	cat $log4tmp
 	cat $log4tmp>>$log4all
 	rm -f $log4tmp
@@ -3760,8 +3914,6 @@ elif grep -q -i -e "$missing_icu_pattern" $tmperr; then
 	rm -f $log4tmp
 	pause Press any key to FINISH this script. . .
 	exit 1
-else
-    catch_err $tmperr "At least on error occured. Perhaps, generator 'g_stop_test' has incorrect initial value."
 fi
 
 # We must stop this .sh only in case when database has unsupported ODS or offline etc.
@@ -3792,9 +3944,7 @@ if grep -q -i $missing_db_pattern $tmperr; then
     rebuild_was_invoked=1
 else
 
-    badmsg=$(grep -i "Is a directory\|unavailable database\|not a valid\|unsupported on-disk\|read-only\|shutdown" $tmperr | wc -l)
-
-    [[ $badmsg -gt 0 ]] && msg_no_build_result $tmpchk $tmperr || echo "Database EXISTS and its state is ONLINE."
+    sho "Database EXISTS and its state is ONLINE." $log4all
 
     #..........  t e m p - l y    c h a n g e    F W    t o    O F F ........
     adjust_fw_attrib async
@@ -3805,17 +3955,23 @@ else
     db_build_finished_ok=0
     if [ -s $tmperr ];then
         #echo Script that checks whether DB building process was completed without errors is NOT EMPTY.
-	sho "At least one ERROR found while checking result of previous DB building process." $log4all
-        sho "Name of script: $tmpclg" $log4all
-        sho "Name of errlog: $tmperr" $log4all
-        cat $tmperr
-        cat $tmperr >>$log4all
+	cat <<- EOF > $log4tmp
+		At least one ERROR found while checking result of previous DB building process.
+		Name of SQL script: $tmpchk
+		STDOUT: $tmpclg
+		STDERR: $tmperr
+		----------------------
+		Content of errors log:
+		$(cat $tmperr)
+		
+	EOF
+        cat $log4tmp
+        cat $log4tmp >>$log4all
     else
         # open log and parse it as config with 'param = value' string:
-        sho "Script for checking DB objects $tmpchk completed SUCCESSFULLY." $log4all
-        echo Obtain results from its log $tmpclg
-        if grep -i "all_dbo_exists" $tmpclg > /dev/null ; then
+        if grep -q -i "all_dbo_exists" $tmpclg; then
             db_build_finished_ok=1
+    	    sho "Previous DB building process completed OK." $log4all
         fi
         
         # Try to create GTT and add several rows in it (check that FIREBIRD_TMP points to valid and accessible folder).
