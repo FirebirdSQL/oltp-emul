@@ -1055,7 +1055,7 @@ file_name_this_host_info_nix:    # For example, use value of 'hostname' command.
 file_name_this_host_info_all:    # You do not need to specify here number of CPU cores or RAM size: they will be added to file name by test itself.
 file_name_this_host_info_all:    #
 file_name_this_host_info_def_win:    file_name_this_host_info = !COMPUTERNAME!
-file_name_this_host_info_def_nix:    file_name_this_host_info = linux_hostname
+file_name_this_host_info_def_nix:    file_name_this_host_info = $(hostname)
 
 
 gather_hardware_info_all:    # Do we want to include in the report details about server hardware and OS ?
