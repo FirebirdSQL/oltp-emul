@@ -847,23 +847,25 @@ if exist !tmperr! (
 
     ) else (
 
-    @rem Text "Error while trying to open file" was found in error log.
+        @rem Text "Error while trying to open file" was found in error log.
 
-    echo.
-    echo Database file DOES NOT exist or has a problem with ACCESS.
-    echo.
-    if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
-        echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
         echo.
-        pause>nul
-    )
+        echo Database file DOES NOT exist or has a problem with ACCESS.
+        echo.
+        if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
+            echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
+            echo.
+            pause>nul
+        )
 
-    set need_rebuild_db=1
-    @rem ==> then we have to invoke :prepare->:make_db_objects subroutine
+        set need_rebuild_db=1
+        @rem ==> then we have to invoke :prepare->:make_db_objects subroutine
 
     )
+) else (
+    set need_rebuild_db=0
 )
-@rem end of: if exist !tmperr!
+@rem end of: if exist / not exist !tmperr! 
 
 del %tmpclg% 2>nul
 del %tmperr% 2>nul
@@ -6507,6 +6509,7 @@ goto:eof
     ) >> !tmpsql!
 
     call :sho "Leaving routine: sync_settings_generate_sql." %log4tmp%
+
     endlocal
 goto:eof
 @rem end of sync_settings_with_conf
