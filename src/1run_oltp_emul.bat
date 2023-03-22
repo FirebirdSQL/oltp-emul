@@ -86,14 +86,19 @@ set msg=Parsing config file '%cfg%'. Please wait. . .
 echo !msg!
 echo !msg!>!abendlog!
 set err_setenv=0
+set missed_env=NONE
 
 ::::::::::::::::::::::::::::::::
 :::: R E A D    C O N G I G ::::
 ::::::::::::::::::::::::::::::::
 
-call :readcfg %cfg% err_setenv
-if .%err_setenv%.==.1. goto no_env
+call :readcfg %cfg% err_setenv missed_env
+echo err_setenv=!err_setenv!
+echo missed_env=!missed_env!
 
+if .!err_setenv!.==.1. (
+    call :no_env !abendlog! !missed_env!
+)
 
 if .%gather_hardware_info%.==.1. (
     echo %host% | findstr /r /i /c:"localhost" /c:"127.0.0.1" >nul
@@ -850,7 +855,7 @@ if exist !tmperr! (
         @rem Text "Error while trying to open file" was found in error log.
 
         echo.
-        echo Database file DOES NOT exist or has a problem with ACCESS.
+        echo Database file either does not exist or has a problem with access.
         echo.
         if .%wait_if_not_exists%.==.1. if .%can_stop%.==.1. (
             echo Press ENTER to attempt database recreation or Ctrl-C for FINISH. . .
@@ -1212,6 +1217,7 @@ if !need_rebuild_db! EQU 1 (
       echo ##################################################################################
       echo Database has been created SUCCESSFULLY and is ready for initial documents filling.
       echo ##################################################################################
+      dir /-c !dbnm! | findstr /i /c:".fdb"
       echo.
       echo Change config setting 'wait_after_create' to 0 if this pause is unneeded.
       echo.
@@ -3214,6 +3220,7 @@ goto:eof
     @rem                    1     2       3     4       5          6                 7
 
     call :sho "Leaving routine: prepare." %log4tmp%
+
    
     endlocal
 goto:eof
@@ -3681,7 +3688,10 @@ goto:eof
     )
     (
          @rem -- DO NOT BECAUSE WE HAVE TO DROP THIS DB AFTER! -- echo set bail on;
-         echo create database '%host%/%port%:!rndname!' user '%usr%' password '%pwd%';
+         @rem Create ### TEMPORARY ## database in order just to verify
+         @rem whether External Connections Pool is supported or no:
+         echo create database '%host%/%port%:!rndname!' user '%usr%' password '%pwd%'
+         echo ;
          echo set count on;
          echo set list on;
          @rem echo set echo on;
@@ -3840,7 +3850,8 @@ goto:eof
     call :sho "Internal routine: try_create_db." %log4tmp%
     echo.
     @rem If we are here than database is absent. Suggest to create it but only in case when
-    @rem %dbnm% contains slashes (forwarding for LInux and backward for WIndows)
+    @rem %dbnm% contains slashes - forward for LInux and backward for WIndows
+
 
     set unquoted_dbnm=!dbnm:"=!
 
@@ -3884,12 +3895,20 @@ goto:eof
 
 
     set connect_only=0
-
+    (
     if .%is_embed%.==.1. (
-        echo create database '%unquoted_dbnm%' page_size 8192; commit; show database; quit;>%tmpsql%
+            echo create database '%unquoted_dbnm%' user '%usr%' password '%pwd%'
     ) else (
-        echo create database '%host%/%port%:%unquoted_dbnm%' page_size 8192 user '%usr%' password '%pwd%'; commit; show database; quit;>%tmpsql%
+            echo create database '%host%/%port%:%unquoted_dbnm%' user '%usr%' password '%pwd%'
     )
+        if NOT .%create_with_page_size%.==.. (
+            echo page_size = %create_with_page_size%
+        )
+        echo ;
+        echo commit;
+        echo show database;
+        echo quit;
+    ) > %tmpsql%
 
     echo.
     echo Attempt to CREATE database.
@@ -4334,14 +4353,11 @@ goto:eof
         echo -- Redirect output in order to auto-creation of SQL for change DDL after main build phase:
         echo out !post_handling_out!;
 
-        @rem result in .sql: 
-        @rem out "C:\TEMP\logs of oltp emul test 25\ foo rio bar.2\oltp_split_enable_25.tmp";	
-        
         echo -- This will generate SQL statements for changing DDL according to 'create_with_split_heavy_tabs' setting.
         echo in "%~dp0oltp_split_heavy_tabs_%create_with_split_heavy_tabs%.sql";
         echo.
         echo -- Result: previous OUT-command provides redirection of 
-        echo -- ^|IN in "%~dp0oltp_split_heavy_tabs_%create_with_split_heavy_tabs%.sql"^|
+        echo -- IN in "%~dp0oltp_split_heavy_tabs_%create_with_split_heavy_tabs%.sql"
         echo -- to the new temp file which will be applied on the next step. 
         echo -- Close current output:
         echo out;
@@ -4358,35 +4374,18 @@ goto:eof
         echo -- Finish building process: insert custom data to lookup tables:
         echo in "%~dp0oltp_data_filling.sql";
 
-        if not .%use_external_to_stop%.==.. (
-            echo.
-            echo -- External table for quick force running attaches to stop themselves by OUTSIDE command.
-            echo -- When all ISQL attachments need to be stopped before warm_time+test_time expired, this
-            echo -- external table (TEXT file^) shoudl be opened in editor and single ascii-character 
-            echo -- has to be typed followed by LF. Saving this file will cause test to be stopped.
-            echo recreate table ext_stoptest external '%use_external_to_stop%' ( s char(2^) ^);
-            echo commit;
-            echo.
-            echo -- REDEFINITION of view that is used by every ISQL attachment as 'stop-flag' source:
-            echo create or alter view v_stoptest as
-            echo select 1 as need_to_stop
-            echo from ext_stoptest;
-            echo commit;
-        )
-        echo.
-        
-    ) >> %tmpsql%
+    ) >> !tmpsql!
 
-    del !post_handling_out! 2>nul
 
     (
         echo.
         echo Content of building SQL script:
         echo +++++++++++++++++++++++++++++++
-        type %tmpsql%
+        type !tmpsql!
         echo +++++++++++++++++++++++++++++++
     ) >>%log4tmp%
 
+    del !post_handling_out! 2>nul
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c !cc_pages! -i %tmpsql%
     echo %time%. Run: %run_isql% 1^>%tmplog% 2^>%tmperr% >>%log4tmp%
 
@@ -4401,7 +4400,6 @@ goto:eof
         for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" /c:"add_info" %tmplog%') do echo STDOUT: %%a
         for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
     ) 1>>%log4tmp% 2>&1
-
 
     @rem operation was cancelled in 2.5: SQLSTATE = HY008 or `^C`
     @rem operation was cancelled in 3.0: SQLSTATE = HY008
@@ -5615,6 +5613,7 @@ goto:eof
 :readcfg
     set cfg=%1
     set err_setenv=0
+    set missed_env=NONAME
     @rem ::: NB ::: Space + TAB should be inside `^[ ]` pattern!
     @rem ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     for /F "tokens=*" %%a in ('findstr /i /r /c:"^[ 	]*[a-z,0-9]" %cfg%') do (
@@ -5630,6 +5629,7 @@ goto:eof
 
             if "%%j"=="" (
               set err_setenv=1
+              set missed_env=%%i
               echo. && echo ### NO VALUE found for parameter "%%i" ### && echo.
             ) else (
               for /F "tokens=1" %%p in ("!_tmp_par_!") do (
@@ -5644,6 +5644,7 @@ goto:eof
     set _tmp_par_=
     set _tmp_val_=
     set "%~2=%err_setenv%"
+    set "%~3=%missed_env%"
 
 goto:eof
 
@@ -6349,6 +6350,52 @@ goto:eof
         echo commit;
         echo select 'ZAP table mon_cache_memory, finish at ' ^|^| cast('now' as timestamp^) as msg from rdb$database;
         echo set list off;
+        echo -- ##########################
+        if not "%use_external_to_stop%"=="" (
+            echo.
+            echo -- External table for quick force running attaches to stop themselves by OUTSIDE command.
+            echo -- When all ISQL attachments need to be stopped before warm_time+test_time expired, this
+            echo -- external table /TEXT file/ shoudl be opened in editor and single ascii-character 
+            echo -- has to be typed followed by LF. Saving this file will cause test to be stopped.
+            echo recreate table ext_stoptest external '%use_external_to_stop%' ( s char(2^) ^);
+            echo commit;
+            echo.
+            echo -- REDEFINITION of view that is used by every ISQL attachment as 'stop-flag' source:
+            echo create or alter view v_stoptest as
+            echo select 1 as need_to_stop
+            echo from ext_stoptest;
+            echo commit;
+
+            if exist "%use_external_to_stop%" (
+                findstr /i /r /c:"procedure[ ]*sp_ext_stoptest" "%use_external_to_stop%" 1>nul 2>&1
+                if NOT errorlevel 1 (
+                    @rem 19.03.2023: testing ability to make heterogenous connection to other DBMS.
+                    echo.
+                    echo -- ### INCLUDED CODE START ###
+                    echo -- From file: "%use_external_to_stop%".
+                    echo -- note: this file must contain definition of stored procedure 'sp_ext_stoptest'
+                    echo -- with output parameter 'need_to_stop' of type smallint:
+                    type "%use_external_to_stop%"
+                    echo -- ### INCLUDED CODE FINISH ###
+                    echo -- REDEFINITION of view that is used by every ISQL attachment as 'stop-flag' source:
+                    echo create or alter view v_stoptest as
+                    echo select need_to_stop
+                    echo from sp_ext_stoptest;
+                    echo commit;
+                ) else (
+                    echo -- File "%use_external_to_stop%" exists but it seems to not be suitable for applying as SQL:
+                    echo -- string "procedure sp_ext_stoptest" could not be found there.
+                )
+            )
+
+        ) else (
+            echo create or alter view v_stoptest as select 1 as need_to_stop from rdb$database where 1 = 0;
+            echo create or alter procedure sp_ext_stoptest returns (need_to_stop smallint^) as begin end;
+            echo drop procedure sp_ext_stoptest;
+            echo commit;
+        )
+        echo -- ##########################
+
     ) >>!tmpsql!
 
     set isql_exe=%fbc%\isql.exe
@@ -6371,6 +6418,7 @@ goto:eof
     endlocal
 
 goto:eof
+@rem end of :sync_settings_with_conf
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
@@ -6512,7 +6560,7 @@ goto:eof
 
     endlocal
 goto:eof
-@rem end of sync_settings_with_conf
+@rem end of :sync_settings_generate_sql
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 

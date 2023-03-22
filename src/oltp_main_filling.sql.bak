@@ -149,24 +149,21 @@ begin
             -- #################################################################
             -- working | num of | max       | max       | max      | max      | num of
             -- mode    |  wares | cust_rows | supp_rows | cust_Qty | supp_Qty | agents
-            'DEBUG_01',       1,       1,          1,          2,         5,        1  from rdb$database union all select
-            'DEBUG_02',       2,       2,          3,          5,         5,        7  from rdb$database union all select
+            'DEBUG_01',       1,       1,          1,          2,         5,        3  from rdb$database union all select
+            'DEBUG_02',       2,       2,          3,          5,         5,        3  from rdb$database union all select
             'DEBUG_03',       3,       3,          5,          4,         8,       10  from rdb$database union all select
             'DEBUG_04',      10,       5,         30,          5,        30,       15  from rdb$database union all select
-            'DEBUG_1A',       1,      10,         50,         10,        50,       30  from rdb$database union all select
-
-            'SMALL_01',     100,       5,         20,          5,        20,      300  from rdb$database union all select
-            'SMALL_02',     300,      10,         30,         10,        30,      700  from rdb$database union all select
-            'SMALL_03',     400,      10,         50,         15,        50,     1000  from rdb$database union all select
-
-            'MEDIUM_01',    700,      20,         60,         30,       100,     2000  from rdb$database union all select
-            'MEDIUM_02',   1500,      30,         80,         50,       150,     3000  from rdb$database union all select
-            'MEDIUM_03',   3000,      50,        100,         70,       200,     5000  from rdb$database union all select
-
-            'LARGE_01',    5000,      70,        200,        100,       300,    10000  from rdb$database union all select
-            'LARGE_02',    7000,     100,        300,        150,       450,    12000  from rdb$database union all select
-            'LARGE_03',    9000,     150,        400,        200,       600,    15000  from rdb$database union all select
-            'HEAVY_01',   50000,     250,        500,        300,       900,    20000  from rdb$database
+            'DEBUG_1A',       1,      10,         50,         10,        50,        3  from rdb$database union all select
+            'SMALL_01',     100,       5,         20,          5,        20,       30  from rdb$database union all select
+            'SMALL_02',     300,      10,         30,         10,        30,       40  from rdb$database union all select
+            'SMALL_03',     400,      10,         50,         15,        50,       50  from rdb$database union all select
+            'MEDIUM_01',    700,      20,         60,         30,       100,      100  from rdb$database union all select
+            'MEDIUM_02',   1500,      30,         80,         50,       150,      150  from rdb$database union all select
+            'MEDIUM_03',   3000,      50,        100,         70,       200,      200  from rdb$database union all select
+            'LARGE_01',    5000,      70,        200,        100,       300,      500  from rdb$database union all select
+            'LARGE_02',    7000,     100,        300,        150,       450,      700  from rdb$database union all select
+            'LARGE_03',    9000,     150,        400,        200,       600,     1000  from rdb$database union all select
+            'HEAVY_01',   50000,     250,        500,        300,       900,     2000  from rdb$database
         )
         ,d as(
             select

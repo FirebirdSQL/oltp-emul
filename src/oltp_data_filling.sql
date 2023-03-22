@@ -34,7 +34,7 @@ recreate global temporary table tmp$agents(
 
 recreate global temporary table tmp$names(
   id dm_idb primary key using index pk_tmp_names,
-  name dm_name -- varchar(50)
+  name dm_name
 ) on commit preserve rows;
 
 set term ^;
@@ -15385,6 +15385,8 @@ commit; -- 100'000 ==> ~12 sec
 --------------------------------------------------------------------------------
 
 ----------------  add random values to table `agents` ------------------
+
+-- add data for customers (individuals):
 delete from tmp$agents; -- GTT
 commit;
 insert into tmp$agents(name_01, name_02) values('James', 'Smith' );
@@ -15487,8 +15489,6 @@ insert into tmp$agents(name_01, name_02) values('Johnny', 'Butler' );
 insert into tmp$agents(name_01, name_02) values('Earl', 'Jenkins' );
 insert into tmp$agents(name_01, name_02) values('Jimmy', 'Reid' );
 insert into tmp$agents(name_01, name_02) values('Antonio', 'Stevens' );
-
--- ////
 insert into tmp$agents(name_01, name_02) values('Danny', 'Smith' );
 insert into tmp$agents(name_01, name_02) values('Bryan', 'Jones' );
 insert into tmp$agents(name_01, name_02) values('Tony', 'Williams' );
@@ -15690,48 +15690,1381 @@ insert into tmp$agents(name_01, name_02) values('Enrique', 'Costello' );
 insert into tmp$agents(name_01, name_02) values('Freddie', 'Duggan' );
 insert into tmp$agents(name_01, name_02) values('Wade', 'Coyle' );
 commit;
--------------------------------------------------------------------------------
--- table agents:
-delete from agents;
+-------------------------------------------------------------------------
+
+-- add data for suppliers (organizations)
+-- https://fauxid.com/tools/fake-company-generator
+delete from tmp$names;
+insert into tmp$names(name) values( 'Wolff, Schmitt and Shanahan' );
+insert into tmp$names(name) values( 'Bogan LLC' );
+insert into tmp$names(name) values( 'Kuphal LLC' );
+insert into tmp$names(name) values( 'McCullough, Jast and Dickens' );
+insert into tmp$names(name) values( 'Lang, Veum and Schneider' );
+insert into tmp$names(name) values( 'Kirlin, Franecki and Walter' );
+insert into tmp$names(name) values( 'Leffler, Gaylord and Mills' );
+insert into tmp$names(name) values( 'Harvey, Schulist and Koepp' );
+insert into tmp$names(name) values( 'Gutkowski-Quigley' );
+insert into tmp$names(name) values( 'Steuber-Dickinson' );
+insert into tmp$names(name) values( 'Schuster-Jakubowski' );
+insert into tmp$names(name) values( 'Erdman Group' );
+insert into tmp$names(name) values( 'Schulist, Cummings and Lehner' );
+insert into tmp$names(name) values( 'Jenkins PLC' );
+insert into tmp$names(name) values( 'Weber Group' );
+insert into tmp$names(name) values( 'Franecki, Predovic and Abbott' );
+insert into tmp$names(name) values( 'Wuckert and Sons' );
+insert into tmp$names(name) values( 'Bahringer-Greenholt' );
+insert into tmp$names(name) values( 'Kuhn-Schumm' );
+insert into tmp$names(name) values( 'Waters LLC' );
+insert into tmp$names(name) values( 'Rodriguez, Towne and Wunsch' );
+insert into tmp$names(name) values( 'Reynolds, Upton and Bechtelar' );
+insert into tmp$names(name) values( 'Quitzon, O''Kon and Goldner' );
+insert into tmp$names(name) values( 'Schultz-Upton' );
+insert into tmp$names(name) values( 'Robel PLC' );
+insert into tmp$names(name) values( 'Harber Group' );
+insert into tmp$names(name) values( 'Zemlak, Harvey and Strosin' );
+insert into tmp$names(name) values( 'Yundt-Bartell' );
+insert into tmp$names(name) values( 'Denesik-Hirthe' );
+insert into tmp$names(name) values( 'Christiansen-Abbott' );
+insert into tmp$names(name) values( 'Robel-Klocko' );
+insert into tmp$names(name) values( 'Bahringer-Nolan' );
+insert into tmp$names(name) values( 'Klocko-Rohan' );
+insert into tmp$names(name) values( 'Torp Inc' );
+insert into tmp$names(name) values( 'Maggio Inc' );
+insert into tmp$names(name) values( 'Prosacco-Ratke' );
+insert into tmp$names(name) values( 'Wiegand, Roberts and Altenwerth' );
+insert into tmp$names(name) values( 'White-Stoltenberg' );
+insert into tmp$names(name) values( 'Hammes-Vandervort' );
+insert into tmp$names(name) values( 'Murazik Ltd' );
+insert into tmp$names(name) values( 'Lesch Ltd' );
+insert into tmp$names(name) values( 'Bergnaum PLC' );
+insert into tmp$names(name) values( 'Armstrong, Wisoky and Gislason' );
+insert into tmp$names(name) values( 'Koss, Fay and Schiller' );
+insert into tmp$names(name) values( 'Leffler and Sons' );
+insert into tmp$names(name) values( 'Batz Inc' );
+insert into tmp$names(name) values( 'Walker, Bogan and Wuckert' );
+insert into tmp$names(name) values( 'Keebler Inc' );
+insert into tmp$names(name) values( 'Homenick LLC' );
+insert into tmp$names(name) values( 'Stehr-Graham' );
+insert into tmp$names(name) values( 'Mills-Gerhold' );
+insert into tmp$names(name) values( 'Koss, Hodkiewicz and Stoltenberg' );
+insert into tmp$names(name) values( 'Kutch-Aufderhar' );
+insert into tmp$names(name) values( 'Abbott PLC' );
+insert into tmp$names(name) values( 'Leffler, Pouros and Sawayn' );
+insert into tmp$names(name) values( 'Watsica and Sons' );
+insert into tmp$names(name) values( 'Lesch, Mosciski and Bednar' );
+insert into tmp$names(name) values( 'Jones-Will' );
+insert into tmp$names(name) values( 'Bartell-Ward' );
+insert into tmp$names(name) values( 'Oberbrunner, Erdman and Cummings' );
+insert into tmp$names(name) values( 'Tillman, Casper and Stehr' );
+insert into tmp$names(name) values( 'Klein-Miller' );
+insert into tmp$names(name) values( 'Effertz-Collier' );
+insert into tmp$names(name) values( 'Goldner and Sons' );
+insert into tmp$names(name) values( 'Connelly, Bauch and Tremblay' );
+insert into tmp$names(name) values( 'Wuckert, Strosin and Skiles' );
+insert into tmp$names(name) values( 'Runte, Carter and Borer' );
+insert into tmp$names(name) values( 'Macejkovic and Sons' );
+insert into tmp$names(name) values( 'Pacocha LLC' );
+insert into tmp$names(name) values( 'Beahan, Larson and Lang' );
+insert into tmp$names(name) values( 'Eichmann Inc' );
+insert into tmp$names(name) values( 'Mosciski, Ziemann and O''Connell' );
+insert into tmp$names(name) values( 'Ortiz-Howell' );
+insert into tmp$names(name) values( 'Reilly-Kozey' );
+insert into tmp$names(name) values( 'Stoltenberg-Gleason' );
+insert into tmp$names(name) values( 'Wehner-Torp' );
+insert into tmp$names(name) values( 'Wyman-Nader' );
+insert into tmp$names(name) values( 'Heidenreich-Graham' );
+insert into tmp$names(name) values( 'Bernhard, Emard and McCullough' );
+insert into tmp$names(name) values( 'Macejkovic-Corwin' );
+insert into tmp$names(name) values( 'Upton and Sons' );
+insert into tmp$names(name) values( 'Schaefer Group' );
+insert into tmp$names(name) values( 'Hayes, Nitzsche and Goldner' );
+insert into tmp$names(name) values( 'White-Wiegand' );
+insert into tmp$names(name) values( 'Fisher and Sons' );
+insert into tmp$names(name) values( 'Huel-Turner' );
+insert into tmp$names(name) values( 'Bayer LLC' );
+insert into tmp$names(name) values( 'Bayer LLC' );
+insert into tmp$names(name) values( 'Hane-Schmeler' );
+insert into tmp$names(name) values( 'Towne, Gottlieb and Bartell' );
+insert into tmp$names(name) values( 'Friesen Inc' );
+insert into tmp$names(name) values( 'Daugherty Inc' );
+insert into tmp$names(name) values( 'Goodwin Group' );
+insert into tmp$names(name) values( 'Upton Group' );
+insert into tmp$names(name) values( 'Stokes Group' );
+insert into tmp$names(name) values( 'Kovacek Group' );
+insert into tmp$names(name) values( 'Dietrich, Jenkins and Bogan' );
+insert into tmp$names(name) values( 'Kassulke, Koch and Gutkowski' );
+insert into tmp$names(name) values( 'Shanahan-Harris' );
+insert into tmp$names(name) values( 'Glover and Sons' );
+insert into tmp$names(name) values( 'Wehner, Beier and Larson' );
+insert into tmp$names(name) values( 'O''Kon-Haley' );
+insert into tmp$names(name) values( 'Dooley Ltd' );
+insert into tmp$names(name) values( 'Welch-Cremin' );
+insert into tmp$names(name) values( 'Farrell, Windler and Koss' );
+insert into tmp$names(name) values( 'Maggio-Fahey' );
+insert into tmp$names(name) values( 'Reynolds PLC' );
+insert into tmp$names(name) values( 'Hand-Rodriguez' );
+insert into tmp$names(name) values( 'Volkman-Adams' );
+insert into tmp$names(name) values( 'Mosciski LLC' );
+insert into tmp$names(name) values( 'Howell, Farrell and Mertz' );
+insert into tmp$names(name) values( 'Halvorson-Koss' );
+insert into tmp$names(name) values( 'Volkman Group' );
+insert into tmp$names(name) values( 'Nitzsche, Shields and Gerlach' );
+insert into tmp$names(name) values( 'Smitham-Raynor' );
+insert into tmp$names(name) values( 'Abernathy Inc' );
+insert into tmp$names(name) values( 'Lakin and Sons' );
+insert into tmp$names(name) values( 'Schamberger, Larkin and Kilback' );
+insert into tmp$names(name) values( 'Luettgen, Spinka and Sawayn' );
+insert into tmp$names(name) values( 'Runte-Zemlak' );
+insert into tmp$names(name) values( 'Rutherford, Schmitt and Lesch' );
+insert into tmp$names(name) values( 'Blanda-Ernser' );
+insert into tmp$names(name) values( 'Krajcik-Dickinson' );
+insert into tmp$names(name) values( 'Brekke Group' );
+insert into tmp$names(name) values( 'Shanahan, Hansen and Barrows' );
+insert into tmp$names(name) values( 'Crist-Zboncak' );
+insert into tmp$names(name) values( 'Renner, Rosenbaum and Gleason' );
+insert into tmp$names(name) values( 'Glover-Mertz' );
+insert into tmp$names(name) values( 'Ryan-Bahringer' );
+insert into tmp$names(name) values( 'Shanahan-Watsica' );
+insert into tmp$names(name) values( 'Monahan, Ratke and Monahan' );
+insert into tmp$names(name) values( 'Farrell Group' );
+insert into tmp$names(name) values( 'Eichmann-Cartwright' );
+insert into tmp$names(name) values( 'Kassulke-Zemlak' );
+insert into tmp$names(name) values( 'Bashirian LLC' );
+insert into tmp$names(name) values( 'Konopelski and Sons' );
+insert into tmp$names(name) values( 'VonRueden-Brekke' );
+insert into tmp$names(name) values( 'Rodriguez-Satterfield' );
+insert into tmp$names(name) values( 'Zulauf-West' );
+insert into tmp$names(name) values( 'Runte LLC' );
+insert into tmp$names(name) values( 'Marvin, Daugherty and Pollich' );
+insert into tmp$names(name) values( 'Waelchi and Sons' );
+insert into tmp$names(name) values( 'Smith LLC' );
+insert into tmp$names(name) values( 'Lockman LLC' );
+insert into tmp$names(name) values( 'Jenkins, Crooks and Roob' );
+insert into tmp$names(name) values( 'Schmidt, Beahan and Kunze' );
+insert into tmp$names(name) values( 'Konopelski, Skiles and Little' );
+insert into tmp$names(name) values( 'Carroll-White' );
+insert into tmp$names(name) values( 'Blick, Wisoky and Carroll' );
+insert into tmp$names(name) values( 'Zieme-Hoeger' );
+insert into tmp$names(name) values( 'Jast, Hyatt and Berge' );
+insert into tmp$names(name) values( 'Strosin, Treutel and Fadel' );
+insert into tmp$names(name) values( 'Schumm-Greenfelder' );
+insert into tmp$names(name) values( 'Spinka, Moen and Funk' );
+insert into tmp$names(name) values( 'Turner PLC' );
+insert into tmp$names(name) values( 'Howell PLC' );
+insert into tmp$names(name) values( 'Braun Inc' );
+insert into tmp$names(name) values( 'Sawayn LLC' );
+insert into tmp$names(name) values( 'Stark, Schuster and Waelchi' );
+insert into tmp$names(name) values( 'Hickle PLC' );
+insert into tmp$names(name) values( 'Wolf and Sons' );
+insert into tmp$names(name) values( 'Champlin-Eichmann' );
+insert into tmp$names(name) values( 'Yost-Hermann' );
+insert into tmp$names(name) values( 'Ryan, Hessel and Kautzer' );
+insert into tmp$names(name) values( 'Swaniawski Ltd' );
+insert into tmp$names(name) values( 'Hansen, Rogahn and Mills' );
+insert into tmp$names(name) values( 'Welch, Cummerata and Steuber' );
+insert into tmp$names(name) values( 'Strosin-Stanton' );
+insert into tmp$names(name) values( 'Pagac, Mann and Stiedemann' );
+insert into tmp$names(name) values( 'Schneider-Durgan' );
+insert into tmp$names(name) values( 'Fritsch Inc' );
+insert into tmp$names(name) values( 'Eichmann-Simonis' );
+insert into tmp$names(name) values( 'Crona, Rau and Abbott' );
+insert into tmp$names(name) values( 'Jenkins LLC' );
+insert into tmp$names(name) values( 'McLaughlin-O''Hara' );
+insert into tmp$names(name) values( 'McLaughlin, Reichert and Skiles' );
+insert into tmp$names(name) values( 'Weimann-Gulgowski' );
+insert into tmp$names(name) values( 'Luettgen and Sons' );
+insert into tmp$names(name) values( 'Schimmel and Sons' );
+insert into tmp$names(name) values( 'Bartell, Kulas and Moen' );
+insert into tmp$names(name) values( 'Abernathy, Maggio and Moore' );
+insert into tmp$names(name) values( 'Dietrich-Grant' );
+insert into tmp$names(name) values( 'Feest and Sons' );
+insert into tmp$names(name) values( 'Jacobson LLC' );
+insert into tmp$names(name) values( 'Heller-Murazik' );
+insert into tmp$names(name) values( 'Dietrich-Cummings' );
+insert into tmp$names(name) values( 'Hickle Inc' );
+insert into tmp$names(name) values( 'Kovacek-Hirthe' );
+insert into tmp$names(name) values( 'Dare Inc' );
+insert into tmp$names(name) values( 'Padberg Ltd' );
+insert into tmp$names(name) values( 'Dickens-Fritsch' );
+insert into tmp$names(name) values( 'Turner, Lynch and Roberts' );
+insert into tmp$names(name) values( 'Kirlin, Franecki and Paucek' );
+insert into tmp$names(name) values( 'Batz, Schuppe and Anderson' );
+insert into tmp$names(name) values( 'Kihn, Johns and Harvey' );
+insert into tmp$names(name) values( 'Gerhold, Brown and Gusikowski' );
+insert into tmp$names(name) values( 'Effertz LLC' );
+insert into tmp$names(name) values( 'Smitham, Predovic and Kuhn' );
+insert into tmp$names(name) values( 'Von, Johns and Schaefer' );
+insert into tmp$names(name) values( 'VonRueden-Conroy' );
+insert into tmp$names(name) values( 'Littel, Kihn and Gerlach' );
+insert into tmp$names(name) values( 'Fisher-Collier' );
+insert into tmp$names(name) values( 'Bashirian LLC' );
+insert into tmp$names(name) values( 'Altenwerth, Hammes and Hudson' );
+insert into tmp$names(name) values( 'Casper-Lockman' );
+insert into tmp$names(name) values( 'Tromp, Rath and McLaughlin' );
+insert into tmp$names(name) values( 'Bashirian Ltd' );
+insert into tmp$names(name) values( 'Wunsch LLC' );
+insert into tmp$names(name) values( 'Koepp-Effertz' );
+insert into tmp$names(name) values( 'Auer PLC' );
+insert into tmp$names(name) values( 'Tillman PLC' );
+insert into tmp$names(name) values( 'Gorczany, Jast and Mraz' );
+insert into tmp$names(name) values( 'Strosin, Kuhn and Kunze' );
+insert into tmp$names(name) values( 'Kris Ltd' );
+insert into tmp$names(name) values( 'Yundt-Romaguera' );
+insert into tmp$names(name) values( 'Stoltenberg-Homenick' );
+insert into tmp$names(name) values( 'Kessler-Hoeger' );
+insert into tmp$names(name) values( 'Jast Ltd' );
+insert into tmp$names(name) values( 'Abernathy Ltd' );
+insert into tmp$names(name) values( 'Kutch, Nikolaus and Rohan' );
+insert into tmp$names(name) values( 'Wiegand, Lemke and Romaguera' );
+insert into tmp$names(name) values( 'Marvin PLC' );
+insert into tmp$names(name) values( 'Green LLC' );
+insert into tmp$names(name) values( 'Koepp, Mohr and Ondricka' );
+insert into tmp$names(name) values( 'Schneider-Grimes' );
+insert into tmp$names(name) values( 'Langworth-Bartell' );
+insert into tmp$names(name) values( 'Heathcote, Mann and Trantow' );
+insert into tmp$names(name) values( 'Okuneva, Bergstrom and Luettgen' );
+insert into tmp$names(name) values( 'Stanton Group' );
+insert into tmp$names(name) values( 'Schamberger Inc' );
+insert into tmp$names(name) values( 'Moen, Bins and Brakus' );
+insert into tmp$names(name) values( 'Stamm-Gleichner' );
+insert into tmp$names(name) values( 'O''Hara-Rempel' );
+insert into tmp$names(name) values( 'Tremblay Ltd' );
+insert into tmp$names(name) values( 'Gaylord Inc' );
+insert into tmp$names(name) values( 'Dach Ltd' );
+insert into tmp$names(name) values( 'Cremin PLC' );
+insert into tmp$names(name) values( 'Kreiger and Sons' );
+insert into tmp$names(name) values( 'Nicolas, Blanda and DuBuque' );
+insert into tmp$names(name) values( 'Rice-Kohler' );
+insert into tmp$names(name) values( 'Hackett Inc' );
+insert into tmp$names(name) values( 'Collier-Reichert' );
+insert into tmp$names(name) values( 'Johnston-Becker' );
+insert into tmp$names(name) values( 'Orn and Sons' );
+insert into tmp$names(name) values( 'Pouros-Hoppe' );
+insert into tmp$names(name) values( 'Runolfsson-Greenholt' );
+insert into tmp$names(name) values( 'Wiza-Harber' );
+insert into tmp$names(name) values( 'Veum and Sons' );
+insert into tmp$names(name) values( 'Lueilwitz Group' );
+insert into tmp$names(name) values( 'Dare Ltd' );
+insert into tmp$names(name) values( 'Treutel LLC' );
+insert into tmp$names(name) values( 'Tillman Ltd' );
+insert into tmp$names(name) values( 'Jones, Koss and McKenzie' );
+insert into tmp$names(name) values( 'O''Reilly-Sipes' );
+insert into tmp$names(name) values( 'Kshlerin PLC' );
+insert into tmp$names(name) values( 'Mueller Ltd' );
+insert into tmp$names(name) values( 'Bashirian, Bergnaum and Hand' );
+insert into tmp$names(name) values( 'Wolff-Rice' );
+insert into tmp$names(name) values( 'Strosin-Hirthe' );
+insert into tmp$names(name) values( 'Mosciski Ltd' );
+insert into tmp$names(name) values( 'Harvey and Sons' );
+insert into tmp$names(name) values( 'Jacobi, Morar and Schultz' );
+insert into tmp$names(name) values( 'Stoltenberg, Schmitt and Towne' );
+insert into tmp$names(name) values( 'Ryan-Ebert' );
+insert into tmp$names(name) values( 'Mosciski-Cole' );
+insert into tmp$names(name) values( 'Kovacek Group' );
+insert into tmp$names(name) values( 'Lubowitz-Gusikowski' );
+insert into tmp$names(name) values( 'Jones-White' );
+insert into tmp$names(name) values( 'Jones, Simonis and Gleason' );
+insert into tmp$names(name) values( 'Mueller-Mohr' );
+insert into tmp$names(name) values( 'Cummings, O''Reilly and Auer' );
+insert into tmp$names(name) values( 'Hamill, Wisoky and Mitchell' );
+insert into tmp$names(name) values( 'Littel-Mills' );
+insert into tmp$names(name) values( 'Keeling Inc' );
+insert into tmp$names(name) values( 'Langosh-Harber' );
+insert into tmp$names(name) values( 'Fisher, Littel and Brown' );
+insert into tmp$names(name) values( 'Corkery, Beier and Gaylord' );
+insert into tmp$names(name) values( 'Hirthe, Spencer and Hahn' );
+insert into tmp$names(name) values( 'Aufderhar Group' );
+insert into tmp$names(name) values( 'Dickinson LLC' );
+insert into tmp$names(name) values( 'Dicki LLC' );
+insert into tmp$names(name) values( 'Ernser, Heidenreich and Effertz' );
+insert into tmp$names(name) values( 'Cummings, Lubowitz and Rice' );
+insert into tmp$names(name) values( 'Macejkovic, Pfannerstill and O''Hara' );
+insert into tmp$names(name) values( 'Balistreri, Cummings and Heathcote' );
+insert into tmp$names(name) values( 'Littel, Fritsch and Ward' );
+insert into tmp$names(name) values( 'Hansen Ltd' );
+insert into tmp$names(name) values( 'Ankunding, Rohan and Beier' );
+insert into tmp$names(name) values( 'Aufderhar, Kunde and Mosciski' );
+insert into tmp$names(name) values( 'Ritchie-McGlynn' );
+insert into tmp$names(name) values( 'Orn, Gusikowski and Jenkins' );
+insert into tmp$names(name) values( 'Okuneva-Lakin' );
+insert into tmp$names(name) values( 'Langosh-Bahringer' );
+insert into tmp$names(name) values( 'Green LLC' );
+insert into tmp$names(name) values( 'Walker, Herzog and Parker' );
+insert into tmp$names(name) values( 'Green-Lebsack' );
+insert into tmp$names(name) values( 'Sauer, Gutmann and Haag' );
+insert into tmp$names(name) values( 'Erdman PLC' );
+insert into tmp$names(name) values( 'Lindgren, Schimmel and Toy' );
+insert into tmp$names(name) values( 'Metz and Sons' );
+insert into tmp$names(name) values( 'Torphy, Vandervort and Hayes' );
+insert into tmp$names(name) values( 'Strosin Inc' );
+insert into tmp$names(name) values( 'Pagac-Mills' );
+insert into tmp$names(name) values( 'Rohan-Corwin' );
+insert into tmp$names(name) values( 'White, Schinner and Doyle' );
+insert into tmp$names(name) values( 'Weimann Group' );
+insert into tmp$names(name) values( 'Kreiger-Bartoletti' );
+insert into tmp$names(name) values( 'Adams-Trantow' );
+insert into tmp$names(name) values( 'Conroy, Jerde and Zemlak' );
+insert into tmp$names(name) values( 'Langworth PLC' );
+insert into tmp$names(name) values( 'Ankunding-Bailey' );
+insert into tmp$names(name) values( 'Yost, Schaden and Feest' );
+insert into tmp$names(name) values( 'Adams Ltd' );
+insert into tmp$names(name) values( 'Reinger Ltd' );
+insert into tmp$names(name) values( 'Steuber, Mante and Sawayn' );
+insert into tmp$names(name) values( 'Watsica-DuBuque' );
+insert into tmp$names(name) values( 'Lebsack, O''Conner and Lind' );
+insert into tmp$names(name) values( 'Ryan and Sons' );
+insert into tmp$names(name) values( 'Schulist-Hegmann' );
+insert into tmp$names(name) values( 'Trantow Group' );
+insert into tmp$names(name) values( 'Beier, Zemlak and Kautzer' );
+insert into tmp$names(name) values( 'Grant-Goodwin' );
+insert into tmp$names(name) values( 'Mraz Ltd' );
+insert into tmp$names(name) values( 'Morar Ltd' );
+insert into tmp$names(name) values( 'Nitzsche PLC' );
+insert into tmp$names(name) values( 'Monahan PLC' );
+insert into tmp$names(name) values( 'Heaney-Stoltenberg' );
+insert into tmp$names(name) values( 'Littel Ltd' );
+insert into tmp$names(name) values( 'Rohan, Rau and Hirthe' );
+insert into tmp$names(name) values( 'Schuster, D''Amore and Rempel' );
+insert into tmp$names(name) values( 'Jenkins-Eichmann' );
+insert into tmp$names(name) values( 'Stoltenberg, Buckridge and Koepp' );
+insert into tmp$names(name) values( 'Lesch Inc' );
+insert into tmp$names(name) values( 'Morissette, Wolff and Larkin' );
+insert into tmp$names(name) values( 'Heathcote-Gorczany' );
+insert into tmp$names(name) values( 'Baumbach, Ortiz and Stamm' );
+insert into tmp$names(name) values( 'Mertz and Sons' );
+insert into tmp$names(name) values( 'Daugherty Group' );
+insert into tmp$names(name) values( 'Torp Inc' );
+insert into tmp$names(name) values( 'Herman, Renner and Olson' );
+insert into tmp$names(name) values( 'Aufderhar, Rippin and Huels' );
+insert into tmp$names(name) values( 'Crooks, Bode and Emmerich' );
+insert into tmp$names(name) values( 'Moore-Flatley' );
+insert into tmp$names(name) values( 'Kub-Morar' );
+insert into tmp$names(name) values( 'Homenick-McCullough' );
+insert into tmp$names(name) values( 'Bayer, Hodkiewicz and Powlowski' );
+insert into tmp$names(name) values( 'Hauck LLC' );
+insert into tmp$names(name) values( 'Rath, Douglas and Jakubowski' );
+insert into tmp$names(name) values( 'Sporer Ltd' );
+insert into tmp$names(name) values( 'Weissnat PLC' );
+insert into tmp$names(name) values( 'Greenfelder, Lynch and Cummings' );
+insert into tmp$names(name) values( 'Cronin LLC' );
+insert into tmp$names(name) values( 'Monahan, Tremblay and Stamm' );
+insert into tmp$names(name) values( 'Jacobson, Corwin and Aufderhar' );
+insert into tmp$names(name) values( 'Cole-Eichmann' );
+insert into tmp$names(name) values( 'Klein, Bosco and Murphy' );
+insert into tmp$names(name) values( 'Gutmann, Kling and Greenfelder' );
+insert into tmp$names(name) values( 'Berge, Morar and McClure' );
+insert into tmp$names(name) values( 'Schowalter-Hermann' );
+insert into tmp$names(name) values( 'Gislason, Heathcote and Conroy' );
+insert into tmp$names(name) values( 'Wolff, Lang and Dach' );
+insert into tmp$names(name) values( 'Marks, Schmidt and Bins' );
+insert into tmp$names(name) values( 'Quigley-Heathcote' );
+insert into tmp$names(name) values( 'Mann, Reinger and Heller' );
+insert into tmp$names(name) values( 'Beer and Sons' );
+insert into tmp$names(name) values( 'Stokes-Grant' );
+insert into tmp$names(name) values( 'Langosh-Abbott' );
+insert into tmp$names(name) values( 'Carter Group' );
+insert into tmp$names(name) values( 'Stokes, Sawayn and White' );
+insert into tmp$names(name) values( 'Goodwin, Daugherty and Bergstrom' );
+insert into tmp$names(name) values( 'Adams-Fadel' );
+insert into tmp$names(name) values( 'Bechtelar Group' );
+insert into tmp$names(name) values( 'Hand and Sons' );
+insert into tmp$names(name) values( 'Wilkinson PLC' );
+insert into tmp$names(name) values( 'Miller Ltd' );
+insert into tmp$names(name) values( 'Heidenreich, Frami and Padberg' );
+insert into tmp$names(name) values( 'Collier-Rutherford' );
+insert into tmp$names(name) values( 'Jones, Carroll and Torphy' );
+insert into tmp$names(name) values( 'Wisozk Ltd' );
+insert into tmp$names(name) values( 'Walter, Ryan and Nicolas' );
+insert into tmp$names(name) values( 'Kiehn-Berge' );
+insert into tmp$names(name) values( 'Kub Inc' );
+insert into tmp$names(name) values( 'Nolan, Terry and Prosacco' );
+insert into tmp$names(name) values( 'Rolfson LLC' );
+insert into tmp$names(name) values( 'Trantow, Strosin and Maggio' );
+insert into tmp$names(name) values( 'Haley PLC' );
+insert into tmp$names(name) values( 'Rutherford, Hartmann and Schinner' );
+insert into tmp$names(name) values( 'Kunze Ltd' );
+insert into tmp$names(name) values( 'Jakubowski-White' );
+insert into tmp$names(name) values( 'Lueilwitz-Rohan' );
+insert into tmp$names(name) values( 'Kassulke-Cruickshank' );
+insert into tmp$names(name) values( 'Torphy PLC' );
+insert into tmp$names(name) values( 'Murray-Gottlieb' );
+insert into tmp$names(name) values( 'Muller-Price' );
+insert into tmp$names(name) values( 'Haley Ltd' );
+insert into tmp$names(name) values( 'Wisoky, Krajcik and Padberg' );
+insert into tmp$names(name) values( 'Bogisich, Howe and Bailey' );
+insert into tmp$names(name) values( 'Keebler Group' );
+insert into tmp$names(name) values( 'Bednar Group' );
+insert into tmp$names(name) values( 'Lakin, Ritchie and Morar' );
+insert into tmp$names(name) values( 'Lebsack, O''Connell and Lockman' );
+insert into tmp$names(name) values( 'Donnelly, Paucek and Hermann' );
+insert into tmp$names(name) values( 'Schaefer PLC' );
+insert into tmp$names(name) values( 'Pagac, Roberts and Murray' );
+insert into tmp$names(name) values( 'Kuhlman, Funk and Bernier' );
+insert into tmp$names(name) values( 'Sauer PLC' );
+insert into tmp$names(name) values( 'King LLC' );
+insert into tmp$names(name) values( 'Botsford, Moore and Blick' );
+insert into tmp$names(name) values( 'Heidenreich Group' );
+insert into tmp$names(name) values( 'Streich-Murazik' );
+insert into tmp$names(name) values( 'Sipes Inc' );
+insert into tmp$names(name) values( 'Torp, Tremblay and Koss' );
+insert into tmp$names(name) values( 'Schaefer, Schuppe and Rohan' );
+insert into tmp$names(name) values( 'Beier-Bosco' );
+insert into tmp$names(name) values( 'Weber, Murray and Pagac' );
+insert into tmp$names(name) values( 'Monahan Ltd' );
+insert into tmp$names(name) values( 'Beatty PLC' );
+insert into tmp$names(name) values( 'Considine, Powlowski and Cormier' );
+insert into tmp$names(name) values( 'Kohler-Lehner' );
+insert into tmp$names(name) values( 'Lakin, Kshlerin and Homenick' );
+insert into tmp$names(name) values( 'Runolfsdottir-Feest' );
+insert into tmp$names(name) values( 'Spinka and Sons' );
+insert into tmp$names(name) values( 'Corkery Ltd' );
+insert into tmp$names(name) values( 'Carroll-Conroy' );
+insert into tmp$names(name) values( 'Hodkiewicz, Douglas and Lemke' );
+insert into tmp$names(name) values( 'Renner, Satterfield and Pfannerstill' );
+insert into tmp$names(name) values( 'O''Connell Ltd' );
+insert into tmp$names(name) values( 'Nikolaus, Balistreri and Kshlerin' );
+insert into tmp$names(name) values( 'Powlowski Ltd' );
+insert into tmp$names(name) values( 'O''Conner, Wolff and Murray' );
+insert into tmp$names(name) values( 'Hand, Thiel and Adams' );
+insert into tmp$names(name) values( 'Kozey-Prosacco' );
+insert into tmp$names(name) values( 'Schowalter and Sons' );
+insert into tmp$names(name) values( 'Carter Group' );
+insert into tmp$names(name) values( 'Koelpin Ltd' );
+insert into tmp$names(name) values( 'Cronin-Cummerata' );
+insert into tmp$names(name) values( 'Upton, Ward and Larkin' );
+insert into tmp$names(name) values( 'Wiza-Dickinson' );
+insert into tmp$names(name) values( 'Wolf-Steuber' );
+insert into tmp$names(name) values( 'D''Amore Ltd' );
+insert into tmp$names(name) values( 'Johnston-Sporer' );
+insert into tmp$names(name) values( 'Feest-Marvin' );
+insert into tmp$names(name) values( 'Hagenes Ltd' );
+insert into tmp$names(name) values( 'Herman-Moen' );
+insert into tmp$names(name) values( 'Kuhic-Mayer' );
+insert into tmp$names(name) values( 'Lemke-Feest' );
+insert into tmp$names(name) values( 'Ebert-Terry' );
+insert into tmp$names(name) values( 'Schinner-Roberts' );
+insert into tmp$names(name) values( 'Oberbrunner and Sons' );
+insert into tmp$names(name) values( 'Jacobi-Ortiz' );
+insert into tmp$names(name) values( 'Lueilwitz Inc' );
+insert into tmp$names(name) values( 'Eichmann, Yundt and Runolfsdottir' );
+insert into tmp$names(name) values( 'Rosenbaum, Gerlach and Leffler' );
+insert into tmp$names(name) values( 'Kutch and Sons' );
+insert into tmp$names(name) values( 'Wiegand Inc' );
+insert into tmp$names(name) values( 'Gutkowski, Hegmann and Pollich' );
+insert into tmp$names(name) values( 'Schuppe and Sons' );
+insert into tmp$names(name) values( 'Kuphal, Berge and Bode' );
+insert into tmp$names(name) values( 'Spinka LLC' );
+insert into tmp$names(name) values( 'Nikolaus-Becker' );
+insert into tmp$names(name) values( 'D''Amore LLC' );
+insert into tmp$names(name) values( 'Stokes and Sons' );
+insert into tmp$names(name) values( 'Thiel PLC' );
+insert into tmp$names(name) values( 'Weissnat-Brakus' );
+insert into tmp$names(name) values( 'Kuhlman-Toy' );
+insert into tmp$names(name) values( 'Schinner-Goldner' );
+insert into tmp$names(name) values( 'Rogahn-Murray' );
+insert into tmp$names(name) values( 'Kautzer-Herzog' );
+insert into tmp$names(name) values( 'Hegmann Inc' );
+insert into tmp$names(name) values( 'Goyette Ltd' );
+insert into tmp$names(name) values( 'Franecki-Rau' );
+insert into tmp$names(name) values( 'Macejkovic-Lowe' );
+insert into tmp$names(name) values( 'Howe Ltd' );
+insert into tmp$names(name) values( 'Blanda PLC' );
+insert into tmp$names(name) values( 'Stroman-Effertz' );
+insert into tmp$names(name) values( 'Jast-Anderson' );
+insert into tmp$names(name) values( 'Hane-Cartwright' );
+insert into tmp$names(name) values( 'Beahan, Langworth and Rath' );
+insert into tmp$names(name) values( 'Koss, Tromp and Lang' );
+insert into tmp$names(name) values( 'Schiller, O''Kon and Gleichner' );
+insert into tmp$names(name) values( 'Cormier, Hegmann and Renner' );
+insert into tmp$names(name) values( 'Schaefer Ltd' );
+insert into tmp$names(name) values( 'Hauck Inc' );
+insert into tmp$names(name) values( 'Roberts, Watsica and Runte' );
+insert into tmp$names(name) values( 'O''Keefe, Fadel and Ruecker' );
+insert into tmp$names(name) values( 'Langosh, Treutel and Armstrong' );
+insert into tmp$names(name) values( 'Schaefer-Wiza' );
+insert into tmp$names(name) values( 'Luettgen PLC' );
+insert into tmp$names(name) values( 'Schuster PLC' );
+insert into tmp$names(name) values( 'Reichert-Kiehn' );
+insert into tmp$names(name) values( 'Cormier-Davis' );
+insert into tmp$names(name) values( 'Robel Inc' );
+insert into tmp$names(name) values( 'Rodriguez-Jaskolski' );
+insert into tmp$names(name) values( 'Stroman, Marks and Bartell' );
+insert into tmp$names(name) values( 'Hilpert, Parker and Kiehn' );
+insert into tmp$names(name) values( 'Bartell, Goodwin and Welch' );
+insert into tmp$names(name) values( 'Mayer-Welch' );
+insert into tmp$names(name) values( 'Sporer, Lakin and Ledner' );
+insert into tmp$names(name) values( 'Gleason-Doyle' );
+insert into tmp$names(name) values( 'McLaughlin PLC' );
+insert into tmp$names(name) values( 'Considine LLC' );
+insert into tmp$names(name) values( 'Ullrich-Nikolaus' );
+insert into tmp$names(name) values( 'Miller PLC' );
+insert into tmp$names(name) values( 'Langworth, Berge and Jenkins' );
+insert into tmp$names(name) values( 'Robel-Hauck' );
+insert into tmp$names(name) values( 'Marvin, Paucek and Bergnaum' );
+insert into tmp$names(name) values( 'Goyette PLC' );
+insert into tmp$names(name) values( 'Frami PLC' );
+insert into tmp$names(name) values( 'Vandervort, Jones and Waelchi' );
+insert into tmp$names(name) values( 'Waters, Stokes and Wiegand' );
+insert into tmp$names(name) values( 'Schmeler-Price' );
+insert into tmp$names(name) values( 'Ullrich Group' );
+insert into tmp$names(name) values( 'Konopelski-Boyer' );
+insert into tmp$names(name) values( 'Bashirian-Lindgren' );
+insert into tmp$names(name) values( 'Pouros-Koch' );
+insert into tmp$names(name) values( 'Hintz-Kohler' );
+insert into tmp$names(name) values( 'Bergnaum Group' );
+insert into tmp$names(name) values( 'Mertz Group' );
+insert into tmp$names(name) values( 'Turner, Brown and McCullough' );
+insert into tmp$names(name) values( 'Gottlieb LLC' );
+insert into tmp$names(name) values( 'Botsford Inc' );
+insert into tmp$names(name) values( 'Thompson LLC' );
+insert into tmp$names(name) values( 'Kilback Ltd' );
+insert into tmp$names(name) values( 'Trantow-Powlowski' );
+insert into tmp$names(name) values( 'Hudson LLC' );
+insert into tmp$names(name) values( 'Orn and Sons' );
+insert into tmp$names(name) values( 'Rippin, Crooks and Reichert' );
+insert into tmp$names(name) values( 'Cruickshank Group' );
+insert into tmp$names(name) values( 'Huel, Skiles and Mohr' );
+insert into tmp$names(name) values( 'Schroeder-Goodwin' );
+insert into tmp$names(name) values( 'Borer PLC' );
+insert into tmp$names(name) values( 'Walker, DuBuque and Rath' );
+insert into tmp$names(name) values( 'Thompson, Hansen and Jacobs' );
+insert into tmp$names(name) values( 'Kemmer, Spinka and Wiza' );
+insert into tmp$names(name) values( 'Thiel-Schamberger' );
+insert into tmp$names(name) values( 'Murazik-Miller' );
+insert into tmp$names(name) values( 'Jaskolski Group' );
+insert into tmp$names(name) values( 'Hammes-Wunsch' );
+insert into tmp$names(name) values( 'Boyle-Steuber' );
+insert into tmp$names(name) values( 'Nikolaus PLC' );
+insert into tmp$names(name) values( 'Armstrong PLC' );
+insert into tmp$names(name) values( 'Hilpert Inc' );
+insert into tmp$names(name) values( 'Bauch, Kulas and Schulist' );
+insert into tmp$names(name) values( 'Keeling, Larson and Schuster' );
+insert into tmp$names(name) values( 'Senger, Ortiz and Frami' );
+insert into tmp$names(name) values( 'Howell Ltd' );
+insert into tmp$names(name) values( 'Lueilwitz-Schultz' );
+insert into tmp$names(name) values( 'Harber-Torphy' );
+insert into tmp$names(name) values( 'Cole, Schuster and Marquardt' );
+insert into tmp$names(name) values( 'Towne-Ullrich' );
+insert into tmp$names(name) values( 'Marquardt, Wisoky and Hermann' );
+insert into tmp$names(name) values( 'Luettgen-Mayer' );
+insert into tmp$names(name) values( 'Funk, Kub and Spinka' );
+insert into tmp$names(name) values( 'Quitzon and Sons' );
+insert into tmp$names(name) values( 'Carter Inc' );
+insert into tmp$names(name) values( 'Runte, Streich and Kirlin' );
+insert into tmp$names(name) values( 'Grant Inc' );
+insert into tmp$names(name) values( 'Koch-Lueilwitz' );
+insert into tmp$names(name) values( 'Schaefer LLC' );
+insert into tmp$names(name) values( 'Bernhard, Roberts and Gorczany' );
+insert into tmp$names(name) values( 'Hauck, Kovacek and Gottlieb' );
+insert into tmp$names(name) values( 'Heathcote-Mante' );
+insert into tmp$names(name) values( 'Auer, Pfannerstill and Ward' );
+insert into tmp$names(name) values( 'Weber, Leuschke and Sanford' );
+insert into tmp$names(name) values( 'Hauck-O''Hara' );
+insert into tmp$names(name) values( 'O''Kon-Gorczany' );
+insert into tmp$names(name) values( 'McLaughlin LLC' );
+insert into tmp$names(name) values( 'Nicolas-Towne' );
+insert into tmp$names(name) values( 'Borer-Davis' );
+insert into tmp$names(name) values( 'Bogisich and Sons' );
+insert into tmp$names(name) values( 'King-Rohan' );
+insert into tmp$names(name) values( 'Olson-Beatty' );
+insert into tmp$names(name) values( 'Franecki and Sons' );
+insert into tmp$names(name) values( 'Stoltenberg Inc' );
+insert into tmp$names(name) values( 'McLaughlin-Weimann' );
+insert into tmp$names(name) values( 'Altenwerth-Runolfsson' );
+insert into tmp$names(name) values( 'Bernhard, Jerde and Gleason' );
+insert into tmp$names(name) values( 'Rau-Gorczany' );
+insert into tmp$names(name) values( 'Crist-Greenfelder' );
+insert into tmp$names(name) values( 'Hettinger PLC' );
+insert into tmp$names(name) values( 'Dicki, Kunde and Schimmel' );
+insert into tmp$names(name) values( 'Runte, Bradtke and Gleichner' );
+insert into tmp$names(name) values( 'Hegmann LLC' );
+insert into tmp$names(name) values( 'Schimmel Ltd' );
+insert into tmp$names(name) values( 'Deckow Group' );
+insert into tmp$names(name) values( 'McLaughlin, Wolf and Harris' );
+insert into tmp$names(name) values( 'Thiel-Roberts' );
+insert into tmp$names(name) values( 'Hermann, Becker and Kutch' );
+insert into tmp$names(name) values( 'Daugherty Inc' );
+insert into tmp$names(name) values( 'Smitham, Ward and Gleason' );
+insert into tmp$names(name) values( 'Zieme-Greenholt' );
+insert into tmp$names(name) values( 'Bednar, Kihn and Little' );
+insert into tmp$names(name) values( 'Monahan Inc' );
+insert into tmp$names(name) values( 'Barton and Sons' );
+insert into tmp$names(name) values( 'Tromp, Bogan and Herzog' );
+insert into tmp$names(name) values( 'Orn Group' );
+insert into tmp$names(name) values( 'Lebsack-Ernser' );
+insert into tmp$names(name) values( 'Batz, Rolfson and Willms' );
+insert into tmp$names(name) values( 'Thompson-Rutherford' );
+insert into tmp$names(name) values( 'Greenholt-Spencer' );
+insert into tmp$names(name) values( 'Kulas and Sons' );
+insert into tmp$names(name) values( 'Pfannerstill, Shields and Konopelski' );
+insert into tmp$names(name) values( 'Dare-Kunze' );
+insert into tmp$names(name) values( 'Jacobi Inc' );
+insert into tmp$names(name) values( 'Gaylord, Glover and Yundt' );
+insert into tmp$names(name) values( 'Dare Ltd' );
+insert into tmp$names(name) values( 'Lind-Welch' );
+insert into tmp$names(name) values( 'Boyle-Marquardt' );
+insert into tmp$names(name) values( 'Johns-Gleichner' );
+insert into tmp$names(name) values( 'Kassulke, Welch and Wehner' );
+insert into tmp$names(name) values( 'O''Hara, Tremblay and Heathcote' );
+insert into tmp$names(name) values( 'Stamm Group' );
+insert into tmp$names(name) values( 'Wisoky-Stark' );
+insert into tmp$names(name) values( 'O''Kon, Fadel and Kling' );
+insert into tmp$names(name) values( 'Quigley, Koelpin and Hahn' );
+insert into tmp$names(name) values( 'Howe, Harvey and Bernier' );
+insert into tmp$names(name) values( 'Gulgowski-Breitenberg' );
+insert into tmp$names(name) values( 'Ankunding-Smitham' );
+insert into tmp$names(name) values( 'O''Conner-Stroman' );
+insert into tmp$names(name) values( 'Schaden, Nicolas and Hamill' );
+insert into tmp$names(name) values( 'Adams, Schmitt and Pollich' );
+insert into tmp$names(name) values( 'Labadie, Renner and Harvey' );
+insert into tmp$names(name) values( 'Reinger-Ritchie' );
+insert into tmp$names(name) values( 'Maggio and Sons' );
+insert into tmp$names(name) values( 'Goldner-Reinger' );
+insert into tmp$names(name) values( 'Barrows, Altenwerth and Lemke' );
+insert into tmp$names(name) values( 'Bahringer, Lynch and Friesen' );
+insert into tmp$names(name) values( 'Upton Inc' );
+insert into tmp$names(name) values( 'Douglas PLC' );
+insert into tmp$names(name) values( 'Pollich-Schuster' );
+insert into tmp$names(name) values( 'Thiel, Cartwright and Lemke' );
+insert into tmp$names(name) values( 'Miller-Lueilwitz' );
+insert into tmp$names(name) values( 'Hahn Ltd' );
+insert into tmp$names(name) values( 'Satterfield Inc' );
+insert into tmp$names(name) values( 'Reynolds Group' );
+insert into tmp$names(name) values( 'Runolfsson Inc' );
+insert into tmp$names(name) values( 'Hoppe and Sons' );
+insert into tmp$names(name) values( 'King Inc' );
+insert into tmp$names(name) values( 'Lynch, Gibson and Runolfsson' );
+insert into tmp$names(name) values( 'Emard, Fahey and Ratke' );
+insert into tmp$names(name) values( 'Hill Inc' );
+insert into tmp$names(name) values( 'Collins, Okuneva and Zulauf' );
+insert into tmp$names(name) values( 'Schmidt-Pouros' );
+insert into tmp$names(name) values( 'Ernser Group' );
+insert into tmp$names(name) values( 'Collins Inc' );
+insert into tmp$names(name) values( 'Gusikowski, Kovacek and O''Kon' );
+insert into tmp$names(name) values( 'Kuhn-Doyle' );
+insert into tmp$names(name) values( 'Abshire and Sons' );
+insert into tmp$names(name) values( 'Kiehn-Walker' );
+insert into tmp$names(name) values( 'Franecki-Cremin' );
+insert into tmp$names(name) values( 'Parisian-Lowe' );
+insert into tmp$names(name) values( 'Marvin-Mertz' );
+insert into tmp$names(name) values( 'Haley Inc' );
+insert into tmp$names(name) values( 'King, Morissette and Beatty' );
+insert into tmp$names(name) values( 'Williamson-Crist' );
+insert into tmp$names(name) values( 'Thiel, Christiansen and Johnston' );
+insert into tmp$names(name) values( 'Parisian-Hermann' );
+insert into tmp$names(name) values( 'Bernhard Ltd' );
+insert into tmp$names(name) values( 'Lemke, Gislason and O''Hara' );
+insert into tmp$names(name) values( 'Hettinger-McKenzie' );
+insert into tmp$names(name) values( 'Turcotte-Brakus' );
+insert into tmp$names(name) values( 'Kassulke, Lynch and Robel' );
+insert into tmp$names(name) values( 'Gaylord-Considine' );
+insert into tmp$names(name) values( 'Renner, Pfannerstill and Berge' );
+insert into tmp$names(name) values( 'Fahey Inc' );
+insert into tmp$names(name) values( 'Toy, Walter and Hessel' );
+insert into tmp$names(name) values( 'Douglas-Pouros' );
+insert into tmp$names(name) values( 'Quitzon, Fadel and Purdy' );
+insert into tmp$names(name) values( 'Rohan, Schuster and Willms' );
+insert into tmp$names(name) values( 'Gusikowski and Sons' );
+insert into tmp$names(name) values( 'Jacobson PLC' );
+insert into tmp$names(name) values( 'Nolan-Powlowski' );
+insert into tmp$names(name) values( 'Huel, Farrell and Reinger' );
+insert into tmp$names(name) values( 'Wilkinson, Kunze and Gottlieb' );
+insert into tmp$names(name) values( 'Kovacek, Gerlach and Keeling' );
+insert into tmp$names(name) values( 'Armstrong, Leuschke and Hill' );
+insert into tmp$names(name) values( 'Wehner, Boehm and Flatley' );
+insert into tmp$names(name) values( 'Thompson, Langosh and Rice' );
+insert into tmp$names(name) values( 'Kling-Gislason' );
+insert into tmp$names(name) values( 'O''Connell LLC' );
+insert into tmp$names(name) values( 'Zboncak PLC' );
+insert into tmp$names(name) values( 'Schultz-Hayes' );
+insert into tmp$names(name) values( 'Raynor Ltd' );
+insert into tmp$names(name) values( 'Toy-Labadie' );
+insert into tmp$names(name) values( 'Batz, Witting and Gottlieb' );
+insert into tmp$names(name) values( 'Aufderhar, Miller and Wolf' );
+insert into tmp$names(name) values( 'Roberts Inc' );
+insert into tmp$names(name) values( 'Heaney-Ledner' );
+insert into tmp$names(name) values( 'Witting, Kassulke and Jacobson' );
+insert into tmp$names(name) values( 'Nicolas-Feeney' );
+insert into tmp$names(name) values( 'Dooley, Emard and Quitzon' );
+insert into tmp$names(name) values( 'Kling and Sons' );
+insert into tmp$names(name) values( 'Herman, Becker and Rodriguez' );
+insert into tmp$names(name) values( 'Nicolas and Sons' );
+insert into tmp$names(name) values( 'Pfannerstill, Considine and Schoen' );
+insert into tmp$names(name) values( 'Pfeffer Inc' );
+insert into tmp$names(name) values( 'Cronin-Lakin' );
+insert into tmp$names(name) values( 'Toy-Goyette' );
+insert into tmp$names(name) values( 'Bartell-Adams' );
+insert into tmp$names(name) values( 'Senger-Kunde' );
+insert into tmp$names(name) values( 'Zboncak-Roob' );
+insert into tmp$names(name) values( 'Breitenberg, Kshlerin and Blick' );
+insert into tmp$names(name) values( 'Kuhic-Hermann' );
+insert into tmp$names(name) values( 'Wyman, Wisozk and Schuster' );
+insert into tmp$names(name) values( 'Weissnat LLC' );
+insert into tmp$names(name) values( 'Cartwright, Leffler and Haag' );
+insert into tmp$names(name) values( 'Reichert Inc' );
+insert into tmp$names(name) values( 'Crooks-Fahey' );
+insert into tmp$names(name) values( 'Heidenreich, Pacocha and Wehner' );
+insert into tmp$names(name) values( 'Boyer, Okuneva and Breitenberg' );
+insert into tmp$names(name) values( 'Keebler and Sons' );
+insert into tmp$names(name) values( 'Reichel-Berge' );
+insert into tmp$names(name) values( 'Blick, Ullrich and Casper' );
+insert into tmp$names(name) values( 'Bergnaum Ltd' );
+insert into tmp$names(name) values( 'Zulauf, Mante and Kertzmann' );
+insert into tmp$names(name) values( 'Schroeder-Bailey' );
+insert into tmp$names(name) values( 'Gaylord, Cruickshank and Wolf' );
+insert into tmp$names(name) values( 'Jacobson-Jerde' );
+insert into tmp$names(name) values( 'Upton-Wunsch' );
+insert into tmp$names(name) values( 'Berge, Brakus and Simonis' );
+insert into tmp$names(name) values( 'Funk PLC' );
+insert into tmp$names(name) values( 'Upton Group' );
+insert into tmp$names(name) values( 'Robel LLC' );
+insert into tmp$names(name) values( 'Lynch-Fahey' );
+insert into tmp$names(name) values( 'Hamill Inc' );
+insert into tmp$names(name) values( 'Mills-O''Reilly' );
+insert into tmp$names(name) values( 'Rosenbaum, Rau and Berge' );
+insert into tmp$names(name) values( 'Yundt, Roberts and Leuschke' );
+insert into tmp$names(name) values( 'Gibson PLC' );
+insert into tmp$names(name) values( 'Legros, Pacocha and Boyle' );
+insert into tmp$names(name) values( 'Kuphal-Oberbrunner' );
+insert into tmp$names(name) values( 'Cruickshank Inc' );
+insert into tmp$names(name) values( 'Waters, Crist and Towne' );
+insert into tmp$names(name) values( 'Conroy-Flatley' );
+insert into tmp$names(name) values( 'Bahringer, Schoen and Marquardt' );
+insert into tmp$names(name) values( 'Dibbert, Ledner and Medhurst' );
+insert into tmp$names(name) values( 'Hickle, Cormier and Windler' );
+insert into tmp$names(name) values( 'Funk Inc' );
+insert into tmp$names(name) values( 'Pagac-Schuster' );
+insert into tmp$names(name) values( 'Walsh, Ratke and Macejkovic' );
+insert into tmp$names(name) values( 'Russel and Sons' );
+insert into tmp$names(name) values( 'Hauck-Wilderman' );
+insert into tmp$names(name) values( 'Macejkovic-Buckridge' );
+insert into tmp$names(name) values( 'Balistreri Group' );
+insert into tmp$names(name) values( 'Leannon-Brakus' );
+insert into tmp$names(name) values( 'Aufderhar-Shanahan' );
+insert into tmp$names(name) values( 'Steuber Inc' );
+insert into tmp$names(name) values( 'Harber, Heathcote and Gaylord' );
+insert into tmp$names(name) values( 'Goldner-Bins' );
+insert into tmp$names(name) values( 'Gislason-Mueller' );
+insert into tmp$names(name) values( 'Corkery, Heathcote and Torphy' );
+insert into tmp$names(name) values( 'Hyatt Inc' );
+insert into tmp$names(name) values( 'Prohaska, Von and Christiansen' );
+insert into tmp$names(name) values( 'Hahn-Frami' );
+insert into tmp$names(name) values( 'Howell-Kemmer' );
+insert into tmp$names(name) values( 'Boyle, Douglas and Welch' );
+insert into tmp$names(name) values( 'Mann, Hartmann and Graham' );
+insert into tmp$names(name) values( 'Jast-Hirthe' );
+insert into tmp$names(name) values( 'Jast, Dach and Conn' );
+insert into tmp$names(name) values( 'Walker, Turner and Yundt' );
+insert into tmp$names(name) values( 'Bradtke PLC' );
+insert into tmp$names(name) values( 'Crist-Haley' );
+insert into tmp$names(name) values( 'Skiles PLC' );
+insert into tmp$names(name) values( 'Beahan, Klein and Will' );
+insert into tmp$names(name) values( 'Reilly-Reichel' );
+insert into tmp$names(name) values( 'Moen, Wolf and Marquardt' );
+insert into tmp$names(name) values( 'Bartoletti, Rolfson and Lockman' );
+insert into tmp$names(name) values( 'Bruen LLC' );
+insert into tmp$names(name) values( 'Kuvalis LLC' );
+insert into tmp$names(name) values( 'Bergstrom PLC' );
+insert into tmp$names(name) values( 'Goldner Inc' );
+insert into tmp$names(name) values( 'Volkman, Batz and Wintheiser' );
+insert into tmp$names(name) values( 'Marvin-McCullough' );
+insert into tmp$names(name) values( 'Pouros and Sons' );
+insert into tmp$names(name) values( 'Schultz, Schultz and Monahan' );
+insert into tmp$names(name) values( 'McGlynn, Strosin and Greenfelder' );
+insert into tmp$names(name) values( 'Quigley-Kihn' );
+insert into tmp$names(name) values( 'Carroll, Shields and Lynch' );
+insert into tmp$names(name) values( 'Mueller Inc' );
+insert into tmp$names(name) values( 'Lindgren-Wyman' );
+insert into tmp$names(name) values( 'Kling-Jerde' );
+insert into tmp$names(name) values( 'Johnston, Adams and Prohaska' );
+insert into tmp$names(name) values( 'Murphy-Dicki' );
+insert into tmp$names(name) values( 'Wolf Inc' );
+insert into tmp$names(name) values( 'Weimann-Ferry' );
+insert into tmp$names(name) values( 'Bins, Mayert and Deckow' );
+insert into tmp$names(name) values( 'Ward PLC' );
+insert into tmp$names(name) values( 'Schimmel-Mosciski' );
+insert into tmp$names(name) values( 'Moore-Goldner' );
+insert into tmp$names(name) values( 'Schoen, Koss and Weissnat' );
+insert into tmp$names(name) values( 'Yost-Quitzon' );
+insert into tmp$names(name) values( 'O''Kon, Robel and D''Amore' );
+insert into tmp$names(name) values( 'Morissette, Schaefer and Bogan' );
+insert into tmp$names(name) values( 'West-Kemmer' );
+insert into tmp$names(name) values( 'Rogahn-Hammes' );
+insert into tmp$names(name) values( 'Strosin and Sons' );
+insert into tmp$names(name) values( 'Huel, Muller and Botsford' );
+insert into tmp$names(name) values( 'Walker, Wisoky and Johnson' );
+insert into tmp$names(name) values( 'Kuhlman-Marvin' );
+insert into tmp$names(name) values( 'Klein, O''Connell and Spinka' );
+insert into tmp$names(name) values( 'Johnston-Vandervort' );
+insert into tmp$names(name) values( 'Schoen, Pouros and Toy' );
+insert into tmp$names(name) values( 'Schuppe Inc' );
+insert into tmp$names(name) values( 'Senger LLC' );
+insert into tmp$names(name) values( 'Mante-Moore' );
+insert into tmp$names(name) values( 'Mueller Group' );
+insert into tmp$names(name) values( 'Kilback, Rowe and Hayes' );
+insert into tmp$names(name) values( 'Auer-Mertz' );
+insert into tmp$names(name) values( 'Luettgen-Osinski' );
+insert into tmp$names(name) values( 'Homenick-Fisher' );
+insert into tmp$names(name) values( 'Rowe-Miller' );
+insert into tmp$names(name) values( 'Donnelly-Ondricka' );
+insert into tmp$names(name) values( 'Predovic, Abshire and O''Keefe' );
+insert into tmp$names(name) values( 'Runolfsdottir, Metz and Donnelly' );
+insert into tmp$names(name) values( 'Grady-Hickle' );
+insert into tmp$names(name) values( 'Schulist, Streich and Fahey' );
+insert into tmp$names(name) values( 'Paucek, Kshlerin and Kuphal' );
+insert into tmp$names(name) values( 'Bauch Group' );
+insert into tmp$names(name) values( 'Wyman-Bechtelar' );
+insert into tmp$names(name) values( 'Abshire PLC' );
+insert into tmp$names(name) values( 'Aufderhar-Maggio' );
+insert into tmp$names(name) values( 'Hermann, Schulist and Kshlerin' );
+insert into tmp$names(name) values( 'Gulgowski, Ziemann and Ortiz' );
+insert into tmp$names(name) values( 'Bahringer-Leuschke' );
+insert into tmp$names(name) values( 'Metz, Kling and Christiansen' );
+insert into tmp$names(name) values( 'Mann, Baumbach and Krajcik' );
+insert into tmp$names(name) values( 'Dietrich PLC' );
+insert into tmp$names(name) values( 'Walsh-Conroy' );
+insert into tmp$names(name) values( 'Gutmann-Hackett' );
+insert into tmp$names(name) values( 'Kassulke-Hamill' );
+insert into tmp$names(name) values( 'Runolfsson, Littel and Legros' );
+insert into tmp$names(name) values( 'Stiedemann, Mraz and Glover' );
+insert into tmp$names(name) values( 'Sawayn, Brown and Marquardt' );
+insert into tmp$names(name) values( 'Roberts and Sons' );
+insert into tmp$names(name) values( 'Spinka-Schmidt' );
+insert into tmp$names(name) values( 'Lueilwitz-Langworth' );
+insert into tmp$names(name) values( 'Rodriguez Ltd' );
+insert into tmp$names(name) values( 'Balistreri-Hills' );
+insert into tmp$names(name) values( 'Franecki, Parker and Effertz' );
+insert into tmp$names(name) values( 'Monahan and Sons' );
+insert into tmp$names(name) values( 'O''Hara LLC' );
+insert into tmp$names(name) values( 'Schmitt, White and Lemke' );
+insert into tmp$names(name) values( 'Kilback, Moore and Lueilwitz' );
+insert into tmp$names(name) values( 'Goldner-Jacobson' );
+insert into tmp$names(name) values( 'Boehm and Sons' );
+insert into tmp$names(name) values( 'Bartoletti and Sons' );
+insert into tmp$names(name) values( 'Douglas Ltd' );
+insert into tmp$names(name) values( 'McCullough-Braun' );
+insert into tmp$names(name) values( 'Ankunding and Sons' );
+insert into tmp$names(name) values( 'Legros-Hartmann' );
+insert into tmp$names(name) values( 'Howell, Hodkiewicz and Heathcote' );
+insert into tmp$names(name) values( 'Corkery, Osinski and Krajcik' );
+insert into tmp$names(name) values( 'Wehner-Murphy' );
+insert into tmp$names(name) values( 'Wehner-Fay' );
+insert into tmp$names(name) values( 'Ratke Group' );
+insert into tmp$names(name) values( 'Marquardt, Schuster and Brekke' );
+insert into tmp$names(name) values( 'Kilback, Huels and Hansen' );
+insert into tmp$names(name) values( 'Stark and Sons' );
+insert into tmp$names(name) values( 'Zulauf-Weissnat' );
+insert into tmp$names(name) values( 'Kling-Glover' );
+insert into tmp$names(name) values( 'Crooks-Schimmel' );
+insert into tmp$names(name) values( 'Prosacco, Heathcote and Graham' );
+insert into tmp$names(name) values( 'Maggio, Schaden and Stiedemann' );
+insert into tmp$names(name) values( 'Bahringer Ltd' );
+insert into tmp$names(name) values( 'Kutch, Erdman and Prosacco' );
+insert into tmp$names(name) values( 'Jaskolski-VonRueden' );
+insert into tmp$names(name) values( 'Weber-Funk' );
+insert into tmp$names(name) values( 'Kemmer, Kuvalis and Denesik' );
+insert into tmp$names(name) values( 'Metz-Goyette' );
+insert into tmp$names(name) values( 'Cremin-Marks' );
+insert into tmp$names(name) values( 'Oberbrunner-Wuckert' );
+insert into tmp$names(name) values( 'Hartmann-McDermott' );
+insert into tmp$names(name) values( 'Walsh, Hoeger and Marks' );
+insert into tmp$names(name) values( 'Mitchell and Sons' );
+insert into tmp$names(name) values( 'Rutherford Group' );
+insert into tmp$names(name) values( 'Hessel, Monahan and O''Connell' );
+insert into tmp$names(name) values( 'Lueilwitz, Purdy and Reichert' );
+insert into tmp$names(name) values( 'McKenzie Ltd' );
+insert into tmp$names(name) values( 'Kirlin, Kassulke and Swaniawski' );
+insert into tmp$names(name) values( 'Hayes PLC' );
+insert into tmp$names(name) values( 'Reichert, Hegmann and Hickle' );
+insert into tmp$names(name) values( 'Veum Ltd' );
+insert into tmp$names(name) values( 'Goyette-McDermott' );
+insert into tmp$names(name) values( 'Sauer-O''Reilly' );
+insert into tmp$names(name) values( 'Spencer, Walsh and Feil' );
+insert into tmp$names(name) values( 'Schmitt Ltd' );
+insert into tmp$names(name) values( 'Ryan, Zieme and Treutel' );
+insert into tmp$names(name) values( 'Tromp and Sons' );
+insert into tmp$names(name) values( 'Orn, Beer and Larson' );
+insert into tmp$names(name) values( 'Gleichner, Heidenreich and Fahey' );
+insert into tmp$names(name) values( 'Shanahan-Pfannerstill' );
+insert into tmp$names(name) values( 'Dickens-Roberts' );
+insert into tmp$names(name) values( 'Beatty LLC' );
+insert into tmp$names(name) values( 'Schaden Inc' );
+insert into tmp$names(name) values( 'Kertzmann, Medhurst and Conroy' );
+insert into tmp$names(name) values( 'McKenzie LLC' );
+insert into tmp$names(name) values( 'Pfeffer, Koepp and Leffler' );
+insert into tmp$names(name) values( 'Paucek Ltd' );
+insert into tmp$names(name) values( 'Kihn, Padberg and Hills' );
+insert into tmp$names(name) values( 'Carroll-Leffler' );
+insert into tmp$names(name) values( 'Conn, Stanton and Nikolaus' );
+insert into tmp$names(name) values( 'Bernhard-Ondricka' );
+insert into tmp$names(name) values( 'Sporer and Sons' );
+insert into tmp$names(name) values( 'Kihn, Brown and Ritchie' );
+insert into tmp$names(name) values( 'Graham, Kuhlman and Deckow' );
+insert into tmp$names(name) values( 'Wunsch, Corkery and Jenkins' );
+insert into tmp$names(name) values( 'O''Kon-Rowe' );
+insert into tmp$names(name) values( 'Bergnaum-Ebert' );
+insert into tmp$names(name) values( 'Larkin, Schiller and O''Reilly' );
+insert into tmp$names(name) values( 'Schowalter-Sawayn' );
+insert into tmp$names(name) values( 'Beatty Ltd' );
+insert into tmp$names(name) values( 'Kshlerin, Daugherty and Hahn' );
+insert into tmp$names(name) values( 'Jacobi, Koelpin and Runte' );
+insert into tmp$names(name) values( 'Medhurst, Koepp and Olson' );
+insert into tmp$names(name) values( 'Kutch-Little' );
+insert into tmp$names(name) values( 'Weimann, Christiansen and Halvorson' );
+insert into tmp$names(name) values( 'Wiegand-Dickens' );
+insert into tmp$names(name) values( 'O''Conner, Jakubowski and Lowe' );
+insert into tmp$names(name) values( 'Williamson LLC' );
+insert into tmp$names(name) values( 'Hermiston, Nitzsche and Greenholt' );
+insert into tmp$names(name) values( 'Eichmann-Bogisich' );
+insert into tmp$names(name) values( 'Strosin Inc' );
+insert into tmp$names(name) values( 'Bogan, Marquardt and Frami' );
+insert into tmp$names(name) values( 'Strosin Ltd' );
+insert into tmp$names(name) values( 'Torphy, Huel and Shields' );
+insert into tmp$names(name) values( 'Grant, Nolan and Sipes' );
+insert into tmp$names(name) values( 'Boyer Group' );
+insert into tmp$names(name) values( 'Bosco Ltd' );
+insert into tmp$names(name) values( 'Jenkins Ltd' );
+insert into tmp$names(name) values( 'Walter, Gusikowski and Stracke' );
+insert into tmp$names(name) values( 'Paucek and Sons' );
+insert into tmp$names(name) values( 'Cormier, Hickle and Wilkinson' );
+insert into tmp$names(name) values( 'Lindgren Ltd' );
+insert into tmp$names(name) values( 'Volkman-Prohaska' );
+insert into tmp$names(name) values( 'Funk, Herzog and Heaney' );
+insert into tmp$names(name) values( 'Emard, Torphy and Mohr' );
+insert into tmp$names(name) values( 'Kub, Bosco and Johnston' );
+insert into tmp$names(name) values( 'Abernathy, Wolf and Swaniawski' );
+insert into tmp$names(name) values( 'Schneider Ltd' );
+insert into tmp$names(name) values( 'Collier, Stokes and Klein' );
+insert into tmp$names(name) values( 'Von, O''Reilly and Ernser' );
+insert into tmp$names(name) values( 'Zboncak, Moore and Ernser' );
+insert into tmp$names(name) values( 'Mraz, Schulist and Wolf' );
+insert into tmp$names(name) values( 'Donnelly-Murphy' );
+insert into tmp$names(name) values( 'Bergnaum Inc' );
+insert into tmp$names(name) values( 'Roob, Lockman and Orn' );
+insert into tmp$names(name) values( 'Adams-Stroman' );
+insert into tmp$names(name) values( 'Gaylord, Hand and Corwin' );
+insert into tmp$names(name) values( 'Waelchi-Dietrich' );
+insert into tmp$names(name) values( 'Watsica-Ondricka' );
+insert into tmp$names(name) values( 'Zulauf and Sons' );
+insert into tmp$names(name) values( 'Wisozk-Abshire' );
+insert into tmp$names(name) values( 'Willms-Stiedemann' );
+insert into tmp$names(name) values( 'Marquardt-Conroy' );
+insert into tmp$names(name) values( 'Schmitt Group' );
+insert into tmp$names(name) values( 'Wolf, Larkin and Franecki' );
+insert into tmp$names(name) values( 'Hamill, Beier and Zulauf' );
+insert into tmp$names(name) values( 'Gerhold, Stamm and Ziemann' );
+insert into tmp$names(name) values( 'Dickens, Raynor and Brekke' );
+insert into tmp$names(name) values( 'Daniel, Miller and Kertzmann' );
+insert into tmp$names(name) values( 'Boehm Inc' );
+insert into tmp$names(name) values( 'Parker, Crona and Windler' );
+insert into tmp$names(name) values( 'Von, Kris and Trantow' );
+insert into tmp$names(name) values( 'Hackett Group' );
+insert into tmp$names(name) values( 'Nikolaus, Stamm and Boyle' );
+insert into tmp$names(name) values( 'Trantow LLC' );
+insert into tmp$names(name) values( 'Stehr-Cummerata' );
+insert into tmp$names(name) values( 'Beer Ltd' );
+insert into tmp$names(name) values( 'Brown, Weissnat and O''Kon' );
+insert into tmp$names(name) values( 'King-Keeling' );
+insert into tmp$names(name) values( 'Turcotte-Turcotte' );
+insert into tmp$names(name) values( 'Bergstrom Inc' );
+insert into tmp$names(name) values( 'Langworth, Dooley and Gaylord' );
+insert into tmp$names(name) values( 'Conroy, Stehr and Mohr' );
+insert into tmp$names(name) values( 'Orn-Ullrich' );
+insert into tmp$names(name) values( 'Wehner Ltd' );
+insert into tmp$names(name) values( 'Blick Inc' );
+insert into tmp$names(name) values( 'Okuneva PLC' );
+insert into tmp$names(name) values( 'Maggio, Ondricka and Schneider' );
+insert into tmp$names(name) values( 'Friesen-Glover' );
+insert into tmp$names(name) values( 'Larkin-Smitham' );
+insert into tmp$names(name) values( 'Osinski Inc' );
+insert into tmp$names(name) values( 'Romaguera-Hudson' );
+insert into tmp$names(name) values( 'Moen-D''Amore' );
+insert into tmp$names(name) values( 'Koss PLC' );
+insert into tmp$names(name) values( 'Johnson, Krajcik and Cruickshank' );
+insert into tmp$names(name) values( 'Bartoletti-Ullrich' );
+insert into tmp$names(name) values( 'Rice Inc' );
+insert into tmp$names(name) values( 'Koelpin Group' );
+insert into tmp$names(name) values( 'Reinger, Gibson and Davis' );
+insert into tmp$names(name) values( 'Watsica Group' );
+insert into tmp$names(name) values( 'McLaughlin, Erdman and Spencer' );
+insert into tmp$names(name) values( 'Goyette Ltd' );
+insert into tmp$names(name) values( 'Marks-Baumbach' );
+insert into tmp$names(name) values( 'Labadie, Ziemann and Osinski' );
+insert into tmp$names(name) values( 'Bradtke-Larkin' );
+insert into tmp$names(name) values( 'Lehner, Brown and Stanton' );
+insert into tmp$names(name) values( 'Grimes and Sons' );
+insert into tmp$names(name) values( 'Muller-Wuckert' );
+insert into tmp$names(name) values( 'Ward Inc' );
 commit;
 
--- insert suppliers (5..7% of overall number of agents) and customers (all rest):
+-------------------------------------------------------------------------------
+
 set term ^;
+-- 11.04.2022 insert geo data, hierachical reference.
+-- Earth -> Continent -> Country -> City
 execute block as
+    declare v_ear dm_ids;
+    declare v_eur dm_ids;
+    declare v_asi dm_ids;
+    declare v_nam dm_ids;
+    declare v_sam dm_ids;
+    declare v_afr dm_ids;
+    declare v_aus dm_ids;
+
+    declare v_ita dm_ids;
+    declare v_swe dm_ids;
+    declare v_ast dm_ids;
+    declare v_hun dm_ids;
+    declare v_fra dm_ids;
+
+    declare v_ind dm_ids;
+    declare v_jap dm_ids;
+    declare v_chi dm_ids;
+    declare v_ira dm_ids;
+
+    declare v_usa dm_ids;
+    declare v_mex dm_ids;
+    declare v_can dm_ids;
+
+    declare v_bra dm_ids;
+    declare v_agt dm_ids;
+
+    declare v_saf dm_ids;
+    declare v_egy dm_ids;
+
+    declare v_aur dm_ids;
+    declare v_nze dm_ids;
+    declare v_pap dm_ids;
+
+begin
+    delete from geo_points;
+
+    insert into geo_points(pid, name) values(null,'Earth') returning id into v_ear;
+    ---------------------------------------------------------------------------
+    -- CONTINENTS
+    insert into geo_points(pid, name) values(:v_ear,'Europe')  returning id into v_eur;
+    insert into geo_points(pid, name) values(:v_ear,'Asia')  returning id into v_asi;
+    insert into geo_points(pid, name) values(:v_ear,'North America')  returning id into v_nam;
+    insert into geo_points(pid, name) values(:v_ear,'South America')  returning id into v_sam;
+    insert into geo_points(pid, name) values(:v_ear,'Africa')  returning id into v_afr;
+    insert into geo_points(pid, name) values(:v_ear,'Australia and Oceania')  returning id into v_aus;
+    --################################################################################
+        -- COUNTRIES
+        insert into geo_points(pid, name, land_risk) values(:v_eur,'Italy',  50)  returning id into v_ita;
+        insert into geo_points(pid, name, land_risk) values(:v_eur,'Sweden', 20)  returning id into v_swe;
+        insert into geo_points(pid, name, land_risk) values(:v_eur,'Austria',30)  returning id into v_ast;
+        insert into geo_points(pid, name, land_risk) values(:v_eur,'Hungary',70)  returning id into v_hun;
+        insert into geo_points(pid, name, land_risk) values(:v_eur,'France', 40)  returning id into v_fra;
+    ---------------------------------------------------------------------------
+        insert into geo_points(pid, name, land_risk) values(:v_asi,'India', 50)  returning id into v_ind;
+        insert into geo_points(pid, name, land_risk) values(:v_asi,'Japan', 20)  returning id into v_jap;
+        insert into geo_points(pid, name, land_risk) values(:v_asi,'China', 40)  returning id into v_chi;
+        insert into geo_points(pid, name, land_risk) values(:v_asi,'Iran', 190)  returning id into v_ira;
+    ---------------------------------------------------------------------------
+        insert into geo_points(pid, name, land_risk) values(:v_nam,'USA',   20)  returning id into v_usa;
+        insert into geo_points(pid, name, land_risk) values(:v_nam,'Mexica',70)  returning id into v_mex;
+        insert into geo_points(pid, name, land_risk) values(:v_nam,'Canada',30)  returning id into v_can;
+    ---------------------------------------------------------------------------
+        insert into geo_points(pid, name, land_risk) values(:v_sam,'Brasil',90)  returning id into v_bra;
+        insert into geo_points(pid, name, land_risk) values(:v_sam,'Argentina', 80)  returning id into v_agt;
+    ---------------------------------------------------------------------------
+        insert into geo_points(pid, name, land_risk) values(:v_afr,'South Africa', 90)  returning id into v_saf;
+        insert into geo_points(pid, name, land_risk) values(:v_afr,'Egypt', 70)  returning id into v_egy;
+    ---------------------------------------------------------------------------
+        insert into geo_points(pid, name, land_risk) values(:v_aus,'Australia', 30)  returning id into v_aur;
+        insert into geo_points(pid, name, land_risk) values(:v_aus,'New Zealand', 20)  returning id into v_nze;
+        insert into geo_points(pid, name, land_risk) values(:v_aus,'Papua New Guinea', 290)  returning id into v_pap;
+    --################################################################################
+            -- CITIES:
+            insert into geo_points(pid, name, is_hub) values(:v_ita,'Roma', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_ita,'Firenze', 200);
+            insert into geo_points(pid, name, hub_dist) values(:v_ita,'Milano', 400);
+            insert into geo_points(pid, name, hub_dist) values(:v_ita,'Torino', 500);
+            insert into geo_points(pid, name, hub_dist) values(:v_ita,'Merano', 700);
+
+            insert into geo_points(pid, name, is_hub) values(:v_swe,'Malmo', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_swe,'Stockholm', 500);
+            insert into geo_points(pid, name, hub_dist) values(:v_swe,'Geteborg', 300);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_ast,'Vienna', 100);
+            insert into geo_points(pid, name, hub_dist) values(:v_ast,'Salzbourg', 300);
+            insert into geo_points(pid, name, hub_dist) values(:v_ast,'Innsbruck', 500);
+            insert into geo_points(pid, name, is_hub) values(:v_ast,'Linz', 1);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_hun,'Budapest', 200);
+            insert into geo_points(pid, name, is_hub) values(:v_hun,'Gyor', 1);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_fra,'Paris', 400);
+            insert into geo_points(pid, name, hub_dist) values(:v_fra,'Marcelle', 200);
+            insert into geo_points(pid, name, hub_dist) values(:v_fra,'Montpellier', 100);
+            insert into geo_points(pid, name, hub_dist) values(:v_fra,'Bordeu', 300);
+            insert into geo_points(pid, name, is_hub) values(:v_fra,'Lion',1);
+
+            insert into geo_points(pid, name, is_hub) values(:v_ind,'Delhi',1);
+            insert into geo_points(pid, name, hub_dist) values(:v_ind,'Mumbai', 400);
+
+
+            insert into geo_points(pid, name, hub_dist) values(:v_jap,'Tokyo', 300);
+            insert into geo_points(pid, name, is_hub) values(:v_jap,'Osaka', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_jap,'Yokohama', 200);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_chi,'Beijing', 700);
+            insert into geo_points(pid, name, hub_dist) values(:v_chi,'Wuhan', 400);
+            insert into geo_points(pid, name, is_hub) values(:v_chi,'Shanghai', 1);
+
+            insert into geo_points(pid, name, is_hub) values(:v_ira,'Tehran', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_chi,'Mashad', 300);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_usa,'New York', 300);
+            insert into geo_points(pid, name, hub_dist) values(:v_usa,'Los Angeles', 600);
+            insert into geo_points(pid, name, hub_dist) values(:v_usa,'San Francisco', 700);
+            insert into geo_points(pid, name, is_hub) values(:v_usa,'Chicago', 1);
+
+            insert into geo_points(pid, name, is_hub) values(:v_mex,'Mexico', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_mex,'Acapulco', 300);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_can,'Toronto', 200);
+            insert into geo_points(pid, name, is_hub) values(:v_can,'Quebec', 1);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_bra,'Brasilia', 700);
+            insert into geo_points(pid, name, is_hub) values(:v_bra,'Sao Paulo',1);
+            insert into geo_points(pid, name, hub_dist) values(:v_bra,'Rio de Janeiro', 200);
+
+            insert into geo_points(pid, name, is_hub) values(:v_agt,'Buenos Aeros', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_agt,'Cordoba', 300);
+            insert into geo_points(pid, name, hub_dist) values(:v_agt,'Salta', 400);
+
+
+            insert into geo_points(pid, name, hub_dist) values(:v_saf,'Johannesburg', 200);
+            insert into geo_points(pid, name, is_hub) values(:v_saf,'Cape Town', 1);
+            insert into geo_points(pid, name, hub_dist) values(:v_saf,'Durban', 300);
+            insert into geo_points(pid, name, hub_dist) values(:v_saf,'Pretoria', 400);
+
+            insert into geo_points(pid, name, is_hub) values(:v_egy,'Cairo', 1);
+
+
+            insert into geo_points(pid, name, hub_dist) values(:v_aur,'Canberra', 200);
+            insert into geo_points(pid, name, hub_dist) values(:v_aur,'Melbourn', 300);
+            insert into geo_points(pid, name, is_hub) values(:v_aur,'Sidney', 1);
+
+            insert into geo_points(pid, name, hub_dist) values(:v_nze,'Auckland', 500);
+            insert into geo_points(pid, name, is_hub) values(:v_nze,'Wellington', 1);
+
+            insert into geo_points(pid, name, is_hub) values(:v_pap,'Port Moresby', 1);
+end
+^
+
+--#############################################################################
+-- insert data with transport cost between continents:
+insert into  tariff_global (
+   src_continent_id
+  ,tgt_continent_id
+  ,price_per_unit
+)
+with
+b as (
+  select 'Asia' as c_name, 17000 as c_val from rdb$database union all
+  select 'Europe', 11000 from rdb$database union all
+  select 'North America', 14000 from rdb$database union all
+  select 'South America', 15000 from rdb$database union all
+  select 'Africa', 8000 from rdb$database union all
+  select 'Australia and Oceania', 21000 from rdb$database
+)
+,c as (
+    select c1.id src_id, c2.id as tgt_id, c1.name as src_name, c2.name as tgt_name
+    from v_geo_continents c1
+    join v_geo_continents c2 on c1.id > c2.id
+)
+select
+    c.src_id as src_continent_id
+    ,c.tgt_id as tgt_continent_id
+    --,c.src_name, c.tgt_name
+    --,b1.c_val as src_val, b2.c_val as tgt_val
+    ,abs(b2.c_val - b1.c_val) as price_per_unit
+from c
+join b b1 on c.src_name = b1.c_name
+join b b2 on c.tgt_name = b2.c_name
+^
+
+--##############################################################################
+-- insert data with transport cost between HUB-CITIES belonging same continent:
+
+insert into tariff_ground (
+   src_country_id
+  ,tgt_country_id
+  ,price_per_unit
+)
+
+with
+continent_country as (
+    select c.id as country_id, c.pid as continent_id, c.name as country_name, c.land_risk
+    from geo_points c
+    where exists (
+        select g.* from geo_points g
+        where
+        g.pid = c.id and
+        not exists(
+            select p.*
+            from geo_points p
+            where p.pid = g.id
+        )
+    )
+)
+,hub_cities as (
+    select g.id as city_id, g.pid as country_id, d.land_risk, g.name as city_name
+    ,d.country_name
+    ,d.continent_id
+    from geo_points g
+    join continent_country d on g.pid = d.country_id
+    where
+    g.is_hub = 1 and
+    not exists(
+        select p.*
+        from geo_points p
+        where p.pid = g.id
+    )
+)
+--select * from hub_cities
+,hubs_route as (
+    select
+        h1.city_id as src_city_id, h1.city_name as src_city_name
+        ,h1.country_name as src_country,h1.country_id as src_country_id
+        ,h1.land_risk as src_land_risk
+        ,h2.city_id as tgt_city_id
+        ,h2.city_name as tgt_city_name
+        ,h2.country_name as tgt_country,h2.country_id as tgt_country_id
+        ,h2.land_risk as tgt_land_risk
+    from hub_cities h1
+    join hub_cities h2 on h1.continent_id = h2.continent_id and h1.city_id > h2.city_id
+)
+--select * from hubs_route
+select
+    h.src_country_id
+   ,h.tgt_country_id
+   ,abs(tgt_land_risk - src_land_risk) as price_per_unit
+from hubs_route h
+^
+
+--##############################################################################
+-- insert data with transport cost between HUB-city and every NON-hub cities
+-- belonging same COUNTRY (cost from from HUB-city to itself is defined as 0).
+insert into tariff_local (
+   src_city_id
+  ,tgt_city_id
+  ,price_per_unit
+)
+with
+c as (
+    select g.id as city_id, g.pid as country_id, g.name as city_name, g.is_hub, g.hub_dist
+    from geo_points g
+    where not exists(
+        select p.*
+        from geo_points p
+        where p.pid = g.id
+    )
+)
+,d as (
+    select
+        a.country_id as src_country_id,
+        a.city_id src_city_id,
+        a.city_name src_city_name,
+        coalesce(a.hub_dist,0) as src_hub_dist,
+        a.is_hub src_is_hub
+        ,b.city_id as tgt_city_id
+        ,b.city_name as tgt_city_name
+        ,coalesce(b.hub_dist,0) as tgt_hub_dist
+    from c a
+    join c b on a.country_id = b.country_id and (a.city_id > b.city_id or a.city_id = b.city_id and a.is_hub=1)
+)
+--select * from d
+select
+     src_city_id
+    ,tgt_city_id
+    ,abs(tgt_hub_dist - src_hub_dist) as price_per_unit
+from d
+^
+
+--##############################################################################
+
+-- insert suppliers (5..7% of overall number of agents) and customers (all rest):
+execute block as
+
+    -- number of customers is about 93% of total number of contragents:
+    declare C_CUSTOMER_RATIO double precision  = 0.93;
+
     declare v_name type of column agents.name;
     declare r double precision;
     declare v_agents_count int;
     declare v_working_mode varchar(255);
+    declare v_min_city_id dm_ids;
+    declare v_max_city_id dm_ids;
+    declare v_rnd_city_id dm_ids;
+    declare i smallint;
+    declare n int;
+    declare v_sttm varchar(8190);
 begin
-    insert into agents(name,is_customer,is_supplier,is_our_firm) values( 'Firebird Foundation, Inc.', 0, 0, 1);
-    insert into agents(name,is_customer,is_supplier) values('MegaParts, GMBH', 0, 1);
-    insert into agents(name,is_customer,is_supplier) values('TerraSoft, Inc.', 1, 0);
+
+    delete from agents;
+
+    select min(c.id), max(c.id)
+    from v_geo_cities c
+    into v_min_city_id, v_max_city_id;
+
+    -- Add "Our Firm":
+    insert into agents(name,is_customer,is_supplier,is_our_firm, city_id) values( 'Firebird Foundation, Inc.', 0, 0, 1, :v_min_city_id);
 
     select s.svalue
     from settings s
     where s.working_mode='INIT' and s.mcode = 'WORKING_MODE'
     into v_working_mode;
 
-    select cast(s.svalue as int) - (select count(*) from agents)
+    select cast(s.svalue as int)
     from settings s
-    where s.working_mode=:v_working_mode and s.mcode = 'C_NUMBER_OF_AGENTS'
+    where s.working_mode = :v_working_mode and s.mcode = 'C_NUMBER_OF_AGENTS'
     into v_agents_count;
 
-    for
-        select a.name_01 ||' '|| b.name_01 nm
-        from tmp$agents a, tmp$agents b
-        order by rand()
-        rows (:v_agents_count)
-        into v_name
-    do
+    i = 0;
+    while (i <= 1) do
     begin
-        r=rand();
-        insert into agents(name,is_customer,is_supplier)
-        values( :v_name, iif( :r < 0.93, 1, 0), iif( :r < 0.93, 0, 1) );
+        if (v_agents_count * (1-C_CUSTOMER_RATIO) > 10) then
+            n = iif( i = 0, C_CUSTOMER_RATIO * v_agents_count, v_agents_count - (select count(*) from agents));
+        else
+            n = iif( i = 0, maxvalue(1, v_agents_count-1), 1);
+
+        if (i = 0) then
+            -- add CUSTOMERS:
+            v_sttm =     'select a.name_01 || '' '' || b.name_01 '
+                  || ' from tmp$agents a cross join tmp$agents b'
+            ;
+        else
+            -- add SUPPLIERS:
+            v_sttm =   'select n.name from tmp$names n'
+            ;
+
+        v_sttm = v_sttm
+            || ' order by rand()'
+            || ' rows(' || n || ')'
+            --|| ' rows(' || 1 + floor( iif(i=0, C_CUSTOMER_RATIO, 1-C_CUSTOMER_RATIO) * v_agents_count) || ')'
+        ;
+
+        for execute statement v_sttm into v_name
+        do begin
+            select first 1 g.id
+            from v_geo_cities g
+            where g.id >= :v_min_city_id + rand() * (:v_max_city_id - :v_min_city_id)
+            into v_rnd_city_id;
+
+            insert into agents(name, is_customer, is_supplier, city_id)
+            values( :v_name, iif(:i = 0, 1, 0), iif(:i = 0, 0, 1), :v_rnd_city_id );
+
+        end
+        i = i + 1;
     end
+
 end
 ^
 set term ;^
+
 -- this record is used as 'flag' in 1run_oltp_emul.bat that all completes OK:
 insert into semaphores(id, task) values(-1, 'all_build_ok');
 commit;

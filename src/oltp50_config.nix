@@ -522,28 +522,40 @@
 
 
    # OPTIONAL.
-   # Parameter 'use_external_to_stop' defines name of text file that can be used for premature stop all working isql sessions.
-   # This parameter is NOT required, i.e. it can be commented. In this case test can be stopped by running temporary script
-   # '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
-   # This script works normally for most cases except extremely high workload when establishing of new connect is difficult.
    #
-   # When extremely high workload is used then following message can appear on every attempt to establish new attachment:
-   #     Statement failed, SQLSTATE = 08004
-   #     connection rejected by remote interface
+   # Parameter 'use_external_to_stop' is optional and, if uncommented, can define way how we want to control test termination.
+   # 1. If this parameter is COMMENTED OUT then test can be prematurely stopped by launching temporary batch script
+   #    '$tmpdir/1stoptest.tmp.sh' which is created every time when test starts by script '1run_oltp_emul.sh'.
+   #    This script works normally for most cases except extremely high workload when establishing of new connect is difficult.
    #
-   # In such case it can be more reliable to use EXTERNAL TABLE (i.e. TEXT FILE) to make all attachments to stop their work. 
-   # This is so because every running session 'looks' from time to time into this external table and checks existense of at 
-   # least one record in it. So, test will be quickly self-stopped when at least one non-empty line exists there. 
-   # Please note that you have to make this file EMPTY before every new test run. Test can not do that when server is remote.
+   # 2. Under extremely high workload, usually when several work stations are used to perform test at the same time, it can be
+   #    difficult to establish connection, so we will not able to stop test as described previously, and get messages:
+   #        Statement failed, SQLSTATE = 08004
+   #        connection rejected by remote interface
+   #    In such case it can be more reliable to use EXTERNAL TABLE (i.e. TEXT FILE) to make all attachments to stop their work. 
+   #    This is so because every running session 'looks' from time to time into this external table and checks existense of at 
+   #    least one record in it. So, test will be quickly self-stopped when at least one non-empty line exists there. 
+   #    Please note that you have to make this file EMPTY before every new test run. Test can not do that when server is remote.
+   #    For using external table to control test termination, you have uncomment this parameter and specify it as '<name>.txt',
+   #    i.e. assign it extension ".txt"
+   #    If you have decided to use EXTERNAL FILE then following steps must be done for premature terminate all test activity:
+   #        1. Open that file in text editor and type one ascii-character there;
+   #        2. Press ENTER and save this file.
+   #        3. Make this file empty again when all isql sessions terminated their work.
+   #    Also, please note on value of parameter "ExternalFileAccess" in firebird.conf:
+   #        1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
+   #           queried by every attachment as 'stop flag'.
+   #        2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
    #
-   # If you have decided to use EXTERNAL FILE then following steps must be done for premature terminate all test activity:
-   #     1. Open that file in text editor and type one ascii-character there;
-   #     2. Press ENTER and save this file.
-   #     3. Make this file empty again when all isql sessions terminated their work.
-   # Also, please note on value of parameter "ExternalFileAccess" in firebird.conf:
-   #     1. When ExternalFileAccess = FULL then 'use_external_to_stop' must be full path and name of text file that will be 
-   #        queried by every attachment as 'stop flag'.
-   #     2. When ExternalFileAccess = RESTRICTED then 'use_external_to_stop' must be only NAME of file, without path.
+   # 3. You can also use this parameter to check ability of execution of heterogenous queries from Firebird to other DBMS,
+   #    by specifying name of existing .sql file which must consist of declaration of single stored procedure: 'sp_ext_stoptest'.
+   #    This procedure must be selective and return one column with name 'need_to_stop' of any numeric type. Inside this SP
+   #    you can make connection to other DBMS (not necessarily Firebird). This, for sure, will reduce performance but you will
+   #    have an opinion about how heterogenous connections work. Currenly test supports only two such files:
+   #        * oltp_sp_ext_stoptest_mysql.sql - to make connection to MySQL database using its own API;
+   #        * oltp_sp_ext_stoptest_odbc.sql  - to make connection to any other DBMS using ODBC driver that was preliminary
+   #                                           installed on server where Firebird runs.
+   #    NOTE: on Linux one need to specify file with prefix './'
    #
    #     <tmpdir>/1stoptest.tmp.sh
    #

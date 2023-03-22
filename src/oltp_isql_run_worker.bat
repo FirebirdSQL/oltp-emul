@@ -1853,8 +1853,8 @@ if .1.==.0. (
     (
 
       echo set width working_mode 12;
-      echo set width setting 32;
-      echo set width val 30;
+      echo set width setting_name 32;
+      echo set width setting_value 30;
       echo select 'WORKING_MODE' as setting_name, s.svalue as setting_value
       echo from settings s
       echo where s.working_mode = 'INIT' and s.mcode='WORKING_MODE'

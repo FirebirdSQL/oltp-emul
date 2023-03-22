@@ -7,5 +7,9 @@ but comments will be overwritten. Original config file will be untouched.
 
 Example:
 
-c:\python3x\python.exe make-config.py 
-/usr/bin/python make-config.py 
+    c:\python3x\python.exe make-config.py 
+    /usr/bin/python make-config.py 
+
+To make copy of all generated .tmp files one may to use command:
+
+    for /f %a in ('dir /b *.tmp') do copy %a %OLTP_EMUL_HOME%\src\%~na
