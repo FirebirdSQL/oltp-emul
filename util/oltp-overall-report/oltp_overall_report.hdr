@@ -1,0 +1,43 @@
+<tr>
+    <th rowspan="2" title="date of test run">run date</th>
+    <th colspan="3">Snapshot No</th>
+    <th colspan="3">Performance</th>
+    <th colspan="3">memory, DB-level</th>
+    <th colspan="3">memory, attachments level</th>
+    <th colspan="3">memory, transactions level</th>
+    <th colspan="3">memory, statements level</th>
+    <th colspan="3">results</th>
+</tr>
+
+<tr>
+    <th title="FB 3.x snapshot version">3.x</th>
+    <th title="FB 4.x snapshot version">4.x</th>
+    <th title="FB 5.x snapshot version">5.x</th>
+
+    <th title="FB 3.x, number of successfully completed business actions per minute, average for <test_time> interval">3.x</th>
+    <th title="FB 4.x, number of successfully completed business actions per minute, average for <test_time> interval">4.x</th>
+    <th title="FB 5.x, number of successfully completed business actions per minute, average for <test_time> interval">5.x</th>
+
+    <th title="FB 3.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for DB level">3.x</th>
+    <th title="FB 4.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for DB level">4.x</th>
+    <th title="FB 5.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for DB level">5.x</th>
+
+
+    <th title="FB 3.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for ATTACHMENT level">3.x</th>
+    <th title="FB 4.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for ATTACHMENT level">4.x</th>
+    <th title="FB 5.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for ATTACHMENT level">5.x</th>
+
+
+    <th title="FB 3.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for TRANSACTION level">3.x</th>
+    <th title="FB 4.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for TRANSACTION level">4.x</th>
+    <th title="FB 5.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for TRANSACTION level">5.x</th>
+
+
+    <th title="FB 3.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for STATEMENT level">3.x</th>
+    <th title="FB 4.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for STATEMENT level">4.x</th>
+    <th title="FB 5.x, maximal value of mon$memory_usage.mon$memory_used during <test_time> interval, for STATEMENT level">5.x</th>
+
+    <th title="FB 3.x, result of test">3.x</th>
+    <th title="FB 4.x, result of test">4.x</th>
+    <th title="FB 5.x, result of test">5.x</th>
+</tr>
