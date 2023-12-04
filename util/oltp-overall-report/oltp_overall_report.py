@@ -367,14 +367,14 @@ def write_chart_script_beg( main_html_file, attrib_map ):
 # end of write_chart_script_beg
 
 #-------------------------------------
-def write_chart_data( main_html_file, chart_data, points_limit, fb3x_field_name, fb4x_field_name, values_fmt, values_descr ):
+def write_chart_data( main_html_file, chart_data, points_limit, fb3x_field_name, fb4x_field_name, fb5x_field_name, values_fmt, values_descr ):
     i=0
     # values_descr = 'peak memory used by statements';
     for r in chart_data:
         if i==0:
             main_html_file.write("\n" + " "*12 + "[ '','FB3x %(values_descr)s', 'FB4x %(values_descr)s', 'FB5x %(values_descr)s', ]"  % locals() )
 
-        fb3x_field_value, fb4x_field_value, fb5x_field_value = '0', '0', '0'
+        fb3x_field_value, fb4x_field_value, fb5x_field_value = 'null', 'null', 'null'
 
         if r[fb3x_field_name]:
             fb3x_field_value = values_fmt.format( r[fb3x_field_name] )
@@ -384,6 +384,7 @@ def write_chart_data( main_html_file, chart_data, points_limit, fb3x_field_name,
             fb5x_field_value = values_fmt.format( r[fb5x_field_name] )
 
         main_html_file.write( "\n" + " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
+        print( " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
         i += 1
         if ( i>= points_limit):
             break
@@ -398,6 +399,9 @@ def write_chart_script_end( main_html_file, attrib_map ):
     divname = attrib_map['divName'] # mandatory
 
     curveType = attrib_map.get('curveType') # optional
+    fractionDigits = attrib_map.get('fractionDigits', 2)
+    
+    GROUPING_DIGITS_CHAR = ' '
 
     # 05.10.2020
     chartAreaLeft = attrib_map.get( 'chartAreaLeft', DEFAULT_CHART_AREA_LEFT) # optional: value for 'chartArea{ left:NNN, ...}'; value must NOT be less than 100!
@@ -407,12 +411,25 @@ def write_chart_script_end( main_html_file, attrib_map ):
     colorAttr = "colors: " + str(colorList).strip('()') + ","
     curveAttr = "curveType: '%(curveType)s'," % locals() if curveType else ''
 
+    #fmt_command = "fmt = new google.visualization.NumberFormat({  pattern:'0' });"
+    # https://developers.google.com/chart/interactive/docs/reference?hl=en#numberformatter
+    fmt_command = "fmt = new google.visualization.NumberFormat( {fractionDigits: %d, groupingSymbol: '%s'} );" % (fractionDigits, GROUPING_DIGITS_CHAR)
+
+    # https://developers.google.com/chart/interactive/docs/reference?hl=en#formatters
+    # Formatters only affect one column at a time; to reformat multiple columns, apply a formatter to each column that you want to change.
+    # NOTE: we assume that data with memory consumption occupies columns 1,2 and 3 (for FB 3.x, 4.x and 5.x):
+    fmt_command += '\n'.join ( [ f'fmt.format(data, {i+1});' for i,x in enumerate(colorList) ] )
+    # Result:
+    #    fmt.format(data, 1);
+    #    fmt.format(data, 2);
+    #    fmt.format(data, 3);
+                                
     # 19.08.2020: added 'chartArea:{left:N, top:M}'in order to adjust chart to the left margin of page.
     # NB do not set 'left' in chartArea less than 100 otherwise number on vertical axis will be hidden.
     chart_script_end=\
     '''
         ]);
-        new google.visualization.NumberFormat({ pattern:'0' }).format(data, 1);
+        %(fmt_command)s
         var options = {
                     title: '',
                     pointSize: 3,
@@ -424,6 +441,7 @@ def write_chart_script_end( main_html_file, attrib_map ):
                     hAxis: {
                          title: '',
                          format: '0',
+                         slantedText: true,
                          textStyle: {
                            color: 'DarkBlue',
                            bold: false,
@@ -433,7 +451,7 @@ def write_chart_script_end( main_html_file, attrib_map ):
                     },
                     vAxis: {
                          title: '',
-                         minValue: 0,
+                         // minValue: 0,
                          textStyle: {
                            color: 'DarkBlue',
                            bold: false,
@@ -498,6 +516,12 @@ DEFAULT_CHART_DIV_HEIGHT=int(os.environ['DEFAULT_CHART_DIV_HEIGHT'])
 DEFAULT_CHART_AREA_LEFT=int(os.environ['DEFAULT_CHART_AREA_LEFT'])
 DEFAULT_CHART_AREA_TOP=int(os.environ['DEFAULT_CHART_AREA_TOP'])
 
+CHART_COLORS_PERF_SCORE=os.environ['CHART_COLORS_PERF_SCORE']
+CHART_COLORS_MEMO_ALL=os.environ['CHART_COLORS_MEMO_ALL']
+CHART_COLORS_MEMO_ATT=os.environ['CHART_COLORS_MEMO_ATT']
+CHART_COLORS_MEMO_TRN=os.environ['CHART_COLORS_MEMO_TRN']
+CHART_COLORS_MEMO_STM=os.environ['CHART_COLORS_MEMO_STM']
+
 MAIN_RPT_FILE=os.environ['MAIN_RPT_FILE']
 
 #######################################
@@ -557,24 +581,24 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
             ,"fb3x_perf_score"
             ,"fb4x_perf_score"
             ,"fb5x_perf_score"
-            ,"fb3x_used_all"
-            ,"fb4x_used_all"
-            ,"fb5x_used_all"
-            ,"fb3x_used_by_att"
-            ,"fb4x_used_by_att"
-            ,"fb5x_used_by_att"
-            ,"fb3x_used_by_trn"
-            ,"fb4x_used_by_trn"
-            ,"fb5x_used_by_trn"
-            ,"fb3x_used_by_stm"
-            ,"fb4x_used_by_stm"
-            ,"fb5x_used_by_stm"
-            ,"fb3x_run_hhmm"
-            ,"fb4x_run_hhmm"
-            ,"fb5x_run_hhmm"
-            ,"fb3x_outcome"
-            ,"fb4x_outcome"
-            ,"fb5x_outcome"
+            ,cast("fb3x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, ALL"
+            ,cast("fb4x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, ALL"
+            ,cast("fb5x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, ALL"
+            ,cast("fb3x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, att"
+            ,cast("fb4x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, att"
+            ,cast("fb5x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, att"
+            ,cast("fb3x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, trn"
+            ,cast("fb4x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, trn"
+            ,cast("fb5x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, trn"
+            ,cast("fb3x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, stm"
+            ,cast("fb4x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, stm"
+            ,cast("fb5x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, stm"
+            --,"fb3x_run_hhmm"
+            --,"fb4x_run_hhmm"
+            --,"fb5x_run_hhmm"
+            ,"fb3x_outcome" as "fb3x result"
+            ,"fb4x_outcome" as "fb4x result"
+            ,"fb5x_outcome" as "fb5x result"
             ,"fb3x_run_id"
             ,"fb4x_run_id"
             ,"fb5x_run_id"
@@ -599,24 +623,24 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
             ,"fb3x_perf_score" : "FB 3.x, %(perf_score_hint)s" % locals()
             ,"fb4x_perf_score" : "FB 4.x, %(perf_score_hint)s" % locals()
             ,"fb5x_perf_score" : "FB 5.x, %(perf_score_hint)s" % locals()
-            ,"fb3x_used_all" : "FB 3.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb4x_used_all"  : "FB 4.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb5x_used_all"  : "FB 5.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb3x_used_by_att" : "FB 3.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb4x_used_by_att" : "FB 4.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb5x_used_by_att" : "FB 5.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb3x_used_by_trn" : "FB 3.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb4x_used_by_trn" : "FB 4.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb5x_used_by_trn" : "FB 5.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb3x_used_by_stm" : "FB 3.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-            ,"fb4x_used_by_stm" : "FB 4.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-            ,"fb5x_used_by_stm" : "FB 5.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb3x mem, ALL" : "FB 3.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb4x mem, ALL"  : "FB 4.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb5x mem, ALL"  : "FB 5.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb3x mem, att" : "FB 3.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb4x mem, att" : "FB 4.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb5x mem, att" : "FB 5.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb3x mem, trn" : "FB 3.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb4x mem, trn" : "FB 4.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb5x mem, trn" : "FB 5.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb3x mem, stm" : "FB 3.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb4x mem, stm" : "FB 4.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb5x mem, stm" : "FB 5.x, %(memo_used_hint)s, for STATEMENT level" % locals()
             ,"fb3x_run_hhmm" : "FB 3.x, start of phase defined by <test_time> minutes"
             ,"fb4x_run_hhmm" : "FB 4.x, start of phase defined by <test_time> minutes"
             ,"fb5x_run_hhmm" : "FB 5.x, start of phase defined by <test_time> minutes"
-            ,"fb3x_outcome" : "FB 3.x, outcome of test"
-            ,"fb4x_outcome" : "FB 4.x, outcome of test"
-            ,"fb5x_outcome" : "FB 5.x, outcome of test"
+            ,"fb3x result" : "FB 3.x, result of test"
+            ,"fb4x result" : "FB 4.x, result of test"
+            ,"fb5x result" : "FB 5.x, result of test"
     }
 
     data_in_descending_order = []
@@ -693,11 +717,11 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         {
-            'colors': ['MediumVioletRed', 'Blue', 'Indigo'],
+            'colors': [x.strip() for x in CHART_COLORS_PERF_SCORE.split(',') ],
             'curveType': 'function',
             'chartType': 'LineChart',
-            'divName' : 'perf_total_chart_div'
-
+            'divName' : 'perf_total_chart_div',
+            'fractionDigits' : 0
         }
     )
 
@@ -706,10 +730,10 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-    print(showtime(), 'Output CHART: memo_used, whole DB')
+    print(showtime(), 'Output CHART: peak memory used, for DB-level, Mb')
     ######################################################
 
-    main_html_file.write( '<h4> <a name="memo_used_all_chart">Memory usage: peak values of mon$memory_used for DB level</a> </h4>' )
+    main_html_file.write( '<h4> <a name="memo_used_all_chart">Memory usage: peak values of mon$memory_used for DB level, Mb</a> </h4>' )
 
     # Output head section for chart:
     #--------------------------------
@@ -724,7 +748,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_all', 'fb4x_used_all', 'fb5x_used_all', "{:20d}", 'peak memory used for DB level' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, ALL', 'fb4x mem, ALL', 'fb5x mem, ALL', "{:.2f}", 'peak memory used for DB level' )
 
 
     # Output tail for chart script:
@@ -732,12 +756,12 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': ['SandyBrown','Sienna', 'Maroon'],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_ALL.split(',') ],
             'curveType': 'function',
             'chartType': 'LineChart',
-            'divName' : 'perf_memo_used_all_div'
-          
-        }   
+            'divName' : 'perf_memo_used_all_div',
+            'fractionDigits' : 2
+        }
     )
 
     print(showtime(), 'Completed.' )
@@ -745,10 +769,10 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-    print(showtime(), 'Output CHART: memo_used, ATTACHMENTS level')
+    print(showtime(), 'Output CHART: peak memory used, ATTACHMENTS level, Mb')
     ##############################################################
 
-    main_html_file.write( '<h4> <a name="memo_used_att_chart">Memory usage: peak values of mon$memory_used for attachments</a> </h4>' )
+    main_html_file.write( '<h4> <a name="memo_used_att_chart">Memory usage: peak values of mon$memory_used for attachments, Mb</a> </h4>' )
 
     # Output head section for chart:
     # --------------------------------
@@ -763,7 +787,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_att', 'fb4x_used_by_att', 'fb5x_used_by_att', "{:20d}", 'peak memory used by attachments' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, att', 'fb4x mem, att', 'fb5x mem, att', "{:.2f}", 'peak memory used by attachments' )
 
 
     # Output tail for chart script:
@@ -771,22 +795,22 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': ['SkyBlue', 'SteelBlue', 'Navy'],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_ATT.split(',') ],
             'curveType': 'function',
             'chartType': 'LineChart',
-            'divName' : 'perf_memo_used_att_div'
-          
-        }   
+            'divName' : 'perf_memo_used_att_div',
+    	    'fractionDigits' : 2
+        }
     )
 
     print(showtime(), 'Copmpleted.')
 
     #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-    print(showtime(), 'Output CHART: memo_used, TRANSACTIONS level')
+    print(showtime(), 'Output CHART: peak memory used, TRANSACTIONS level, Mb')
     ################################################################
 
-    main_html_file.write( '<h4> <a name="memo_used_trn_chart">Memory usage: peak values of mon$memory_used for transactions</a> </h4>' )
+    main_html_file.write( '<h4> <a name="memo_used_trn_chart">Memory usage: peak values of mon$memory_used for transactions, Mb</a> </h4>' )
 
     # Output head section for chart:
     # --------------------------------
@@ -801,7 +825,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_trn', 'fb4x_used_by_trn', 'fb5x_used_by_trn', "{:20d}", 'peak memory used by transactions' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, trn', 'fb4x mem, trn', 'fb5x mem, trn', "{:.2f}", 'peak memory used by transactions' )
 
 
     # Output tail for chart script:
@@ -809,21 +833,23 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': ['LightGreen', 'Turquoise', 'DarkGreen',],
-            'chartType': 'ScatterChart',
-            'divName' : 'perf_memo_used_trn_div'
-          
-        }   
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_TRN.split(',') ],
+            # 'chartType': 'ScatterChart',
+            'curveType': 'function',
+            'chartType': 'LineChart',
+            'divName' : 'perf_memo_used_trn_div',
+    	    'fractionDigits' : 2
+        }
     )
 
     print(showtime(), 'Completed.')
 
     #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-    print(showtime(), 'Output CHART: memo_used, STATEMENTS level')
+    print(showtime(), 'Output CHART: peak memory used, STATEMENTS level, Mb')
     ##############################################################
 
-    main_html_file.write( '<h4> <a name="memo_used_stm_chart">Memory usage: peak values of mon$memory_used for statements</a> </h4>' )
+    main_html_file.write( '<h4> <a name="memo_used_stm_chart">Memory usage: peak values of mon$memory_used for statements, Mb</a> </h4>' )
 
     # Output head section for chart:
     # --------------------------------
@@ -838,7 +864,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_stm', 'fb4x_used_by_stm', 'fb5x_used_by_stm', "{:20d}", 'peak memory used by statements' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, stm', 'fb4x mem, stm', 'fb5x mem, stm', "{:.2f}", 'peak memory used by statements' )
 
 
     # Output tail for chart script:
@@ -846,12 +872,12 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': ['LightSalmon', 'MediumOrchid', 'Purple',],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_STM.split(',') ],
             'curveType': 'function',
             'chartType': 'LineChart',
-            'divName' : 'perf_memo_used_stm_div'
-          
-        }   
+            'divName' : 'perf_memo_used_stm_div',
+    	    'fractionDigits' : 2
+        }
     )
 
     print(showtime(), 'Completed.')
@@ -864,24 +890,37 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     print(showtime(), 'Output TABLE with results.')
     ################################################
 
-    main_html_file.write( '<h4> <a name="overall_results_table">All results in one table. Click on FB snapshot number to see detailed report for each run.</a> </h4>' )
-
+    main_html_file.write( '<h4><a name="overall_results_table">All results in one table. Unit of memory consumption: MB.</a></h4>' )
+    main_html_file.write( '<p>Click on FB snapshot number to see detailed report for each run.<br></br>')
     main_html_file.write('\n<table class="t_table">')
 
+    #######################
     # output column titles:
-    for h in fields:
-        v_tooltip = col_hints.get(h)
+    #######################
+    if os.environ['USE_PREDEFINED_TABLE_HDR']:
+        with open(os.environ['USE_PREDEFINED_TABLE_HDR']) as f:
+            results_table_header = f.read()
+            results_table_header = results_table_header.format(**locals())
+        main_html_file.write(results_table_header)
 
-        if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd'):
-            ### NOP ###
-            continue
+    else:
 
-        if h.lower().endswith('run_hhmm'):
-            h = h.replace('run_hhmm', 'run hh:mm')
+        for h in fields:
+            v_tooltip = col_hints.get(h)
 
-        # Output column title and its hint:
-        main_html_file.write('\n<th'+ ( ' title="'+v_tooltip+'"' if v_tooltip else '') +'>'+ h.replace('_',' ') +'</th>')
+            if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd'):
+                ### NOP ###
+                continue
 
+            if h.lower().endswith('run_hhmm'):
+                h = h.replace('run_hhmm', 'run hh:mm')
+
+            # Output column title and its hint:
+            main_html_file.write('\n<th'+ ( ' title="'+v_tooltip+'"' if v_tooltip else '') +'>'+ h.replace('_',' ') +'</th>')
+
+    ##############
+    # output data:
+    ##############
     for r in data_in_descending_order:
         main_html_file.write('\n<tr>')
 
@@ -924,14 +963,27 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
             if f.lower() == 'run_seqn' or f.lower().endswith('run_id') or f.lower().endswith('compress_cmd'):
                 ### NOP ###
                 continue
+
+            v_tooltip = ''
             if not r[f]:
                 v = '[null]'
                 v_style = ' class="null_cell"'
             else:
+                
+                #print('ftypes[col_idx]=',ftypes[col_idx] )
+                #print('repr: ',repr( ftypes[col_idx] ))
+                
                 c_list = ''
                 fb_vers = f.lower()[:4]
-                if fb_vers in ('fb3x', 'fb4x', 'fb5x'):
-                    c_list = fb_vers + '_font'
+                if 'fb3x' in f.lower():
+                    c_list = 'fb3x_font'
+                elif 'fb4x' in f.lower():
+                    c_list = 'fb4x_font'
+                elif 'fb5x' in f.lower():
+                    c_list = 'fb5x_font'
+                
+                #if fb_vers in ('fb3x', 'fb4x', 'fb5x'):
+                #    c_list = fb_vers + '_font'
 
 
                 # c_list = 'fb3x_font' if f.lower().startswith('fb3x') else ( 'fb4x_font' if f.lower().startswith('fb4x') else  '')
@@ -956,21 +1008,24 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
                 elif f.lower().endswith('perf_score'): # ==> 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score'
                     c_list += ' perf_score_column'
 
-                elif repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>" ):
+                elif repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>", "<type 'float'>", "<class 'float'>", "<class 'decimal.Decimal'>" ):
                     # do NOT use: v = locale.format('%.0f', v, grouping=True) -- converting to string problem here.
-                    v = '{:,d}'.format(v).replace(',',' ')
-                    c_list += ' big_numbers' # nowrap spaces!
+                    if repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>" ):
+                        v = '{:,d}'.format(v).replace(',',' ')
+                        c_list += ' big_numbers' # nowrap spaces!
+                    else:
+                        v = '{:.2f}'.format(v) # show memory consumption in Mb
 
-                    if f.lower().endswith('used_all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
+                    if f.lower().endswith(' mem, all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
                         c_list += ' memo_used_whole_db_column'
-                    elif f.lower().endswith('used_by_att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
+                    elif f.lower().endswith(' mem, att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
                         c_list += ' memo_used_att_level_column'
-                    elif f.lower().endswith('used_by_trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
+                    elif f.lower().endswith(' mem, trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
                         c_list += ' memo_used_trn_level_column'
-                    elif f.lower().endswith('used_by_stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
+                    elif f.lower().endswith(' mem, stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
                         c_list += ' memo_used_stm_level_column'
 
-                elif f.lower().endswith('outcome'): # ==> 'fb3x_outcome', 'fb4x_outcome', 'fb5x_outcome'
+                elif f.lower().endswith('result'): # ==> 'fb3x_outcome', 'fb4x_outcome', 'fb5x_outcome'
 
                     v = v.lower()
                     if 'crash' in v:
@@ -1008,12 +1063,14 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
                     elif 'premature' in v:
                         c_list += ' fbx_outcome_premature'
                     else:
+                        v_tooltip = v # "normal: test_time expired at 2023-04-08 16:42:29""
+                        v = 'normal'  # make content shorter, suggested by Vlad.
                         c_list += ' fbx_outcome_normal'
 
                 # NB: several classes will be here:
                 v_style = ' class="' + c_list +'"' if c_list else ''
 
-            main_html_file.write('\n<td' + v_style + '>' + str(v) + '</td>')
+            main_html_file.write('\n<td' + v_style + ( ' title="'+v_tooltip+'"' if v_tooltip else '') +  '>' + str(v) + '</td>')
 
         main_html_file.write('\n</tr>')
 

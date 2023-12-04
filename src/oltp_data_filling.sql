@@ -17054,8 +17054,11 @@ begin
             where g.id >= :v_min_city_id + rand() * (:v_max_city_id - :v_min_city_id)
             into v_rnd_city_id;
 
-            insert into agents(name, is_customer, is_supplier, city_id)
-            values( :v_name, iif(:i = 0, 1, 0), iif(:i = 0, 0, 1), :v_rnd_city_id );
+            update or insert
+                into agents( name,    is_customer,       is_supplier,       city_id)
+                     values( :v_name, iif(:i = 0, 1, 0), iif(:i = 0, 0, 1), :v_rnd_city_id )
+                     matching(name)
+            ;
 
         end
         i = i + 1;
