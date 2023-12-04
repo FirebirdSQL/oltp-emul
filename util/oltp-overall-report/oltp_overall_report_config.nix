@@ -1,12 +1,17 @@
 # Config file for oltp_overall_report.sh scenario.
-# Firebird 4.x must present to make overall report with OLTP-EMUL results.
-# NOTE: Python and FDB driver must be installed before run this scenario.
-# Results of OLTP-EMUL on different Firebird versions must be restored
-# from apropriate <results_storage_fbk> files on *most recent* 
-# version of Firebird. It is supposed that such FB instance can be found
-# in the folder that is specified by parameter <fbc> of OLTP-EMUL config
-# that is used for Firebird 4.x. 
+# Firebird MOST RECENT major version must be installed on machine
+# where we make overall report with OLTP-EMUL results.
+# It is supposed that such FB instance can be found in the folder that
+# is specified by parameter <fbc> of OLTP-EMUL config.
+# Currently such major version is 5.x
+# -----------------------------------
+# NOTE: Python and firebird-driver package must be installed before run
+# this scenario.
+# Results of OLTP-EMUL on different Firebird versions will be restored
+# from apropriate <results_storage_fbk> files.
 ########################################################################
+
+MOST_RECENT_MAJOR_FB=50
 
 # Path to config that is used by OLTP-EMUL for test Firebird 4.x.
 # Following parameters will be searched there:
@@ -14,15 +19,21 @@
 # Values of <usr> and <pwd> will be used here for create/open database
 # with overall results using client library from <fbc> folder.
 # Database from <results_storage_fbk> will be restored for gathering
-# results of runs on FB 4.x, see variable 'DB_OVERALL_FILE'
+# results of runs on FB 5.x, see variable 'DB_OVERALL_FILE'
 # in oltp_overall_report batch scenario
+#
+oltp50_config=../../src/oltp50_config.nix
+
+
+# Path to config that is used by OLTP-EMUL for test Firebird 4.x.
+# Database with results will be restored on Firebird 5.x which home
+# is defined by <fbc> in oltp50_config
 #
 oltp40_config=../../src/oltp40_config.nix
 
-# Path to config that is used by OLTP-EMUL when test Firebird 3.x:
-# Value of <results_storage_fbk> will be extracted from there.
-# Database with results will be restored on Firebird 4.x which home
-# is defined by <fbc> in oltp40_config
+# Path to config that is used by OLTP-EMUL when test Firebird 3.x.
+# Database with results will be restored on Firebird 5.x which home
+# is defined by <fbc> in oltp50_config
 #
 oltp30_config=../../src/oltp30_config.nix
 
@@ -31,7 +42,7 @@ oltp30_config=../../src/oltp30_config.nix
 # Normally value of this parameter must be 0.
 # Set it to 1 if DB became obsolete vs oltp_overall_report_DDL.sql
 #
-RECREATE_DB=0
+RECREATE_DB=1
 
 # Folder for storing generated HTML report and logs of this scenario:
 #
@@ -48,7 +59,7 @@ MAIN_RPT_FILE=oltp_overall_report.html
 
 # max age for logs, in days:
 #
-LOGS_MAX_AGE=10
+LOGS_MAX_AGE=30
 
 # Full path to Python executable. Minimal required version: 3.4
 # Following 3d-party packages must be installed before this script launch: fdb.

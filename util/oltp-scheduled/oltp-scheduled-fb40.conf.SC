@@ -1,4 +1,4 @@
-RemoteServicePort = 3400
+RemoteServicePort = 3444
 
 ServerMode=SuperClassic
 BugCheckAbort = 1
@@ -21,4 +21,4 @@ LockMemSize = 50M
 TempCacheLimit = 256M
 
 UdfAccess = Restrict UDF
-IpcName = fb40SC
+IpcName = oemul_fb40SC

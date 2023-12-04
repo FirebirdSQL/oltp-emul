@@ -31,16 +31,24 @@
 
 
 # Root URL where daily updated Firebird snapshots live:
-FB_SNAPSHOTS_URL=http://web.firebirdsql.org/download/snapshot_builds/linux
+# OLD, NOT USED: FB_SNAPSHOTS_URL=http://web.firebirdsql.org/download/snapshot_builds/linux
+# OLD, NOT USED: FB_SNAPSHOTS_URL=https://firebirdsql.org/en/snapshot-builds/
 
-# Suffix for download FB 2.5.x:
-FB_SUFFIX_25=fb2.5
+# Page with FB 3.x Linux snapshots:
+# Firebird-3.0.11.33675-0.amd64.tar.gz
+# Firebird-debuginfo-3.0.11.33675-0.amd64.tar.gz
+FB3X_SNAPSHOT_URL=https://web.firebirdsql.org/download/snapshot_builds/linux/fb3.0
 
-# Suffix for download FB 3.x:
-FB_SUFFIX_30=fb3.0
+# Page with FB 4.x Linux snapshots:
+# Firebird-4.0.3.2923-0.amd64.tar.gz 
+# Firebird-debuginfo-4.0.3.2923-0.amd64.tar.gz 
+FB4X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-v4.0
 
-# Suffix for download FB 4.x:
-FB_SUFFIX_40=fbtrunk
+# Page with snapshots for both Windows and Linux:
+# Firebird-5.0.0.1009-Beta2-linux-x64.tar.gz
+# Firebird-5.0.0.1009-Beta2-linux-x64-debugSymbols.tar.gz 
+FB5X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-master
+
 
 # Extension of snapshot files:
 FB_SNAPSHOT_SUFFIX=.amd64.tar.gz
@@ -54,6 +62,7 @@ GET_DEBUG_PACKAGE=0
 # Use the specified HTTP proxy. 
 #  If the port number is not specified, it is assumed at port 1080
 #PROXY_DATA="--proxy http://172.16.210.203:8080"
+
 # Path to root directory of OLTP-EMUL, relatively current folder:
 OLTP_ROOT_DIR=../..
 
@@ -79,9 +88,9 @@ OLTP_ROOT_DIR=../..
 #
 # DO NOT specify gmail: they deny .7z attachments!
 #
+#
 mail_smtp_url=smtps://smtp.yandex.ru:465
-#mail_hdr_from=fb-builds@yandex.ru
-mail_pwd_from=qwerty
+mail_pwd_from=CHANGE
 mail_hdr_to=fb-builds@yandex.ru
 mail_hdr_subj=FB_daily_build
 curl_verb=--verbose
@@ -91,7 +100,7 @@ curl_insec=--insecure
 # Entire snapshot will be splitted on volumes with size that
 # is specified by this parameter:
 #
-max_size_without_split=12000000
+max_size_without_split=23000000
 
 # Delay between subseqent e-mail messages in order to prevent denial caused too frequent messages
 # ("451 4.5.1 The recipient <some_name@company.com> has exceeded their message rate limit").
@@ -130,15 +139,15 @@ FB_BIN_PATTERN=\\|fb_inet_server\\|fb_smp_server\\|fbserver\\|firebird\\|isql\\|
 # they will be deleted, starting from oldest.
 # 1. Limit for logs of this script runs:
 #
-MAX_LOG_FILES=20
+MAX_LOG_FILES=200
 
 # 2. Limit for .txt and .html files (separately for each of them) of OLTP-EMUL results.
 # Value 0 means no limit, all files will be preserved.
 #
-MAX_RPT_FILES=30
+MAX_RPT_FILES=100
 
 # 3. Limit for compressed lock_print and stack traces files ($tmpdir/*.gz) which can be created
 # if new run encounters that DB is opened by previously launched test and its sessions
 # could not be terminated (hang) by some reason:
 #
-MAX_ZIP_FILES=10
+MAX_ZIP_FILES=100

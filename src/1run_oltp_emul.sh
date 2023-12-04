@@ -1182,6 +1182,8 @@ chk_FSCacheUsage() {
             fi
         done < <( awk '$1=$1' $tmp_log )
 
+        sho "use_fscache=${use_fscache}, fs_thresh=${fs_thresh}, db_pages=${db_pages}" $log4all
+        
         if [[ -n "$use_fscache" && -n "$fs_thresh" && -n "$db_pages" ]]; then
             if [[ $use_fscache -eq 1 ]]; then
                 sho "FileSystem cache will be used anyway, regardless of 'FileSystemCacheThreshold' value. Check PASSED, test can run." $log4all
@@ -1193,8 +1195,8 @@ chk_FSCacheUsage() {
 
                 # here we can occur only when use_fscache = -1, i.e. parameter UseFileSystemCache is commented
                 if [[ $fs_thresh -eq -1 ]]; then
-                    sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out. You have to remove uncomment one of them. Test can NOT run." $log4all
-                    exit 1
+                    sho "Both parameters 'UseFileSystemCache' and 'FileSystemCacheThreshold' are commented out." $log4all
+                    sho "Default value for 'UseFileSystemCache' is True. Check PASSED, test can run." $log4all
                 else
                     if [[ $test_can_run -ne 1 ]]; then
                         sho "Parameter FileSystemCacheThreshold = $fs_thresh must have value be GREATER than DefaultDbCachePages=$db_pages. Test can NOT run." $log4all
@@ -1937,12 +1939,12 @@ cat <<- EOF
      5) show-detailed-info:	$nfo
 EOF
  if  [ "$mode" = "run_test" ] ; then
-cat <<- EOF
-     6) sleep_min:              $sleep_min
-     7) sleep_max:              $sleep_max
-     8) sleep_udf:              $sleep_udf
-     9) sleep_mul:              $sleep_mul
-EOF
+	cat <<- EOF
+	     6) sleep_min:              $sleep_min
+	     7) sleep_max:              $sleep_max
+	     8) sleep_udf:              $sleep_udf
+	     9) sleep_mul:              $sleep_mul
+	EOF
   fi
 
 TIL_FOR_WORK="snapshot"
@@ -2996,11 +2998,12 @@ launch_preparing() {
   local sleep_mul=$5
   
   sho "sleep_min=$sleep_min, sleep_max=$sleep_max, sleep_udf=$sleep_udf, sleep_mul=$sleep_mul" $log4all
-  if [[ -z $sleep_mul ]]; then
+  
+  if [[ ! -z "${sleep_udf}" && -z $sleep_mul ]]; then
       sho "Input argument 'sleep_mul' is UNDEFINED." $log4all
-      sho "All input arguments for this routine must be defined explicitly in a caller." $log4all
+      sho "It must be defined in a caller because parameter 'sleep_udf' not empty: $sleep_udf" $log4all
       exit 1
-  fi
+ fi
   
   # Make comparison of TIMESTAMPS: this batch vs $tmpsql.
   # If this batch is OLDER that $tmpsql than we can SKIP recreating $tmpsql
@@ -3172,6 +3175,8 @@ launch_preparing() {
   echo
 
 } # end of launch_preparing()
+
+#-------------------------------------------------------------------------------------------------------------
 
 gen_temp_sh_for_stop()
 {
@@ -3639,6 +3644,7 @@ export tmperr=$tmpdir/tmp_get_fb_db_info.err
 
 vars=($clu fbsvcmgr)
 sho "Check that all necessary Firebird console utilities exist in directory '$fbc'. . ." $log4all
+
 
 for i in ${vars[@]}; do
   if [ ! -f "$fbc/${i}" ]
@@ -4178,9 +4184,11 @@ if [ -s "$sleep_ddl" ]; then
         sho "NOTE: config parameter 'sleep_ddl' is forcedly assigned to EMPTY string because of other parameters" $log4all
         sho "that allow SKIP usage of UDF now: mon_unit_perf=$mon_unit_perf, sleep_max=$sleep_max" $log4all
         unset sleep_ddl
+        unset sleep_mul
     fi
 else
     sho "Script defined by parameter 'sleep_ddl' does not exist. Sessions will work without UDF usage." $log4all
+    unset sleep_mul
 fi
 
 rm -f $tmpclg $tmperr $tmpchk
@@ -4463,7 +4471,6 @@ fi
 # 04.05.2020: same form of call
 launch_preparing $sql $sleep_min $sleep_max $sleep_udf $sleep_mul
 #####################
-
 
 # 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
 #    all working ISQL sessions by adding single character + LF into this file.

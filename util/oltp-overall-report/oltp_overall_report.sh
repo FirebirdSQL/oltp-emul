@@ -11,6 +11,27 @@ sho() {
   echo $dts. $msg>>$log4all
 }
 
+#.............................................
+
+bulksho() {
+    local tmplog=$1
+    local joblog=$2
+    local keep_tmp=${3:-0}
+    local dts=$(date +'%d.%m.%y %H:%M:%S')
+
+    # we have to set IFS to empty string in order to preserve leading spaces that are stored in the source file indentation
+    # https://stackoverflow.com/questions/7314044/use-bash-to-read-line-by-line-and-keep-space
+    # 'while IFS=... read...' - makes IFS be changed locally, only for duration of this loop:
+    while IFS='' read -r line
+    do
+        echo $dts. "${line}" # NB: must enclose in quotes for disabling 'evaluation' of '*' or other wildcard characters!
+        echo $dts. "$line" >> $joblog
+    done < <(cat $tmplog)
+    [[ $keep_tmp -eq 0 ]] && rm -f $tmplog
+}
+
+#.............................................
+
 display_intention() {
     local msg=$1
     local run_cmd=$2
@@ -29,6 +50,8 @@ cat <<- EOF ->>$log4all
 	STDERR: $std_err
 EOF
 }
+
+#.............................................
 
 log_elapsed_time() {
   # 4 debug only
@@ -192,10 +215,10 @@ log4all=$this_script_log
 sho "Intro $this_script_full_name. Current dir: $(pwd)"
 
 ####################################################
-###    p a r s e     o l t p 4 0 _ c o n f i g   ###
+###    p a r s e     o l t p 5 0 _ c o n f i g   ###
 ####################################################
-sho "Start parsing config $oltp40_config"
-awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=" > $this_script_tmp
+sho "Start parsing config $oltp50_config"
+awk '$1=$1' $oltp50_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=" > $this_script_tmp
 
 while IFS='=' read lhs rhs
 do
@@ -210,8 +233,57 @@ do
         elif [[ "${lhs^^}" == "FBC" ]]; then
 	    # folder with most recent version of FB (will be used for DB_OVERALL).
 	    # All .fbk will be restored using this version.
+            ############
             lhs=HEAD_FBC
+            ############
         elif [[ "${lhs^^}" == "MON_UNIT_PERF" ]]; then
+            lhs=o50_mon_perf
+        elif [[ "${lhs^^}" == "RESULTS_STORAGE_FBK" ]]; then
+            lhs=FB5X_FBK
+        fi
+        declare $lhs=$rhs
+        if [ $? -gt 0 ]; then
+          msg="+++ ACHTUNG +++ SOMETHING WRONG IN YOUR CONFIG FILE"
+          echo $msg
+          echo $dts. $msg >> $abendlog
+          exit 1
+        fi
+        echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
+        echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")>>$abendlog
+    fi
+### 07.11.2020 DOES NOT WORK WHEN RUN FROM CRON!!! >>> done < <( awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?="  )
+done<$this_script_tmp 
+sho "Finished parsing config $oltp50_config"
+
+if [[ -z "FB5X_FBK" ]]; then
+    sho "Parameter 'results_storage_fbk' must be defined in OLTP-EMUL config file '${oltp50_config}'"
+    exit 1
+fi
+
+# client library that must be used for connect:
+# it must belong to MOST RECENT Firebird major version
+FB_CLNT=$(dirname "$HEAD_FBC")/lib/libfbclient.so.2
+
+if [[ -n "${HEAD_FBC}/isql" && -n ${FB_CLNT} ]]; then
+    : # Parameter 'fbc' from '${oltp40_config}' points to existing binaries
+else
+    sho "Parameter 'fbc' from '${oltp40_config}' points to NON existing binaries."
+    exit 1
+fi
+
+####################################################
+###    p a r s e     o l t p 4 0 _ c o n f i g   ###
+####################################################
+sho "Start parsing config $oltp40_config"
+awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=" > $this_script_tmp
+
+while IFS='=' read lhs rhs
+do
+    if [[ ! $lhs =~ ^\ *# && -n $lhs ]]; then
+        lhs=$(echo -n $lhs | sed -e 's/^[ \t]*//') # trim all whitespaces
+        rhs=$(echo -n $rhs | sed -e 's/^[ \t]*//')
+        [[ ${rhs:0:1} == "$" ]] && rhs=$(eval "echo $rhs")
+	if [[ "${lhs^^}" == "MON_UNIT_PERF" ]]; then
             lhs=o40_mon_perf
         elif [[ "${lhs^^}" == "RESULTS_STORAGE_FBK" ]]; then
             lhs=FB4X_FBK
@@ -228,30 +300,17 @@ do
     fi
 ### 07.11.2020 DOES NOT WORK WHEN RUN FROM CRON!!! >>> done < <( awk '$1=$1' $oltp40_config | grep "^[^#]" | grep -i -E "usr[[:space:]]?=|pwd[[:space:]]?=|fbc[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?="  )
 done<$this_script_tmp 
-
 sho "Finished parsing config $oltp40_config"
-
-############################################
-
 if [[ -z "FB4X_FBK" ]]; then
     sho "Parameter 'results_storage_fbk' must be defined in OLTP-EMUL config file '${oltp40_config}'"
     exit 1
 fi
 
-# client library that must be used for connect:
-FB_CLNT=$(dirname "$HEAD_FBC")/lib/libfbclient.so.2
 
-if [[ -n "${HEAD_FBC}/isql" && -n ${FB_CLNT} ]]; then
-    : # Parameter 'fbc' from '${oltp40_config}' points to existing binaries
-else
-    sho "Parameter 'fbc' from '${oltp40_config}' points to NON existing binaries."
-    exit 1
-fi
 
 ####################################################
 ###    p a r s e     o l t p 3 0 _ c o n f i g   ###
 ####################################################
-
 sho "Start parsing config $oltp30_config"
 
 awk '$1=$1' $oltp30_config | grep "^[^#]" | grep -i -E "dbnm[[:space:]]?=|mon_unit_perf[[:space:]]?=|results_storage_fbk[[:space:]]?=">$this_script_tmp
@@ -277,13 +336,13 @@ do
         echo -e param=\|$lhs\|, val=\|$rhs\| $([[ -z $rhs ]] && echo -n "### HAS NO VALUE  ###")
     fi
 done<$this_script_tmp
-
 sho "Finished parsing config $oltp30_config"
-
 if [[ -z "FB3X_FBK" ]]; then
     sho "Parameter 'results_storage_fbk' must be defined in OLTP-EMUL config file '${oltp30_config}'"
     exit 1
 fi
+
+#####################################################
 
 if [[ ${o30_mon_perf} -ne 2 ]]; then
     sho "WARNING. Config parameter 'mon_unit_perf' in $oltp30_config has value $o30_mon_perf. Report can miss data about memory consumption for runs on FB 3.x."
@@ -292,8 +351,14 @@ if [[ ${o40_mon_perf} -ne 2 ]]; then
     sho "WARNING. Config parameter 'mon_unit_perf' in $oltp40_config has value $o40_mon_perf. Report can miss data about memory consumption for runs on FB 4.x."
 fi
 
-# Dir where .fbk and DB with overall results are stored:
-DB_OVERALL_DIR=$(dirname "${FB4X_FBK}")
+if [[ ${o50_mon_perf} -ne 2 ]]; then
+    sho "WARNING. Config parameter 'mon_unit_perf' in $oltp50_config has value $o50_mon_perf. Report can miss data about memory consumption for runs on FB 5.x."
+fi
+
+
+# Dir where .fbk and DB with overall results are stored.
+# Must be created by MOST RECENT major version of FB.
+DB_OVERALL_DIR=$(dirname "${FB5X_FBK}")
 
 # Database that will be used to store overall report data:
 DB_OVERALL_FILE=${DB_OVERALL_DIR}/${this_script_name_only}.tmp.fdb
@@ -344,6 +409,7 @@ find $DETAILS_DIR -type f -name "*.html" -mtime +${LOGS_MAX_AGE} -exec rm {} \;
 run_cmd="$HEAD_FBC/fbsvcmgr localhost:service_mgr user $DBA_USER password $DBA_PSWD info_server_version"
 fb_app_pid=0
 display_intention "Attempt to get SERVER version in $HEAD_FBC folder" "$run_cmd" "$this_script_log" "$this_script_err"
+
 eval "$run_cmd" 1>$this_script_tmp 2>$this_script_err
 
 cat $this_script_tmp
@@ -462,7 +528,7 @@ fi
 
 #------------------------------------------------------------------------
 
-dbarr=($FB4X_FBK $FB3X_FBK)
+dbarr=($FB5X_FBK $FB4X_FBK $FB3X_FBK)
 
 for fbk_name in "${dbarr[@]}"
 do
@@ -483,7 +549,9 @@ do
     cat $this_script_tmp>>$log4all
 
     fb_vers_in_source_db=UNKNOWN_SOURCE
-    if [ "$fbk_name" == "$FB4X_FBK" ]; then
+    if [ "$fbk_name" == "$FB5X_FBK" ]; then
+        fb_vers_in_source_db=5.
+    elif [ "$fbk_name" == "$FB4X_FBK" ]; then
         fb_vers_in_source_db=4.
     elif [ "$fbk_name" == "$FB3X_FBK" ]; then
         fb_vers_in_source_db=3.
@@ -548,14 +616,22 @@ export DEFAULT_CHART_AREA_TOP=$DEFAULT_CHART_AREA_TOP
 
 # 07.11.2020
 export MAIN_RPT_FILE=$MAIN_RPT_FILE
-###export MAIN_CSS_FILE=$MAIN_CSS_FILE
+
+# 10.04.2023
+export CHART_COLORS_PERF_SCORE=$CHART_COLORS_PERF_SCORE
+export CHART_COLORS_MEMO_ALL=$CHART_COLORS_MEMO_ALL
+export CHART_COLORS_MEMO_ATT=$CHART_COLORS_MEMO_ATT
+export CHART_COLORS_MEMO_TRN=$CHART_COLORS_MEMO_TRN
+export CHART_COLORS_MEMO_STM=$CHART_COLORS_MEMO_STM
+export USE_PREDEFINED_TABLE_HDR=$USE_PREDEFINED_TABLE_HDR
 
 ###############################
 ###  c a l l   P y t h o n  ###
 ###############################
-
-run_cmd="${PYTHON_BINARY} $this_script_directory/${this_script_name_only}.py"
+# '-u' ==> unbuffered output of each line
+run_cmd="${PYTHON_BINARY} -u $this_script_directory/${this_script_name_only}.py"
 display_intention "Launch Python and generate HTML reports" "$run_cmd" "$this_script_log" "$this_script_err"
+
 eval "$run_cmd" 2>$this_script_err
 catch_err $this_script_err "Check errors log."
 
@@ -568,6 +644,11 @@ fi
 ##########################
 ### b64 -> zip -> html ###
 ##########################
+
+echo ret fom Python-3 to $0
+echo HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+exit
+
 
 broken_b64_cnt=0
 broken_zip_cnt=0

@@ -1186,24 +1186,34 @@ returns(
     ,"run_seqn" smallint
     ,"fb3x_vers" varchar(80)
     ,"fb4x_vers" varchar(80)
+    ,"fb5x_vers" varchar(80)
     ,"fb3x_perf_score" bigint
     ,"fb4x_perf_score" bigint
+    ,"fb5x_perf_score" bigint
     ,"fb3x_used_all" bigint
     ,"fb4x_used_all" bigint
+    ,"fb5x_used_all" bigint
     ,"fb3x_used_by_att" bigint
     ,"fb4x_used_by_att" bigint
+    ,"fb5x_used_by_att" bigint
     ,"fb3x_used_by_trn" bigint
     ,"fb4x_used_by_trn" bigint
+    ,"fb5x_used_by_trn" bigint
     ,"fb3x_used_by_stm" bigint
     ,"fb4x_used_by_stm" bigint
+    ,"fb5x_used_by_stm" bigint
     ,"fb3x_run_hhmm" varchar(25)
     ,"fb4x_run_hhmm" varchar(25)
+    ,"fb5x_run_hhmm" varchar(25)
     ,"fb3x_outcome" varchar(80)
     ,"fb4x_outcome" varchar(80)
+    ,"fb5x_outcome" varchar(80)
     ,"fb3x_run_id" bigint
     ,"fb4x_run_id" bigint
+    ,"fb5x_run_id" bigint
     ,"fb3x_compress_cmd" varchar(255)
     ,"fb4x_compress_cmd" varchar(255)
+    ,"fb5x_compress_cmd" varchar(255)
 )
 as
 begin
@@ -1231,7 +1241,7 @@ begin
             from all_fb_overall o
             LEFT -- NB: table 'all_fb_perf_cache_dyn' will be EMPTY when mon_unit_perf = 0
                 join all_fb_perf_cache_dyn c on o.run_id = c.run_id and o.fb_build_no = c.fb_build_no
-            where o.fb_engine starting with '3.0'
+            where o.fb_engine starting with '3.'
             group by
                  o.run_id
                 ,cast(o.test_phase_beg as date)
@@ -1264,7 +1274,7 @@ begin
             from all_fb_overall o
             LEFT -- NB: table 'all_fb_perf_cache_dyn' will be EMPTY when mon_unit_perf = 0 
                 join all_fb_perf_cache_dyn c on o.run_id = c.run_id and o.fb_build_no = c.fb_build_no
-            where o.fb_engine starting with '4.0'
+            where o.fb_engine starting with '4.'
             group by
                  o.run_id
                 ,cast(o.test_phase_beg as date)
@@ -1275,6 +1285,40 @@ begin
                 ,o.test_finish_state
                 ,o.report_compress_cmd
         )
+        ,fb5 as (
+            select
+                 o.run_id fb5x_run_id
+                ,cast(o.test_phase_beg as date) as fb5x_run_date
+                ,substring(cast(o.test_phase_beg as varchar(50)) from 12 for 5) as fb5x_run_hhmm
+                ,o.fb_engine
+                 || '.' || cast(o.fb_build_no as varchar(10)) fb5x_vers
+                ,o.perf_score fb5x_perf_score
+                --,o.test_finish_state fb5x_outcome
+                ,coalesce(  o.test_finish_state
+                           ,nullif((select count(*) from all_fb_crash_list k where k.run_id = o.run_id and k.fb_build_no = o.fb_build_no),0 ) || ' crash(es) detected'
+                         )
+                 as fb5x_outcome
+                ,o.report_compress_cmd fb5x_compress_cmd
+                ,coalesce( max(c.memo_used_all), 0) fb5x_used_all
+                ,coalesce( max(c.memo_used_by_attachments), 0) fb5x_used_by_att
+                ,coalesce( max(c.memo_used_by_transactions), 0) fb5x_used_by_trn
+                ,coalesce( max(c.memo_used_by_statements), 0) fb5x_used_by_stm
+                ,dense_rank()over( partition by cast(o.test_phase_beg as date) order by o.run_id desc) as fb5x_run_seqn
+            from all_fb_overall o
+            LEFT -- NB: table 'all_fb_perf_cache_dyn' will be EMPTY when mon_unit_perf = 0 
+                join all_fb_perf_cache_dyn c on o.run_id = c.run_id and o.fb_build_no = c.fb_build_no
+            where o.fb_engine starting with '5.'
+            group by
+                 o.run_id
+                ,cast(o.test_phase_beg as date)
+                ,substring(cast(o.test_phase_beg as varchar(50)) from 12 for 5)
+                ,o.fb_engine
+                ,o.fb_build_no
+                ,o.perf_score
+                ,o.test_finish_state
+                ,o.report_compress_cmd
+        )
+
         ,u as (
             select
                  a.fb3x_run_date as run_date
@@ -1302,8 +1346,21 @@ begin
                 ,null as fb4x_outcome
                 ,null as fb4x_compress_cmd
                 -------------------------
+                ,null as fb5x_run_id
+                ,null as fb5x_run_hhmm
+                ,null as fb5x_vers
+                ,null as fb5x_perf_score
+                ,null as fb5x_used_all
+                ,null as fb5x_used_by_att
+                ,null as fb5x_used_by_trn
+                ,null as fb5x_used_by_stm
+                ,null as fb5x_outcome
+                ,null as fb5x_compress_cmd
+                -------------------------
             from fb3 a
+
             UNION ALL
+
             select
                  b.fb4x_run_date
                 ,b.fb4x_run_seqn
@@ -1329,7 +1386,61 @@ begin
                 ,b.fb4x_used_by_stm
                 ,b.fb4x_outcome
                 ,b.fb4x_compress_cmd
+                -------------------------
+                ,null as fb5x_run_id
+                ,null as fb5x_run_hhmm
+                ,null as fb5x_vers
+                ,null as fb5x_perf_score
+                ,null as fb5x_used_all
+                ,null as fb5x_used_by_att
+                ,null as fb5x_used_by_trn
+                ,null as fb5x_used_by_stm
+                ,null as fb5x_outcome
+                ,null as fb5x_compress_cmd
+                -------------------------
             from fb4 b
+            
+            UNION ALL
+            
+            select
+                 c.fb5x_run_date
+                ,c.fb5x_run_seqn
+                ----------------------------
+                ,null as fb3x_run_id
+                ,null as fb3x_run_hhmm
+                ,null as fb3x_vers
+                ,null as fb3x_perf_score
+                ,null as fb3x_used_all
+                ,null as fb3x_used_by_att
+                ,null as fb3x_used_by_trn
+                ,null as fb3x_used_by_stm
+                ,null as fb3x_outcome
+                ,null as fb3x_compress_cmd
+                -------------------------
+                ,null as fb4x_run_id
+                ,null as fb4x_run_hhmm
+                ,null as fb4x_vers
+                ,null as fb4x_perf_score
+                ,null as fb4x_used_all
+                ,null as fb4x_used_by_att
+                ,null as fb4x_used_by_trn
+                ,null as fb4x_used_by_stm
+                ,null as fb4x_outcome
+                ,null as fb4x_compress_cmd
+                ----------------------------
+                ,c.fb5x_run_id -- needed for extracting html-report
+                ,c.fb5x_run_hhmm
+                ,c.fb5x_vers
+                ,c.fb5x_perf_score
+                ,c.fb5x_used_all
+                ,c.fb5x_used_by_att
+                ,c.fb5x_used_by_trn
+                ,c.fb5x_used_by_stm
+                ,c.fb5x_outcome
+                ,c.fb5x_compress_cmd
+                -------------------------
+            from fb5 c
+            
         )
         --select * from u
 
@@ -1339,59 +1450,80 @@ begin
             --------------------------------
             ,max(fb3x_vers) as fb3x_vers
             ,max(fb4x_vers) as fb4x_vers
-
+            ,max(fb5x_vers) as fb5x_vers
+             ------------------------------------------
             ,max(fb3x_perf_score) as fb3x_perf_score
             ,max(fb4x_perf_score) as fb4x_perf_score
-
+            ,max(fb5x_perf_score) as fb5x_perf_score
+             ------------------------------------------
             ,max(fb3x_used_all) as fb3x_used_all
             ,max(fb4x_used_all) as fb4x_used_all
-
+            ,max(fb5x_used_all) as fb5x_used_all
+             ------------------------------------------
             ,max(fb3x_used_by_att) as fb3x_used_by_att
             ,max(fb4x_used_by_att) as fb4x_used_by_att
-
+            ,max(fb5x_used_by_att) as fb5x_used_by_att
+             ------------------------------------------
             ,max(fb3x_used_by_trn) as fb3x_used_by_trn
             ,max(fb4x_used_by_trn) as fb4x_used_by_trn
-
+            ,max(fb5x_used_by_trn) as fb5x_used_by_trn
+             ------------------------------------------
             ,max(fb3x_used_by_stm) as fb3x_used_by_stm
             ,max(fb4x_used_by_stm) as fb4x_used_by_stm
+            ,max(fb5x_used_by_stm) as fb5x_used_by_stm
              ------------------------------------------
             ,max(fb3x_run_hhmm) as fb3x_run_hhmm
             ,max(fb4x_run_hhmm) as fb4x_run_hhmm
+            ,max(fb5x_run_hhmm) as fb4x_run_hhmm
+            --------------------------------------------
             ,max(fb3x_outcome) as fb3x_outcome
             ,max(fb4x_outcome) as fb4x_outcome
+            ,max(fb5x_outcome) as fb5x_outcome
             --------------------------------------------
             -- needed for extracting detailed html-reports:
             ,max(fb3x_run_id) as fb3x_run_id 
             ,max(fb4x_run_id) as fb4x_run_id
+            ,max(fb5x_run_id) as fb5x_run_id
             ,max(fb3x_compress_cmd) as fb3x_compress_cmd
             ,max(fb4x_compress_cmd) as fb4x_compress_cmd
+            ,max(fb5x_compress_cmd) as fb5x_compress_cmd
         from u
         group by run_date,run_seqn
         order by run_date desc, run_seqn
         rows (:a_rows_limit)
     into
-        "run_date"
-        ,"run_seqn"
-        ,"fb3x_vers"
-        ,"fb4x_vers"
-        ,"fb3x_perf_score"
-        ,"fb4x_perf_score"
-        ,"fb3x_used_all"
-        ,"fb4x_used_all"
-        ,"fb3x_used_by_att"
-        ,"fb4x_used_by_att"
-        ,"fb3x_used_by_trn"
-        ,"fb4x_used_by_trn"
-        ,"fb3x_used_by_stm"
-        ,"fb4x_used_by_stm"
-        ,"fb3x_run_hhmm"
-        ,"fb4x_run_hhmm"
-        ,"fb3x_outcome"
-        ,"fb4x_outcome"
-        ,"fb3x_run_id"
-        ,"fb4x_run_id"
-        ,"fb3x_compress_cmd"
-        ,"fb4x_compress_cmd"
+     "run_date"
+    ,"run_seqn"
+    ,"fb3x_vers"
+    ,"fb4x_vers"
+    ,"fb5x_vers"
+    ,"fb3x_perf_score"
+    ,"fb4x_perf_score"
+    ,"fb5x_perf_score"
+    ,"fb3x_used_all"
+    ,"fb4x_used_all"
+    ,"fb5x_used_all"
+    ,"fb3x_used_by_att"
+    ,"fb4x_used_by_att"
+    ,"fb5x_used_by_att"
+    ,"fb3x_used_by_trn"
+    ,"fb4x_used_by_trn"
+    ,"fb5x_used_by_trn"
+    ,"fb3x_used_by_stm"
+    ,"fb4x_used_by_stm"
+    ,"fb5x_used_by_stm"
+    ,"fb3x_run_hhmm"
+    ,"fb4x_run_hhmm"
+    ,"fb5x_run_hhmm"
+    ,"fb3x_outcome"
+    ,"fb4x_outcome"
+    ,"fb5x_outcome"
+    ,"fb3x_run_id"
+    ,"fb4x_run_id"
+    ,"fb5x_run_id"
+    ,"fb3x_compress_cmd"
+    ,"fb4x_compress_cmd"
+    ,"fb5x_compress_cmd"
     do
         suspend;
 end

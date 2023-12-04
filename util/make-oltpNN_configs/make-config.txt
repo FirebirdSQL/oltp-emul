@@ -614,7 +614,7 @@ mon_usr_passwd_all:    #
 mon_usr_passwd_def_all:    mon_usr_passwd = 0Ltp-Emu1
 
 
-mon_unit_list_all:    # This setting can be used only when config parameter 'enable_mon_query' is 1.
+mon_unit_list_all:    # This setting can be used only when config parameter 'mon_unit_perf' is 1.
 mon_unit_list_all:    # List of top-level units (see 'business_ops' table) which performance statistics we want 
 mon_unit_list_all:    # to be logged by querying  monitoring tables. Logging is done by SP srv_log_mon_for_traced_units.
 mon_unit_list_all:    # Value can be single unit name or LIST of unit names delimited by forward slash.
@@ -625,7 +625,7 @@ mon_unit_list_all:    #
 mon_unit_list_def_all:    mon_unit_list = //
 
 
-mon_query_interval_all:    # This setting is applied only when config parameter 'enable_mon_query' is 2.
+mon_query_interval_all:    # This setting is applied only when config parameter 'mon_unit_perf' is 2.
 mon_query_interval_all:    # Number of seconds between calls to SP that gathers monitoring data for all working attachments.
 mon_query_interval_all:    # Monitor data will be gathered only by single (dedicated) isql session which is launched first.
 mon_query_interval_all:    # Parameter 'sleep_ddl' must be uncommented and its value has to point on existent SQL script

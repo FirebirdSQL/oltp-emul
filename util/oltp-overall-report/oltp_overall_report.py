@@ -1,7 +1,6 @@
-from __future__ import print_function
-import inspect
 import os
 import sys
+import inspect
 import socket
 import subprocess
 import tempfile
@@ -23,12 +22,11 @@ import ast
 from shutil import copyfile
 import datetime
 import time
-import fdb
-try:
-    # Py-3
-    from urllib.parse import quote
-except ImportError:
-    from urllib import quote
+#import fdb
+import firebird.driver
+from firebird.driver import *
+from urllib.parse import quote
+from pathlib import Path
 
 whoami=os.path.realpath(__file__)
 
@@ -111,7 +109,7 @@ def generate_html_head( css_page ):
 #--------------------------
 
 def extract_detailed_report( con, rec, fb_prefix, html_path ):
-    # fb_prefix = 'fb3x_', 'fb4x_'
+    # fb_prefix = 'fb3x_', 'fb4x_', 'fb5x_'
 
     run_id = str(rec[ fb_prefix+'run_id'])
     build_no = rec[ fb_prefix+'vers'].split('.')[-1]
@@ -149,8 +147,8 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
         else:
             detl_ext = '.zip'
 
-	# NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
-	# for all files that have this extension and run decoding of them to readable text!
+        # NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
+        # for all files that have this extension and run decoding of them to readable text!
         detl_ext += '.b64'
 
         print('run_id=',run_id,', build_no=',build_no,'; compress_cmd=',rec[ fb_prefix+'compress_cmd' ],'; compress_base=',compress_base,'; detl_ext=',detl_ext)
@@ -158,12 +156,21 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
   
     # Extract report for this OLTP-EMUL run and store in html_path
     ################
-    c_report = con.cursor()
-    c_report.execute( 'select txt, zip2b64 from sp_show_report_data( ?, ?)', (build_no, run_id, ) )
 
-    detl_rows=c_report.fetchallmap()
-    c_report.close()
+    detl_rows = []
+    with con.cursor() as c_report:
+        c_report.execute( 'select txt, zip2b64 from sp_show_report_data( ?, ?)', (build_no, run_id, ) )
+        # curr func: extract_detailed_report
+        # FDB driver .fetchallmap(): returns a list of mappings of field name to field value, rather than a list of tuples.
+        # firebird-driver .to_dict(): Returns row tuple as dictionary with field names as keys.
+        for r in c_report:
+            detl_rows.append(c_report.to_dict(r))
 
+    #print('chk detl_rows{}:')
+    #for k,v in detl_rows.items():
+    #    print(k,':::',v)
+    #print('$$$$$$$$$$$$$$$$$$$$$$$$')
+    
     html_file = None
     if detl_rows:
         file_pref = 'oltp-report_build_' +build_no + '_run_' + run_id
@@ -174,17 +181,16 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
             # field fbNN_compress_cmd is NULL --> we have to decode text in base-64 format
             # that was previously encoded in 'oltp_isql_run_worker' batch scenario for POSIX:
             # while read line; do
-			#     echo "insert into results_reports(run_id, txt) values(${v_run_id}, '${line}');">>$psql
-		    # done < <( cat $htm_with_params_in_name | base64 )
-		    # ::: NB::: On Windows this can not occur because any text is compressed even when parameter
-		    # 'compress_cmd' is commented out: batch oltp_isql_run_worker.bat creates temporary .vbs script
-		    # and uses built-in ability to compress text/html to .zip format.
+            #     echo "insert into results_reports(run_id, txt) values(${v_run_id}, '${line}');">>$psql
+            # done < <( cat $htm_with_params_in_name | base64 )
+            # ::: NB::: On Windows this can not occur because any text is compressed even when parameter
+            # 'compress_cmd' is commented out: batch oltp_isql_run_worker.bat creates temporary .vbs script
+            # and uses built-in ability to compress text/html to .zip format.
 
             # Do this from 'txt' field directly to .html-file:
-            f = codecs.open( detl_file, 'w', encoding='utf-8')
-            for t in [ t for t in detl_rows if t['TXT'] ]:
-                f.write( base64.b64decode( t['TXT'] ).decode("utf-8") )
-            f.close()
+            with codecs.open( detl_file, 'w', encoding='utf-8') as f:
+                for t in [ t for t in detl_rows if t['TXT'] ]:
+                    f.write( base64.b64decode( t['TXT'] ).decode("utf-8") )
         else:
             # field fbNN_compress_cmd is NOT null --> output base64 data from 'zip2b64' field.
             # Decoding it to binary (.zip/.7z/.zst) and decompressing to html will be done 
@@ -197,10 +203,10 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
             # Windows: for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do ...
             # POSIX:   b64list=$DETAILS_DIR/*.b64 ; for b in $b64list do ...
             #####################################################################################
-            f = codecs.open( detl_file, 'w')
-            for t in [t for t in detl_rows if  t['ZIP2B64'] ]:
-                f.write( t['ZIP2B64'] + '\n' )
-            f.close()
+            with codecs.open( detl_file, 'w') as f:
+                for t in [t for t in detl_rows if  t['ZIP2B64'] ]:
+                    f.write( t['ZIP2B64'] + '\n' )
+
             #print('created file ', f.name)
     
     # We return name of HTML file in order to have link to open it when click on some cell with performance value in the table:
@@ -212,7 +218,7 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
 
 # 19.12.2020
 def extract_stack_traces( con, rec, fb_prefix, html_path ):
-    # fb_prefix = 'fb3x_', 'fb4x_'
+    # fb_prefix = 'fb3x_', 'fb4x_', 'fb5x_'
 
     run_id = str(rec[ fb_prefix+'run_id'])
     build_no = rec[ fb_prefix+'vers'].split('.')[-1]
@@ -241,27 +247,27 @@ def extract_stack_traces( con, rec, fb_prefix, html_path ):
         else:
             detl_ext = '.zip'
 
-	# NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
-	# for all files that have this extension and run decoding of them to readable text!
+        # NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
+        # for all files that have this extension and run decoding of them to readable text!
         detl_ext += '.b64'
   
     # Extract 'heading info' about all crashes occured durint this OLTP-EMUL run
     ########################
-    c_crash_list = con.cursor()
-    c_crash_list_sql='''
-      select id,dumpname,dumpsize,dumptime,crashed_binary,stack_trace_validation_result,stack_trace_size
-      from all_fb_crash_list
-      where fb_build_no = ? and run_id = ?
-    '''
-    c_crash_list.execute( c_crash_list_sql, (build_no, run_id,) )
-    crashes_list = c_crash_list.fetchallmap()
-    c_crash_list.close()
-    
-    #c_report = con.cursor()
-    #c_report.execute( 'select txt, zip2b64 from sp_show_report_data( ?, ?)', (build_no, run_id, ) )
-    #detl_rows=c_report.fetchallmap()
-    #c_report.close()
+    crashes_list = []
+    with con.cursor() as c_crash_list:
+        c_crash_list_sql='''
+            select id,dumpname,dumpsize,dumptime,crashed_binary,stack_trace_validation_result,stack_trace_size
+            from all_fb_crash_list
+            where fb_build_no = ? and run_id = ?
+        '''
+        c_crash_list.execute( c_crash_list_sql, (build_no, run_id,) )
 
+        # curr func: extract_stack_traces
+        # FDB driver .fetchallmap(): returns a list of mappings of field name to field value, rather than a list of tuples.
+        # firebird-driver .to_dict(): Returns row tuple as dictionary with field names as keys.
+        for r in c_crash_list:
+            crashes_list.append(c_crash_list.to_dict(r))
+    
     # Output arg: list of .b64 files, for each record of all_fb_crash_list
     htm_crashes_info_list = []
     b64_stack_traces_list = []
@@ -283,49 +289,54 @@ def extract_stack_traces( con, rec, fb_prefix, html_path ):
         htm_crashes_info_list.append( html_file )
         b64_stack_traces_list.append( detl_file )
 
-        f_heading_info = codecs.open( html_file, 'w', encoding='utf-8')
+        with codecs.open( html_file, 'w', encoding='utf-8') as f_heading_info:
         
-        html_text='''\
-        <html>
-        <head>
-        <meta http-equiv="content-type" content="text/html; charset=utf-8" />
-        <meta http-equiv="cache-control" content="no-cache">
-        <meta http-equiv="pragma" content="no-cache">
-        </head>
-        <body>
-        Dump file:
-        <li>Name: %(dumpname)s</li>
-        <li>Size: %(dumpsize)s</li>
-        <li>Time: %(dumptime)s</li>
-        Crashed binary: %(crashed_binary)s
-        Stack trace:
-        <li>Validation result: %(stack_trace_validation_result)s</li>
-        <li>Size: %(stack_trace_size)s</li>
-        <p>
-        <!-- </body> -->
-        <!-- </html> -->
-        ''' % locals()
-        f_heading_info.write(
-            #base64.b64encode( bytes(htm2b64, 'utf-8') )
-            html_text
-            #os.linesep.join( html_text.split() )
-        )
-        f_heading_info.close()
+            html_text='''\
+                <html>
+                <head>
+                <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+                <meta http-equiv="cache-control" content="no-cache">
+                <meta http-equiv="pragma" content="no-cache">
+                </head>
+                <body>
+                Dump file:
+                <li>Name: %(dumpname)s</li>
+                <li>Size: %(dumpsize)s</li>
+                <li>Time: %(dumptime)s</li>
+                Crashed binary: %(crashed_binary)s
+                Stack trace:
+                <li>Validation result: %(stack_trace_validation_result)s</li>
+                <li>Size: %(stack_trace_size)s</li>
+                <p>
+                <!-- </body> -->
+                <!-- </html> -->
+            ''' % locals()
+            f_heading_info.write(
+                #base64.b64encode( bytes(htm2b64, 'utf-8') )
+                html_text
+                #os.linesep.join( html_text.split() )
+            )
+
 
         # Obtain stack trace data: it is in base64 format and represent compressed text (.7z/.zst/.zip)
         # This data are store in the file with extension '.b64':
-        f_stack_trace = codecs.open( detl_file, 'w')
-        c_crash_data = con.cursor()
-        c_crash_data_sql='select txt2b64, zip2b64 from all_fb_crash_data where fb_build_no = ? and run_id = ?'
-        c_crash_data.execute( c_crash_data_sql, (build_no, run_id,) )
-        crashes_data = c_crash_data.fetchallmap()
-        c_crash_data.close()
+        crashes_data = []
+        with con.cursor() as c_crash_data, \
+             codecs.open( detl_file, 'w') as f_stack_trace:
+
+            c_crash_data_sql='select txt2b64, zip2b64 from all_fb_crash_data where fb_build_no = ? and run_id = ?'
+            c_crash_data.execute( c_crash_data_sql, (build_no, run_id,) )
+            # curr func: extract_stack_traces
+            # FDB driver .fetchallmap(): returns a list of mappings of field name to field value, rather than a list of tuples.
+            # firebird-driver .to_dict(): Returns row tuple as dictionary with field names as keys.
+            for r in c_crash_data:
+                crashes_data.append(c_crash_data.to_dict(r))
+
         for stack_trace_rec in crashes_data:
             if not rec[ fb_prefix+'compress_cmd' ]:
                 f_stack_trace.write( stack_trace_rec['TXT2B64']+'\n' )
             else:
                 f_stack_trace.write( stack_trace_rec['ZIP2B64']+'\n' )
-        f_stack_trace.close()
     
     # Return LIST of .html files which will be later completer with stack trace data.
     # A new file is created or each FB crash.
@@ -361,17 +372,18 @@ def write_chart_data( main_html_file, chart_data, points_limit, fb3x_field_name,
     # values_descr = 'peak memory used by statements';
     for r in chart_data:
         if i==0:
-            main_html_file.write("\n" + " "*12 + "[ '','FB3x %(values_descr)s', 'FB4x %(values_descr)s', ]"  % locals() )
+            main_html_file.write("\n" + " "*12 + "[ '','FB3x %(values_descr)s', 'FB4x %(values_descr)s', 'FB5x %(values_descr)s', ]"  % locals() )
 
-        #fb3x_field_value, fb4x_field_value = 'null', 'null'
-        fb3x_field_value, fb4x_field_value = '0',    '0'
+        fb3x_field_value, fb4x_field_value, fb5x_field_value = '0', '0', '0'
 
         if r[fb3x_field_name]:
             fb3x_field_value = values_fmt.format( r[fb3x_field_name] )
         if r[fb4x_field_name]:
             fb4x_field_value = values_fmt.format( r[fb4x_field_name] )
+        if r[fb5x_field_name]:
+            fb5x_field_value = values_fmt.format( r[fb5x_field_name] )
 
-        main_html_file.write( "\n" + " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "]" )
+        main_html_file.write( "\n" + " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
         i += 1
         if ( i>= points_limit):
             break
@@ -447,7 +459,6 @@ def write_chart_script_end( main_html_file, attrib_map ):
 
 this_base_name = os.path.splitext( os.path.realpath(sys.argv[0]) )[0]
 
-
 # Log for duplicating STDOUT messages:
 os.environ["PYTHONUNBUFFERED"] = "1"
 LOG4DUP_STDOUT = os.environ.get('PYTHON_CALLER_JOBLOG')
@@ -491,461 +502,528 @@ MAIN_RPT_FILE=os.environ['MAIN_RPT_FILE']
 
 #######################################
 
-con = fdb.connect( dsn = 'localhost:'+DB_NAME, user = DB_USER, password = DB_PSWD, fb_library_name = FB_CLNT, no_gc=1, no_db_triggers=1, no_linger=1, charset='utf8')
-print(showtime(), con.firebird_version )
+#con = fdb.connect( dsn = 'localhost:'+DB_NAME, user = DB_USER, password = DB_PSWD, fb_library_name = FB_CLNT, no_gc=1, no_db_triggers=1, no_linger=1, charset='utf8')
+#print(showtime(), con.firebird_version )
 
-main_html_file = codecs.open( os.path.join(TMPPATH, MAIN_RPT_FILE), 'w', encoding='utf-8')
+driver_config.fb_client_library.value = FB_CLNT
+srv_config = driver_config.register_server(name = 'qa_overall_report_srv', config = '')
+db_cfg_object = driver_config.register_database(name = 'qa_overall_report_db')
+db_cfg_object.server.value = srv_config.name
+db_cfg_object.database.value = DB_NAME
+db_cfg_object.no_linger.value=True
+db_cfg_object.forced_writes.value = False
+# db_cfg_object.protocol.value = NetProtocol.XNET if os.name =='nt' else NetProtocol.INET
+db_cfg_object.protocol.value = NetProtocol.INET
+db_cfg_object.charset.value = 'utf8'
+db_cfg_object.user.value = DB_USER
+db_cfg_object.password.value = DB_PSWD
 
-main_css_file = os.path.join(TMPPATH, os.path.splitext(MAIN_RPT_FILE)[0]+'.css' )
+with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db_cfg_object.password.value, charset = db_cfg_object.charset.value, no_gc=1, no_db_triggers=1) as con, \
+     codecs.open( os.path.join(TMPPATH, MAIN_RPT_FILE), 'w', encoding='utf-8') as main_html_file:
+    print(con.info)
 
-copyfile( this_base_name+'.css', main_css_file)
+    main_html_file = codecs.open( os.path.join(TMPPATH, MAIN_RPT_FILE), 'w', encoding='utf-8')
 
-# Output HEAD section:
-######################
-main_html_file.write( generate_html_head( os.path.split(main_css_file)[1] ) )
-main_html_file.write('<body>')
+    main_css_file = os.path.join(TMPPATH, os.path.splitext(MAIN_RPT_FILE)[0]+'.css' )
 
-href_lst=\
-'''
-<ol>
-    <li><a href=#perf_score_chart>Performance score, chart</a></li>
-    <li><a href="#memo_used_all_chart">Memory usage for DB level, chart</a></li>
-    <li><a href="#memo_used_att_chart">Memory usage for attachments, chart</a></li>
-    <li><a href="#memo_used_trn_chart">Memory usage for transactions, chart</a></li>
-    <li><a href="#memo_used_stm_chart">Memory usage for statements, chart</a></li>
-    <li><a href="#overall_results_table">All results, table</a></li>
-</ol>
-'''
-main_html_file.write(href_lst)
+    copyfile( this_base_name+'.css', main_css_file)
 
-stm=\
-'''
-    select
-        "run_date"
-        ,"run_seqn"
-        ,"fb3x_vers"
-        ,"fb4x_vers"
-        ,"fb3x_perf_score"
-        ,"fb4x_perf_score"
-        ,"fb3x_used_all"
-        ,"fb4x_used_all"
-        ,"fb3x_used_by_att"
-        ,"fb4x_used_by_att"
-        ,"fb3x_used_by_trn"
-        ,"fb4x_used_by_trn"
-        ,"fb3x_used_by_stm"
-        ,"fb4x_used_by_stm"
-        ,"fb3x_run_hhmm"
-        ,"fb4x_run_hhmm"
-        ,"fb3x_outcome"
-        ,"fb4x_outcome"
-        ,"fb3x_run_id"
-        ,"fb4x_run_id"
-        ,"fb3x_compress_cmd"
-        ,"fb4x_compress_cmd"
-    from sp_show_results(%(MAX_POINTS_IN_CHART)s) -- returns data in order: run_date desc, run_seqn asc
-''' % locals()
+    # Output HEAD section:
+    ######################
+    main_html_file.write( generate_html_head( os.path.split(main_css_file)[1] ) )
+    main_html_file.write('<body>')
 
-#if MAX_ROWS_IN_REPORT > 0:
-#    stm += ' rows ' + str( MAX_ROWS_IN_REPORT )
+    href_lst=\
+    '''
+    <ol>
+        <li><a href=#perf_score_chart>Performance score, chart</a></li>
+        <li><a href="#memo_used_all_chart">Memory usage for DB level, chart</a></li>
+        <li><a href="#memo_used_att_chart">Memory usage for attachments, chart</a></li>
+        <li><a href="#memo_used_trn_chart">Memory usage for transactions, chart</a></li>
+        <li><a href="#memo_used_stm_chart">Memory usage for statements, chart</a></li>
+        <li><a href="#overall_results_table">All results, table</a></li>
+    </ol>
+    '''
+    main_html_file.write(href_lst)
 
-perf_score_hint='number of successfully completed business actions per minute, average for <test_time> interval'
-memo_used_hint='maximal value of mon$memory_usage.mon$memory_used during <test_time> interval'
+    stm=\
+    '''
+        select
+            "run_date"
+            ,"run_seqn"
+            ,"fb3x_vers"
+            ,"fb4x_vers"
+            ,"fb5x_vers"
+            ,"fb3x_perf_score"
+            ,"fb4x_perf_score"
+            ,"fb5x_perf_score"
+            ,"fb3x_used_all"
+            ,"fb4x_used_all"
+            ,"fb5x_used_all"
+            ,"fb3x_used_by_att"
+            ,"fb4x_used_by_att"
+            ,"fb5x_used_by_att"
+            ,"fb3x_used_by_trn"
+            ,"fb4x_used_by_trn"
+            ,"fb5x_used_by_trn"
+            ,"fb3x_used_by_stm"
+            ,"fb4x_used_by_stm"
+            ,"fb5x_used_by_stm"
+            ,"fb3x_run_hhmm"
+            ,"fb4x_run_hhmm"
+            ,"fb5x_run_hhmm"
+            ,"fb3x_outcome"
+            ,"fb4x_outcome"
+            ,"fb5x_outcome"
+            ,"fb3x_run_id"
+            ,"fb4x_run_id"
+            ,"fb5x_run_id"
+            ,"fb3x_compress_cmd"
+            ,"fb4x_compress_cmd"
+            ,"fb5x_compress_cmd"
+        from sp_show_results(%(MAX_POINTS_IN_CHART)s) -- returns data in order: run_date desc, run_seqn asc
+    ''' % locals()
 
-col_hints={
-        "run_date" : "date of test run"
-        ,"run_seqn" : "sequential number of this launch within date"
-        ,"fb3x_vers" : "FB 3.x snapshot version"
-        ,"fb4x_vers" : "FB 4.x snapshot version"
-        ,"fb3x_perf_score" : "FB 3.x, %(perf_score_hint)s" % locals()
-        ,"fb4x_perf_score" : "FB 4.x, %(perf_score_hint)s" % locals()
-        ,"fb3x_used_all" : "FB 3.x, %(memo_used_hint)s, for DB level" % locals()
-        ,"fb4x_used_all"  : "FB 4.x, %(memo_used_hint)s, for DB level" % locals()
-        ,"fb3x_used_by_att" : "FB 3.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-        ,"fb4x_used_by_att" : "FB 4.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-        ,"fb3x_used_by_trn" : "FB 3.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-        ,"fb4x_used_by_trn" : "FB 4.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-        ,"fb3x_used_by_stm" : "FB 3.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-        ,"fb4x_used_by_stm" : "FB 4.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-        ,"fb3x_run_hhmm" : "FB 3.x, start of phase defined by <test_time> minutes"
-        ,"fb4x_run_hhmm" : "FB 3.x, start of phase defined by <test_time> minutes"
-        ,"fb3x_outcome" : "FB 3.x, outcome of test"
-        ,"fb4x_outcome" : "FB 3.x, outcome of test"
-}
+    #if MAX_ROWS_IN_REPORT > 0:
+    #    stm += ' rows ' + str( MAX_ROWS_IN_REPORT )
 
-cur= con.cursor()
-cur.execute(stm)
+    perf_score_hint='number of successfully completed business actions per minute, average for <test_time> interval'
+    memo_used_hint='maximal value of mon$memory_usage.mon$memory_used during <test_time> interval'
 
-col=cur.description
-fields = [c[0] for c in col]
-ftypes = [c[1] for c in col]
-
-#fields= ['run_date', 'fb3x_vers', 'fb4x_vers', 'fb3x_perf_score', 'fb4x_perf_score', 'fb3x_used_all', 'fb4x_used_all', 'fb3x_used_by_att', 'fb4x_used_by_att', 'fb3x_used_by_trn', 'fb4x_used_by_trn', 'fb3x_used_by_stm','fb4x_used_by_stm', 'fb3x_run_hhmm', 'fb4x_run_hhmm', 'fb3x_outcome', 'fb4x_outcome']
-#ftypes= [<type 'datetime.date'>, <type 'str'>, <type 'str'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'str'>, <type 'str'>, <type 'str'>, <type 'str'>]
-
-print(showtime(), 'Gather data from sp_show_results...' )
-
-#################################
-###  f e t c h  a l l  m a p  ###
-#################################
-data_in_descending_order=cur.fetchallmap()
-cur.close()
-
-print(showtime(), 'Completed. Number of records: ' + str(len(data_in_descending_order)) )
-
-# Change order of data: we have to show charts in CHRONOLOGICAL order:
-data_in_chronological_order = sorted(data_in_descending_order, key=lambda x: ( x['run_date'], -x['run_seqn'] ) )
-
-#print('fields=',fields)
-#print('ftypes=',ftypes)
-#print('data_in_descending_order=',data_in_descending_order)
-#for d in data_in_descending_order:
-#    print(d)
-#exit(0)
-
-#locale.setlocale(locale.LC_ALL, '')
-#locale._override_localeconv = {'mon_thousands_sep': ' '}
-
-print(showtime(), 'Starting create code for drawing charts. Limit of points: %d' % MAX_POINTS_IN_CHART )
-
-print(showtime(), 'Output CHART: performance score' )
-#####################################################
-
-main_html_file.write( '<h4> <a name="perf_score_chart">Performance score: number of successfully completed business actions per minute, in average</a> </h4>' )
-
-
-# Output head section for chart:
-# --------------------------------
-chart_script_beg = write_chart_script_beg( 
-    main_html_file,
-    {
-        'divName' : 'perf_total_chart_div'
-        ,'drawFunc' : 'perf_total_chart'
+    col_hints={
+            "run_date" : "date of test run"
+            ,"run_seqn" : "sequential number of this launch within date"
+            ,"fb3x_vers" : "FB 3.x snapshot version"
+            ,"fb4x_vers" : "FB 4.x snapshot version"
+            ,"fb5x_vers" : "FB 5.x snapshot version"
+            ,"fb3x_perf_score" : "FB 3.x, %(perf_score_hint)s" % locals()
+            ,"fb4x_perf_score" : "FB 4.x, %(perf_score_hint)s" % locals()
+            ,"fb5x_perf_score" : "FB 5.x, %(perf_score_hint)s" % locals()
+            ,"fb3x_used_all" : "FB 3.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb4x_used_all"  : "FB 4.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb5x_used_all"  : "FB 5.x, %(memo_used_hint)s, for DB level" % locals()
+            ,"fb3x_used_by_att" : "FB 3.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb4x_used_by_att" : "FB 4.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb5x_used_by_att" : "FB 5.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
+            ,"fb3x_used_by_trn" : "FB 3.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb4x_used_by_trn" : "FB 4.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb5x_used_by_trn" : "FB 5.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
+            ,"fb3x_used_by_stm" : "FB 3.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb4x_used_by_stm" : "FB 4.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb5x_used_by_stm" : "FB 5.x, %(memo_used_hint)s, for STATEMENT level" % locals()
+            ,"fb3x_run_hhmm" : "FB 3.x, start of phase defined by <test_time> minutes"
+            ,"fb4x_run_hhmm" : "FB 4.x, start of phase defined by <test_time> minutes"
+            ,"fb5x_run_hhmm" : "FB 5.x, start of phase defined by <test_time> minutes"
+            ,"fb3x_outcome" : "FB 3.x, outcome of test"
+            ,"fb4x_outcome" : "FB 4.x, outcome of test"
+            ,"fb5x_outcome" : "FB 5.x, outcome of test"
     }
-)
 
-#        ,'legends'  : "['', 'FB 3.x performance score', 'FB 4.x performance score']"
+    data_in_descending_order = []
+    with con.cursor() as cur:
+        cur.execute(stm)
+        #cur.execute('select distinct trim(t.rdb$field_name) fld_name, trim(t.rdb$type) rdb_type, trim(t.rdb$type_name) type_name from rdb$types t rows 10')
 
-# Output data for chart:
-# ----------------------
-write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_perf_score', 'fb4x_perf_score', "{:9g}", 'performance score' )
+        col=cur.description
+        fields = [c[0] for c in col]
+        ftypes = [c[1] for c in col]
 
+        #fields= ['run_date', 'fb3x_vers', 'fb4x_vers', 'fb3x_perf_score', 'fb4x_perf_score', 'fb3x_used_all', 'fb4x_used_all', 'fb3x_used_by_att', 'fb4x_used_by_att', 'fb3x_used_by_trn', 'fb4x_used_by_trn', 'fb3x_used_by_stm','fb4x_used_by_stm', 'fb3x_run_hhmm', 'fb4x_run_hhmm', 'fb3x_outcome', 'fb4x_outcome']
+        #ftypes= [<type 'datetime.date'>, <type 'str'>, <type 'str'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'long'>, <type 'str'>, <type 'str'>, <type 'str'>, <type 'str'>]
 
-# Output tail for chart script:
-# ------------------------------
-chart_script_end = write_chart_script_end(
-    main_html_file, 
-    {
-        'colors': ['MediumVioletRed','Blue',],
-        'curveType': 'function',
-        'chartType': 'LineChart',
-        'divName' : 'perf_total_chart_div'
+        print(showtime(), 'Gather data from sp_show_results...' )
 
-    }
-)
+        #################################
+        ###  f e t c h  a l l  m a p  ###
+        #################################
+        # MAIN CODE:
+        # curr func: extract_detailed_report
+        # FDB driver .fetchallmap(): returns a list of mappings of field name to field value, rather than a list of tuples.
+        # firebird-driver .to_dict(): Returns row tuple as dictionary with field names as keys.
+        for r in cur:
+            data_in_descending_order.append(cur.to_dict(r))
 
-print(showtime(), 'Completed.' )
-################################
+    print(showtime(), 'Completed. Number of records: ' + str(len(data_in_descending_order)) )
 
-#+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
+    #for i,p in enumerate(data_in_descending_order):
+    #    print('i=',i)
+    #    for k,v in p.items():
+    #        print(k,':::',v)
+   
+    # Change order of data: we have to show charts in CHRONOLOGICAL order:
+    data_in_chronological_order = sorted(data_in_descending_order, key=lambda x: ( x['run_date'], -x['run_seqn'] ) )
 
-print(showtime(), 'Output CHART: memo_used, whole DB')
-######################################################
+    #print('fields=',fields)
+    #print('ftypes=',ftypes)
+    #print('data_in_descending_order=',data_in_descending_order)
+    #for d in data_in_descending_order:
+    #    print(d)
+    #exit(0)
 
-main_html_file.write( '<h4> <a name="memo_used_all_chart">Memory usage: peak values of mon$memory_used for DB level</a> </h4>' )
+    #locale.setlocale(locale.LC_ALL, '')
+    #locale._override_localeconv = {'mon_thousands_sep': ' '}
 
-# Output head section for chart:
-#--------------------------------
-chart_script_beg = write_chart_script_beg( 
-    main_html_file,
-    {
-        'divName' : 'perf_memo_used_all_div',
-        'drawFunc' : 'draw_memo_used_all'
-    }
-)
+    print(showtime(), 'Starting create code for drawing charts. Limit of points: %d' % MAX_POINTS_IN_CHART )
 
+    print(showtime(), 'Output CHART: performance score' )
+    #####################################################
 
-# Output data for chart:
-# ----------------------
-write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_all', 'fb4x_used_all', "{:20d}", 'peak memory used for DB level' )
-
-
-# Output tail for chart script:
-# ------------------------------
-chart_script_end = write_chart_script_end(
-    main_html_file, 
-    { 
-        'colors': ['SandyBrown','Sienna',],
-        'curveType': 'function',
-        'chartType': 'LineChart',
-        'divName' : 'perf_memo_used_all_div'
-      
-    }   
-)
-
-print(showtime(), 'Completed.' )
+    main_html_file.write( '<h4> <a name="perf_score_chart">Performance score: number of successfully completed business actions per minute, in average</a> </h4>' )
 
 
-#+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
+    # Output head section for chart:
+    # --------------------------------
+    chart_script_beg = write_chart_script_beg( 
+        main_html_file,
+        {
+            'divName' : 'perf_total_chart_div'
+            ,'drawFunc' : 'perf_total_chart'
+        }
+    )
 
-print(showtime(), 'Output CHART: memo_used, ATTACHMENTS level')
-##############################################################
+    #        ,'legends'  : "['', 'FB 3.x performance score', 'FB 4.x performance score']"
 
-main_html_file.write( '<h4> <a name="memo_used_att_chart">Memory usage: peak values of mon$memory_used for attachments</a> </h4>' )
-
-# Output head section for chart:
-# --------------------------------
-chart_script_beg = write_chart_script_beg( 
-    main_html_file,
-    {
-        'divName' : 'perf_memo_used_att_div',
-        'drawFunc' : 'draw_memo_used_att'
-    }
-)
-
-
-# Output data for chart:
-# ----------------------
-write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_att', 'fb4x_used_by_att', "{:20d}", 'peak memory used by attachments' )
+    # Output data for chart:
+    # ----------------------
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score', "{:9g}", 'performance score' )
 
 
-# Output tail for chart script:
-# ------------------------------
-chart_script_end = write_chart_script_end(
-    main_html_file, 
-    { 
-        'colors': ['SkyBlue','SteelBlue',],
-        'curveType': 'function',
-        'chartType': 'LineChart',
-        'divName' : 'perf_memo_used_att_div'
-      
-    }   
-)
+    # Output tail for chart script:
+    # ------------------------------
+    chart_script_end = write_chart_script_end(
+        main_html_file, 
+        {
+            'colors': ['MediumVioletRed', 'Blue', 'Indigo'],
+            'curveType': 'function',
+            'chartType': 'LineChart',
+            'divName' : 'perf_total_chart_div'
 
-print(showtime(), 'Copmpleted.')
+        }
+    )
 
-#+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
+    print(showtime(), 'Completed.' )
+    ################################
 
-print(showtime(), 'Output CHART: memo_used, TRANSACTIONS level')
-################################################################
+    #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-main_html_file.write( '<h4> <a name="memo_used_trn_chart">Memory usage: peak values of mon$memory_used for transactions</a> </h4>' )
+    print(showtime(), 'Output CHART: memo_used, whole DB')
+    ######################################################
 
-# Output head section for chart:
-# --------------------------------
-chart_script_beg = write_chart_script_beg( 
-    main_html_file,
-    {
-        'divName' : 'perf_memo_used_trn_div',
-        'drawFunc' : 'draw_memo_used_trn'
-    }
-)
+    main_html_file.write( '<h4> <a name="memo_used_all_chart">Memory usage: peak values of mon$memory_used for DB level</a> </h4>' )
 
-
-# Output data for chart:
-# ----------------------
-write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_trn', 'fb4x_used_by_trn', "{:20d}", 'peak memory used by transactions' )
+    # Output head section for chart:
+    #--------------------------------
+    chart_script_beg = write_chart_script_beg( 
+        main_html_file,
+        {
+            'divName' : 'perf_memo_used_all_div',
+            'drawFunc' : 'draw_memo_used_all'
+        }
+    )
 
 
-# Output tail for chart script:
-# ------------------------------
-chart_script_end = write_chart_script_end(
-    main_html_file, 
-    { 
-        'colors': ['LightGreen','SeaGreen',],
-        'chartType': 'ScatterChart',
-        'divName' : 'perf_memo_used_trn_div'
-      
-    }   
-)
-
-print(showtime(), 'Completed.')
-
-#+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
-
-print(showtime(), 'Output CHART: memo_used, STATEMENTS level')
-##############################################################
-
-main_html_file.write( '<h4> <a name="memo_used_stm_chart">Memory usage: peak values of mon$memory_used for statements</a> </h4>' )
-
-# Output head section for chart:
-# --------------------------------
-chart_script_beg = write_chart_script_beg(
-    main_html_file, 
-    {
-        'divName' : 'perf_memo_used_stm_div',
-        'drawFunc' : 'draw_memo_used_stm'
-    }
-)
+    # Output data for chart:
+    # ----------------------
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_all', 'fb4x_used_all', 'fb5x_used_all', "{:20d}", 'peak memory used for DB level' )
 
 
-# Output data for chart:
-# ----------------------
-write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_stm', 'fb4x_used_by_stm', "{:20d}", 'peak memory used by statements' )
+    # Output tail for chart script:
+    # ------------------------------
+    chart_script_end = write_chart_script_end(
+        main_html_file, 
+        { 
+            'colors': ['SandyBrown','Sienna', 'Maroon'],
+            'curveType': 'function',
+            'chartType': 'LineChart',
+            'divName' : 'perf_memo_used_all_div'
+          
+        }   
+    )
+
+    print(showtime(), 'Completed.' )
 
 
-# Output tail for chart script:
-# ------------------------------
-chart_script_end = write_chart_script_end(
-    main_html_file, 
-    { 
-        'colors': ['Salmon','Purple',],
-        'curveType': 'function',
-        'chartType': 'LineChart',
-        'divName' : 'perf_memo_used_stm_div'
-      
-    }   
-)
+    #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-print(showtime(), 'Completed.')
+    print(showtime(), 'Output CHART: memo_used, ATTACHMENTS level')
+    ##############################################################
+
+    main_html_file.write( '<h4> <a name="memo_used_att_chart">Memory usage: peak values of mon$memory_used for attachments</a> </h4>' )
+
+    # Output head section for chart:
+    # --------------------------------
+    chart_script_beg = write_chart_script_beg( 
+        main_html_file,
+        {
+            'divName' : 'perf_memo_used_att_div',
+            'drawFunc' : 'draw_memo_used_att'
+        }
+    )
 
 
-###############
-# Output TABLE:
-###############
+    # Output data for chart:
+    # ----------------------
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_att', 'fb4x_used_by_att', 'fb5x_used_by_att', "{:20d}", 'peak memory used by attachments' )
 
-print(showtime(), 'Output TABLE with results.')
-################################################
 
-main_html_file.write( '<h4> <a name="overall_results_table">All results in one table. Click on FB snapshot number to see detailed report for each run.</a> </h4>' )
+    # Output tail for chart script:
+    # ------------------------------
+    chart_script_end = write_chart_script_end(
+        main_html_file, 
+        { 
+            'colors': ['SkyBlue', 'SteelBlue', 'Navy'],
+            'curveType': 'function',
+            'chartType': 'LineChart',
+            'divName' : 'perf_memo_used_att_div'
+          
+        }   
+    )
 
-main_html_file.write('\n<table class="t_table">')
+    print(showtime(), 'Copmpleted.')
 
-# output column titles:
-for h in fields:
-    v_tooltip = col_hints.get(h)
+    #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-    if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd'):
-        ### NOP ###
-        continue
+    print(showtime(), 'Output CHART: memo_used, TRANSACTIONS level')
+    ################################################################
 
-    if h.lower().endswith('run_hhmm'):
-        h = h.replace('run_hhmm', 'run hh:mm')
+    main_html_file.write( '<h4> <a name="memo_used_trn_chart">Memory usage: peak values of mon$memory_used for transactions</a> </h4>' )
 
-    # Output column title and its hint:
-    main_html_file.write('\n<th'+ ( ' title="'+v_tooltip+'"' if v_tooltip else '') +'>'+ h.replace('_',' ') +'</th>')
+    # Output head section for chart:
+    # --------------------------------
+    chart_script_beg = write_chart_script_beg( 
+        main_html_file,
+        {
+            'divName' : 'perf_memo_used_trn_div',
+            'drawFunc' : 'draw_memo_used_trn'
+        }
+    )
 
-for r in data_in_descending_order:
-    main_html_file.write('\n<tr>')
 
-    fb3x_run_id, fb3x_build_no, fb4x_run_id,fb4x_build_no = None,None, None,None
-    fb3x_detl_file, fb4x_detl_file = None, None
-    fb3x_detl_rows, fb4x_detl_rows = {}, {}
-    fb3x_stack_traces_list, fb4x_stack_traces_list = [], []
-    if r['fb3x_vers']:
-        # Extract report for this OLTP-EMUL run and store in DETLPATH
-        fb3x_html_file = extract_detailed_report( con, r, 'fb3x_', DETLPATH )
+    # Output data for chart:
+    # ----------------------
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_trn', 'fb4x_used_by_trn', 'fb5x_used_by_trn', "{:20d}", 'peak memory used by transactions' )
 
-        # Extract stack traces for crashes that occured during this run:
-        fb3x_stack_traces_list = extract_stack_traces( con, r, 'fb3x_', DETLPATH )
 
-    if r['fb4x_vers']:
-        # Extract report for this OLTP-EMUL run and store in DETLPATH
-        fb4x_html_file = extract_detailed_report( con, r, 'fb4x_', DETLPATH )
+    # Output tail for chart script:
+    # ------------------------------
+    chart_script_end = write_chart_script_end(
+        main_html_file, 
+        { 
+            'colors': ['LightGreen', 'Turquoise', 'DarkGreen',],
+            'chartType': 'ScatterChart',
+            'divName' : 'perf_memo_used_trn_div'
+          
+        }   
+    )
 
-        # Extract stack traces for crashes that occured during this run:
-        fb4x_stack_traces_list = extract_stack_traces( con, r, 'fb4x_', DETLPATH )
+    print(showtime(), 'Completed.')
 
-    #print('fb3x_stack_traces_list=',fb3x_stack_traces_list)
-    #print('fb4x_stack_traces_list=',fb4x_stack_traces_list)
-    
-    col_idx=-1
-    for f in r:
-        v_style=''
-        v = r[f]
-        col_idx += 1
- 
-        # print('f=',f,'; col_idx=',col_idx,'; ftypes[col_idx]=',ftypes[col_idx])
+    #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
-        if f.lower() == 'run_seqn' or f.lower().endswith('run_id') or f.lower().endswith('compress_cmd'):
+    print(showtime(), 'Output CHART: memo_used, STATEMENTS level')
+    ##############################################################
+
+    main_html_file.write( '<h4> <a name="memo_used_stm_chart">Memory usage: peak values of mon$memory_used for statements</a> </h4>' )
+
+    # Output head section for chart:
+    # --------------------------------
+    chart_script_beg = write_chart_script_beg(
+        main_html_file, 
+        {
+            'divName' : 'perf_memo_used_stm_div',
+            'drawFunc' : 'draw_memo_used_stm'
+        }
+    )
+
+
+    # Output data for chart:
+    # ----------------------
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_used_by_stm', 'fb4x_used_by_stm', 'fb5x_used_by_stm', "{:20d}", 'peak memory used by statements' )
+
+
+    # Output tail for chart script:
+    # ------------------------------
+    chart_script_end = write_chart_script_end(
+        main_html_file, 
+        { 
+            'colors': ['LightSalmon', 'MediumOrchid', 'Purple',],
+            'curveType': 'function',
+            'chartType': 'LineChart',
+            'divName' : 'perf_memo_used_stm_div'
+          
+        }   
+    )
+
+    print(showtime(), 'Completed.')
+
+
+    ###############
+    # Output TABLE:
+    ###############
+
+    print(showtime(), 'Output TABLE with results.')
+    ################################################
+
+    main_html_file.write( '<h4> <a name="overall_results_table">All results in one table. Click on FB snapshot number to see detailed report for each run.</a> </h4>' )
+
+    main_html_file.write('\n<table class="t_table">')
+
+    # output column titles:
+    for h in fields:
+        v_tooltip = col_hints.get(h)
+
+        if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd'):
             ### NOP ###
             continue
-        if not r[f]:
-            v = '[null]'
-            v_style = ' class="null_cell"'
-        else:
-            c_list = 'fb3x_font' if f.lower().startswith('fb3x') else ( 'fb4x_font' if f.lower().startswith('fb4x') else  '')
 
-            if f.lower().endswith('vers'): # ==> 'fb3x_vers', 'fb4x_vers'
+        if h.lower().endswith('run_hhmm'):
+            h = h.replace('run_hhmm', 'run hh:mm')
 
-                detl_file_name = fb3x_html_file if f.lower().startswith('fb3x') else fb4x_html_file
+        # Output column title and its hint:
+        main_html_file.write('\n<th'+ ( ' title="'+v_tooltip+'"' if v_tooltip else '') +'>'+ h.replace('_',' ') +'</th>')
 
-                #print('detl_file_name=',detl_file_name)
-                if detl_file_name and ( f.lower().startswith('fb3x') or f.lower().startswith('fb4x') ):
-                
-                    v = '<a style="text-decoration:none" href="' + DETLPREF + '/' +  os.path.split( detl_file_name )[1] + '" target="_blank"> '+ str(v) +'</a>'
-                
-            elif f.lower().endswith('perf_score'): # ==> 'fb3x_perf_score', 'fb4x_perf_score'
-                c_list += ' perf_score_column'
+    for r in data_in_descending_order:
+        main_html_file.write('\n<tr>')
 
-            elif repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>" ):
-                # do NOT use: v = locale.format('%.0f', v, grouping=True) -- converting to string problem here.
-                v = '{:,d}'.format(v).replace(',',' ')
-                c_list += ' big_numbers' # nowrap spaces!
+        fb3x_run_id, fb3x_build_no, fb4x_run_id,fb4x_build_no, fb5x_run_id,fb5x_build_no = None,None, None,None, None,None
+        fb3x_detl_file, fb4x_detl_file, fb5x_detl_file = None, None, None
+        fb3x_detl_rows, fb4x_detl_rows, fb5x_detl_rows = {}, {}, {}
+        fb3x_stack_traces_list, fb4x_stack_traces_list, fb5x_stack_traces_list = [], [], []
+        if r['fb3x_vers']:
+            # Extract report for this OLTP-EMUL run and store in DETLPATH
+            fb3x_html_file = extract_detailed_report( con, r, 'fb3x_', DETLPATH )
 
-                if f.lower().endswith('used_all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
-                    c_list += ' memo_used_whole_db_column'
-                elif f.lower().endswith('used_by_att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
-                    c_list += ' memo_used_att_level_column'
-                elif f.lower().endswith('used_by_trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
-                    c_list += ' memo_used_trn_level_column'
-                elif f.lower().endswith('used_by_stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
-                    c_list += ' memo_used_stm_level_column'
+            # Extract stack traces for crashes that occured during this run:
+            fb3x_stack_traces_list = extract_stack_traces( con, r, 'fb3x_', DETLPATH )
 
-            elif f.lower().endswith('outcome'): # ==> 'fb3x_outcome', 'fb4x_outcome'
+        if r['fb4x_vers']:
+            # Extract report for this OLTP-EMUL run and store in DETLPATH
+            fb4x_html_file = extract_detailed_report( con, r, 'fb4x_', DETLPATH )
 
-                v = v.lower()
-                if 'crash' in v:
-                    c_list += ' fbx_outcome_crash'
-                    # 19.12.2020: extract stack-traces (which were gathered during test finish
-                    # for every dumps occured within time interval from test lunch to finish)
-                    # to separate .html files and provide links to it.
-                    stack_trace_html_files = []
-                    if f.lower().startswith('fb3x'): # r['fb3x_vers']:
-                        stack_trace_html_files = fb3x_stack_traces_list
-                    elif f.lower().startswith('fb4x'): # r['fb4x_vers']:
-                        stack_trace_html_files = fb4x_stack_traces_list
+            # Extract stack traces for crashes that occured during this run:
+            fb4x_stack_traces_list = extract_stack_traces( con, r, 'fb4x_', DETLPATH )
 
-                    for s in stack_trace_html_files:
-                        # Get name of file, extract from it part that points to timestamp of dump (in YYYYmmDD_HHMMSS.zzz form)
-                        # and provide URL to this stack trace:
-                        
-                        # Extract name of full path+file:
-                        # /var/tmp/oltp_overall_report/details/oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
-                        # ==> oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
-                        stk_file_name = os.path.split( s )[1]
-                        # Get timestamp of dump by extracting last 3 tokens and take first two of them:
-                        #  oltp-cras***.20201219_094111.649.html ==> ['20201219_094111', '649'] ==> '20201219_094111.649'
-                        dump_time_str = '.'.join( stk_file_name.split('.')[-3::][:2] )
-                        dump_time_obj = datetime.datetime.strptime( dump_time_str, '%Y%m%d_%H%M%S.%f' )
-                        # Convert to format dd.mm.YYYY HH:MM:SS.zzz
-                        dump_time_url = dump_time_obj.strftime('%d.%m.%Y %H:%M:%S.%f')[:23]
-                        
-                        v += '\n<li><a style="text-decoration:none" href="' + DETLPREF + '/' + stk_file_name + '" target="_blank">' + dump_time_url +'</a></li>'
+        if r['fb5x_vers']:
+            # Extract report for this OLTP-EMUL run and store in DETLPATH
+            fb5x_html_file = extract_detailed_report( con, r, 'fb5x_', DETLPATH )
+
+            # Extract stack traces for crashes that occured during this run:
+            fb5x_stack_traces_list = extract_stack_traces( con, r, 'fb5x_', DETLPATH )
+
+        #print('fb3x_stack_traces_list=',fb3x_stack_traces_list)
+        #print('fb4x_stack_traces_list=',fb4x_stack_traces_list)
+        
+        col_idx=-1
+        for f in r:
+            v_style=''
+            v = r[f]
+            col_idx += 1
+     
+            # print('f=',f,'; col_idx=',col_idx,'; ftypes[col_idx]=',ftypes[col_idx])
+
+            if f.lower() == 'run_seqn' or f.lower().endswith('run_id') or f.lower().endswith('compress_cmd'):
+                ### NOP ###
+                continue
+            if not r[f]:
+                v = '[null]'
+                v_style = ' class="null_cell"'
+            else:
+                c_list = ''
+                fb_vers = f.lower()[:4]
+                if fb_vers in ('fb3x', 'fb4x', 'fb5x'):
+                    c_list = fb_vers + '_font'
+
+
+                # c_list = 'fb3x_font' if f.lower().startswith('fb3x') else ( 'fb4x_font' if f.lower().startswith('fb4x') else  '')
+
+                if f.lower().endswith('vers'): # ==> 'fb3x_vers', 'fb4x_vers'
+
+                    detl_file_name = ''
+                    if fb_vers == 'fb3x':
+                        detl_file_name = fb3x_html_file
+                    elif fb_vers == 'fb4x':
+                        detl_file_name = fb4x_html_file
+                    elif fb_vers == 'fb5x':
+                        detl_file_name = fb5x_html_file
+
+                    # detl_file_name = fb3x_html_file if f.lower().startswith('fb3x') else fb4x_html_file
+
+                    #print('detl_file_name=',detl_file_name)
+                    #if detl_file_name and ( f.lower().startswith('fb3x') or f.lower().startswith('fb4x') ):
+                    if detl_file_name:
+                        v = '<a style="text-decoration:none" href="' + DETLPREF + '/' +  os.path.split( detl_file_name )[1] + '" target="_blank"> '+ str(v) +'</a>'
                     
-                elif 'abnormal' in v:
-                    c_list += ' fbx_outcome_abend'
-                elif 'premature' in v:
-                    c_list += ' fbx_outcome_premature'
-                else:
-                    c_list += ' fbx_outcome_normal'
+                elif f.lower().endswith('perf_score'): # ==> 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score'
+                    c_list += ' perf_score_column'
 
-            # NB: several classes will be here:
-            v_style = ' class="' + c_list +'"' if c_list else ''
+                elif repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>" ):
+                    # do NOT use: v = locale.format('%.0f', v, grouping=True) -- converting to string problem here.
+                    v = '{:,d}'.format(v).replace(',',' ')
+                    c_list += ' big_numbers' # nowrap spaces!
 
-        main_html_file.write('\n<td' + v_style + '>' + str(v) + '</td>')
+                    if f.lower().endswith('used_all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
+                        c_list += ' memo_used_whole_db_column'
+                    elif f.lower().endswith('used_by_att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
+                        c_list += ' memo_used_att_level_column'
+                    elif f.lower().endswith('used_by_trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
+                        c_list += ' memo_used_trn_level_column'
+                    elif f.lower().endswith('used_by_stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
+                        c_list += ' memo_used_stm_level_column'
 
-    main_html_file.write('\n</tr>')
+                elif f.lower().endswith('outcome'): # ==> 'fb3x_outcome', 'fb4x_outcome', 'fb5x_outcome'
 
-main_html_file.write('\n</table>')
+                    v = v.lower()
+                    if 'crash' in v:
+                        c_list += ' fbx_outcome_crash'
+                        # 19.12.2020: extract stack-traces (which were gathered during test finish
+                        # for every dumps occured within time interval from test lunch to finish)
+                        # to separate .html files and provide links to it.
+                        stack_trace_html_files = []
+                        if f.lower().startswith('fb3x'): # r['fb3x_vers']:
+                            stack_trace_html_files = fb3x_stack_traces_list
+                        elif f.lower().startswith('fb4x'): # r['fb4x_vers']:
+                            stack_trace_html_files = fb4x_stack_traces_list
+                        elif f.lower().startswith('fb5x'): # r['fb4x_vers']:
+                            stack_trace_html_files = fb5x_stack_traces_list
 
-print(showtime(), 'Completed.')
+                        for s in stack_trace_html_files:
+                            # Get name of file, extract from it part that points to timestamp of dump (in YYYYmmDD_HHMMSS.zzz form)
+                            # and provide URL to this stack trace:
+                            
+                            # Extract name of full path+file:
+                            # /var/tmp/oltp_overall_report/details/oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
+                            # ==> oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
+                            stk_file_name = os.path.split( s )[1]
+                            # Get timestamp of dump by extracting last 3 tokens and take first two of them:
+                            #  oltp-cras***.20201219_094111.649.html ==> ['20201219_094111', '649'] ==> '20201219_094111.649'
+                            dump_time_str = '.'.join( stk_file_name.split('.')[-3::][:2] )
+                            dump_time_obj = datetime.datetime.strptime( dump_time_str, '%Y%m%d_%H%M%S.%f' )
+                            # Convert to format dd.mm.YYYY HH:MM:SS.zzz
+                            dump_time_url = dump_time_obj.strftime('%d.%m.%Y %H:%M:%S.%f')[:23]
+                            
+                            v += '\n<li><a style="text-decoration:none" href="' + DETLPREF + '/' + stk_file_name + '" target="_blank">' + dump_time_url +'</a></li>'
+                        
+                    elif 'abnormal' in v:
+                        c_list += ' fbx_outcome_abend'
+                    elif 'premature' in v:
+                        c_list += ' fbx_outcome_premature'
+                    else:
+                        c_list += ' fbx_outcome_normal'
 
-main_html_file.write('\n</body>\n</html>\n')
-main_html_file.close()
+                # NB: several classes will be here:
+                v_style = ' class="' + c_list +'"' if c_list else ''
 
-print(showtime(), 'Closing connection to overall results DB.')
-con.close()
+            main_html_file.write('\n<td' + v_style + '>' + str(v) + '</td>')
+
+        main_html_file.write('\n</tr>')
+
+    main_html_file.write('\n</table>')
+
+    print(showtime(), 'Completed.')
+
+    main_html_file.write('\n</body>\n</html>\n')
+
+# < close con and html
 
 print(showtime(), 'Final report see in: ' + main_html_file.name)
 print(showtime(), 'Bye-bye from '+whoami)

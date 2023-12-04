@@ -12,4 +12,4 @@ LockMemSize = 50M
 TempCacheLimit = 256M
 
 UDFAccess = Restrict UDF
-IpcName = fb30SS
+IpcName = oemul_fb30SS

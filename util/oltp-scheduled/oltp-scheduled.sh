@@ -9,9 +9,67 @@ sho() {
   local msg=$1
   local log=$2
   local dts=$(date +'%d.%m.%y %H:%M:%S')
-  echo $dts. $msg
-  echo $dts. $msg>>$log
+  echo $dts. "${msg}"
+  echo $dts. "${msg}" >> $log
 }
+
+#.............................................
+
+bulksho() {
+    local tmplog=$1
+    local joblog=$2
+    local keep_tmp=${3:-0}
+    local dts=$(date +'%d.%m.%y %H:%M:%S')
+
+    # we have to set IFS to empty string in order to preserve leading spaces that are stored in the source file indentation
+    # https://stackoverflow.com/questions/7314044/use-bash-to-read-line-by-line-and-keep-space
+    # 'while IFS=... read...' - makes IFS be changed locally, only for duration of this loop:
+    while IFS='' read -r line
+    do
+        echo $dts. "${line}" # NB: must enclose in quotes for disabling 'evaluation' of '*' or other wildcard characters!
+        echo $dts. "$line" >> $joblog
+    done < <(cat $tmplog)
+    [[ $keep_tmp -eq 0 ]] && rm -f $tmplog
+}
+
+#.............................................
+
+catch_err() {
+  local joblog=$1
+  local tmperr=$2
+  local addnfo=${3:-""}
+  local quit_if_error=${4:-1}
+
+  # Example:
+  # catch_err $joblog $tmperr "${msg_abend}" 0
+
+  if [[ -s $tmperr ]]; then
+    sho "FAIL DETECTED. Error log $tmperr is NOT EMPTY." $joblog
+    echo ...............................
+    cat $tmperr | sed -e 's/^/    /'
+    cat $tmperr | sed -e 's/^/    /' >>$joblog
+    echo ...............................
+    if [[ ! -z "$addnfo" ]]; then
+        echo
+        echo Additional info / advice:
+        echo ${addnfo}
+        echo ${addnfo} >>$joblog
+        echo
+    fi
+
+    if [[ $quit_if_error -eq 1 ]]; then
+        sho "Script is terminated." $joblog
+
+        exit 1
+
+    fi
+  else
+    sho "Result: no errors." $joblog
+  fi
+
+}
+# end of func 'catch_err'
+
 #.............................................
 
 show_syntax() {
@@ -78,32 +136,41 @@ EOF
 #.............................................
 
 catch_err() {
-  local tmperr=$1
-  local addnfo=${2:-""}
-  local quit_if_error=${3:-1}
-  if [ -s $tmperr ];then
-    echo
-    sho "Error log $tmperr is NOT EMPTY." $log4all
+  local joblog=$1
+  local tmperr=$2
+  local addnfo=${3:-""}
+  local quit_if_error=${4:-1}
+
+  # Example:
+  # catch_err $joblog $tmperr "${msg_abend}" 0
+
+  if [[ -s $tmperr ]]; then
+    sho "FAIL DETECTED. Error log $tmperr is NOT EMPTY." $joblog
     echo ...............................
     cat $tmperr | sed -e 's/^/    /'
-    cat $tmperr | sed -e 's/^/    /' >>$log4all
+    cat $tmperr | sed -e 's/^/    /' >>$joblog
     echo ...............................
-    if [ ! -z "$addnfo" ]; then
+    if [[ ! -z "$addnfo" ]]; then
         echo
         echo Additional info / advice:
-        echo $addnfo
-        echo $addnfo >>$log4all
+        echo ${addnfo}
+        echo ${addnfo} >>$joblog
         echo
     fi
 
-    if [ $quit_if_error -eq 1 ]; then
-        sho "Script is terminated." $log4all
+    if [[ $quit_if_error -eq 1 ]]; then
+        sho "Script is terminated." $joblog
+
         exit 1
+
     fi
   else
-        sho "Result: SUCCESS." $log4all
+    sho "Result: no errors." $joblog
   fi
+
 }
+# end of func 'catch_err'
+
 #.............................................
 
 msg_novar() {
@@ -368,6 +435,101 @@ cleanup_dir() {
     rm -f $lst $err
 }
 # end of cleanup_dir
+
+#.............................................
+
+launch_fb_daemon() {
+    local update_fb_instance=$1
+    local svc_updated_txt=$2
+    local svc_load_script=$3
+    local log=$4
+    local tmp=$5
+    local err=$6
+
+    local run_cmd
+    	
+        run_cmd="cp --force --preserve $svc_updated_txt $svc_load_script"
+        sho "Replace script that starts FB service. Command: $run_cmd" $log
+        eval $run_cmd 1>$tmp 2>$err
+        bulksho $tmp $log
+        catch_err $log $err
+        rm -f $svc_updated_txt
+        echo ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        run_cmd="systemctl enable $service_name"
+        sho "Make service $service_name enable. Command: $run_cmd" $log
+        # ::: NB :::
+        # systemctl enable writes to STDERR! Example:
+        # Created symlink from /etc/systemd/system/multi-user.target.wants/... to /usr/lib/systemd/system/...
+        # We have to check STDERR only when elev not equals 0.
+        eval $run_cmd 1>$tmp 2>&1
+        elev=$?
+        bulksho $tmp $log
+        if [[ $elev -ne 0 ]]; then
+    	    catch_err $log $err
+        fi
+        echo ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        run_cmd="systemctl daemon-reload"
+        sho "Reload system info about services. Command: $run_cmd" $log
+        eval $run_cmd 1>$tmp 2>$err
+        bulksho $tmp $log
+        catch_err $log $err
+        echo ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        run_cmd="systemctl start $service_name"
+        sho "Start service. Command: $run_cmd" $log
+        eval $run_cmd 1>$tmp 2>$err
+        bulksho $tmp $log
+        catch_err $log $err
+        echo ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        run_cmd="systemctl status $service_name"
+        sho "Obtain service status. Command: $run_cmd" $log
+        eval $run_cmd 1>$tmp 2>$err
+        bulksho $tmp $log
+        catch_err $log $err
+
+}
+# end of launch_fb_daemon
+
+#.............................................
+
+get_etalon_state() {
+    # get_etalon_state "${fbc}" "${$etalon_dbnm}" etalon_readonly etalon_shutdown
+    local fbc=$1
+    local etalon_dbnm=$2
+    local __etalon_readonly=$3 # output arg.
+    local __etalon_shutdown=$4 # output arg.
+
+    if [[ -f "$fbc/gstat" ]]; then
+    	$fbc/gstat -h $etalon_dbnm 1>$tmp 2>&1
+        if [[ $? -ne 0 ]]; then
+              sho "Can not get DB header for 'etalon_dbnm' = $etalon_dbnm" $log
+              cat $tmp
+              cat $tmp>>$log
+              exit 1
+        fi
+        if grep -q -i "attributes[[:space:]].*read[[:space:]]only" $tmp; then
+              etalon_readonly=1
+              sho "Etalone database: $etalon_dbnm - has read_only mode." $log
+        fi
+
+        if grep -q -i "attributes[[:space:]].*shutdown" $tmp; then
+              etalon_shutdown=1
+              sho "Etalone database: $etalon_dbnm - has shutdown state." $log
+        fi
+        if [[ $etalon_shutdown -eq 0 && $etalon_readonly -eq 0 ]]; then
+              sho "Etalone database: $etalon_dbnm - has normal state and read_write mode." $log
+        fi
+    else
+    	sho "Could not find $fbc/gstat utility. Check parameter 'fbc' in OLTP-EMUL config!" $log
+    	exit 1
+    fi
+    
+    # Returning value:
+    ##################
+    eval $__etalon_readonly="'$etalon_readonly'"
+    eval $__etalon_shutdown="'$etalon_shutdown'"
+}
+# get_etalon_state
+
 #.............................................
 
 ###############################
@@ -419,29 +581,6 @@ if [[ "$fb" = "25" ]]; then
     preferred_fb_mode="cs"
 else
     preferred_fb_mode=${3:-"ss"}
-fi
-
-fb_config_prototype=$this_script_directory/${this_script_name_only}-fb${fb}.conf.${preferred_fb_mode^^}
-
-if [[ "${preferred_fb_mode^^}" == "SS" || "${preferred_fb_mode^^}" == "SC" || "${preferred_fb_mode^^}" == "CS" ]] ; then
-    if grep -q -m1 -i "FileSystemCacheThreshold" $fb_config_prototype ; then
-        # Prototype for firebird.conf FOUND and contains parameter 'FileSystemCacheThreshold'
-        :
-    else
-	cat <<-EOF >>$abendlog
-		Prototype for firebird.conf: $fb_config_prototype - either does not exist or has no parameter 'FileSystemCacheThreshold'
-		Job terminated.
-	EOF
-	cat $abendlog
-        exit 1
-    fi
-else
-	cat <<-EOF >>$abendlog
-		Value of arg_3 [server mode] is invalid: ${preferred_fb_mode^^}
-		Must be SS, SC or CS (case-insensitive). Job terminated.
-	EOF
-    cat $abendlog
-    exit 1
 fi
 
 
@@ -566,6 +705,7 @@ fi
 dts=$(date +'%Y%m%d_%H%M%S')
 log=$tmpdir/${this_script_name_only}.${dts}.log
 tmp=$tmpdir/$this_script_name_only.tmp
+tm2=$tmpdir/$this_script_name_only.2.tmp
 err=$tmpdir/$this_script_name_only.err
 lst=$tmpdir/$this_script_name_only.lst
 sql=$tmpdir/$this_script_name_only.sql
@@ -580,6 +720,69 @@ else
     clu=isql
 fi
 isql_name=$fbc/$clu
+
+#####################################
+fb_config_prototype=$this_script_directory/${this_script_name_only}-fb${fb}.conf.${preferred_fb_mode^^}
+
+if [[ "${preferred_fb_mode^^}" == "SS" || "${preferred_fb_mode^^}" == "SC" || "${preferred_fb_mode^^}" == "CS" ]] ; then
+    if [[ "$fb" == "30" ]]; then
+        (grep "^[^#]" $fb_config_prototype | grep -m1 -i "FileSystemCacheThreshold") 1>$log 2>$err
+        if  [[ -s "$log" ]]; then
+		cat <<-EOF >>$abendlog
+		Prototype for firebird.conf: $fb_config_prototype - contains parameter 'FileSystemCacheThreshold':
+		$(cat $log)
+		EOF
+        else
+		cat <<-EOF >>$abendlog
+		Prototype for firebird.conf: $fb_config_prototype - either does not exist or has no parameter 'FileSystemCacheThreshold'
+		Check $log and $err:
+		$(cat $log)
+		$(cat $err)
+		Job terminated.
+		EOF
+		cat $abendlog
+	        exit 1
+
+        fi
+    else
+        (grep "^[^#]" $fb_config_prototype | grep -i "UseFileSystemCache\s*=\s*false") 1>$log 2>$err
+        if  [[ -s "$log" ]]; then
+		cat <<-EOF >>$abendlog
+		Prototype for firebird.conf: $fb_config_prototype - disables usage of File System cache:
+		$(cat $log)
+		
+		You have to change config and ENABLE usage of File System cache.
+		Job terminated.
+		EOF
+		cat $abendlog
+	        exit 1
+        elif [[ -s "$err" ]]; then
+		cat <<-EOF >>$abendlog
+		Prototype for firebird.conf: $fb_config_prototype - either absent or could not be parsed.
+		$(cat $err)
+		
+		Job terminated.
+		EOF
+		cat $abendlog
+	        exit 1
+        else
+		cat <<-EOF >>$abendlog
+		Prototype for firebird.conf: $fb_config_prototype - has no restriction of File System cache usage.
+		$(cat $log)
+		EOF
+        fi
+    fi
+else
+	cat <<-EOF >>$abendlog
+		Value of arg_3 [server mode] is invalid: ${preferred_fb_mode^^}
+		Must be SS, SC or CS (case-insensitive). Job terminated.
+	EOF
+    cat $abendlog
+    exit 1
+fi
+#####################################
+
+
 cat $abendlog
 cat $abendlog>$log
 rm -f $abendlog
@@ -617,14 +820,53 @@ fi
 cleanup_dir $tmpdir "*.tar.gz" $MAX_ZIP_FILES $log $lst $err
 
 #------------------------------------------------------------
+
 if [[ $update_fb_instance -eq 1 ]]; then
 
   # <update_fb_instance> is command-line parameter N4, default: 1
   ######################################
+
+    # Firebird instance must be [re-]installed in the PARENT directory for variable 'fbc' that was created
+    # when we read oltp-emul config (folder where isql lives): '/opt/firebird/bin' --> '/opt/firebird'.
+    # Normally GRAND-parent folder ('/opt') has all necessary access rights: 'drwxrwxr-x'
+    # But if we want to put FB instance in some other dir then its PARENT must have the same access mask,
+    # otherwise service will not start, even if acess rights to FB dir meet this requirement.
+    # Output will be: "Failed at step EXEC spawning /home/ibase/fb3x/bin/fbguard: Permission denied"
+    #
+    sho "Check access rights to '$fbc' and all parent directories" $log
+    pdir=$fbc
+    access_rights_problem=0
+    while :
+    do
+	pdir="$(dirname "$pdir")"
+	[[ "${pdir}" == "/" ]] && break
+	if [[ -d "${pdir}" ]]; then
+    	    dir_access_rights=$(stat --format "%a" "${pdir}")
+    	    if [[ $dir_access_rights -eq 775 || $dir_access_rights -eq 755 ]]; then
+    		sho "Check access rights to '${pdir}' PASSED." $log
+    	    else
+		cat <<-EOF >$tmp
+		### ACHTUNG ###
+		Access rights to the directory ${pdir} is INEFFCICIENT to run installed FB as service:
+		$(stat --format "%A" "${pdir}")
+		Needed permissions for this directory: 'drwxr-xr-x'
+		You have to run: chmod 755 ${pdir}
+		-----------------------
+		EOF
+		bulksho $tmp $log
+		access_rights_problem=$((access_rights_problem+1))
+	    fi
+	else
+	    sho "Directory '$pdir' not yet exists. Access rights not checked." $log
+	fi
+    done
+
+    if [[ $access_rights_problem -gt 0 ]]; then
+        sho "Found $access_rights_problem folders which access rights must be adjusted. JOB TERMINATED." $log
+        exit 1
+    fi
+
   
-  if [[ "$fb" = "25" ]]; then
-    sho "FB of this version does not requires any 3rd-party packages." $log
-  else
     #################################################################################################
     ### c h e c k    f o r     l i b t o m a t h    &   l i b t o m c r y p t     p a c k a g e s ###
     #################################################################################################
@@ -668,7 +910,6 @@ if [[ $update_fb_instance -eq 1 ]]; then
       fi
     done
     rm -f $tmp $lst
-  fi
 else
   sho "Input argument 'update_fb_instance' is 0. Skip check for presence of packages required to install FB." $log
 fi
@@ -685,27 +926,13 @@ if [[ ! -d $svc_script_startup_dir ]]; then
 		OS loader name: $(ps -q 1 -o comm=)
 		Job terminated.
 	EOF
-	cat $tmp
-	cat $tmp>>$log
-	rm -f $tmp
-	exit
+	bulksho $tmp $log
+
+	exit 1
+	
 fi
 #grep -m1 "/opt/fb30test/bin/fbguard.*-daemon.*-forever" firebird*.service | grep -v "@"
 #------------------------------------------------------------------------------
-
-if [[ "${preferred_fb_mode^^}" == "SS" || "${preferred_fb_mode^^}" == "SC" || "${preferred_fb_mode^^}" == "CS" ]] ; then
-    if grep -q -m1 -i "FileSystemCacheThreshold" $fb_config_prototype ; then
-        sho "Prototype for firebird.conf FOUND and contains parameter 'FileSystemCacheThreshold'." $log
-    else
-        sho "Prototype for firebird.conf: $fb_config_prototype - either does not exist or has no parameter 'FileSystemCacheThreshold'" $log
-        sho "Job terminated." $log
-        exit
-    fi
-else
-    sho "Invalid server mode specified: $preferred_fb_mode" $log
-    sho "Job terminated." $log
-    exit
-fi
 
 # Check that value of $etalon_dbnm is defined.
 # Get attributes of its header: whether it is in shutdown or readonly mode.
@@ -723,93 +950,34 @@ fi
 export ISC_USER=$usr
 export ISC_PASSWORD=$pwd
 
+#------------------------------------------------------------------------------
+# get parent dir for  '/opt/fb30/bin' or '/opt/fb40/bin' --> '/opt/fb30'; '/opt/fb40'
+dir_to_install_fb="$(dirname "$fbc")"
+#------------------------------------------------------------------------------
 
-if [[ -f "$etalon_dbnm"  ]]; then
-      if [[ -f "$fbc/gstat" ]]; then
-          $fbc/gstat -h $etalon_dbnm 1>$tmp 2>&1
-          if [[ $? -ne 0 ]]; then
-              sho "Can not get DB header for 'etalon_dbnm' = $etalon_dbnm" $log
-              cat $tmp
-              cat $tmp>>$log
-              exit 1
-          fi
-          if grep -q -i "attributes[[:space:]].*read[[:space:]]only" $tmp; then
-              etalon_readonly=1
-              sho "Etalone database: $etalon_dbnm - has read_only mode." $log
-          fi
+if [[ -f "$etalon_dbnm" ]]; then
+      if [[ $update_fb_instance -eq 1 ]]; then
 
-          if grep -q -i "attributes[[:space:]].*shutdown" $tmp; then
-              etalon_shutdown=1
-              sho "Etalone database: $etalon_dbnm - has shutdown state." $log
-          fi
-          if [[ $etalon_shutdown -eq 0 && $etalon_readonly -eq 0 ]]; then
-              sho "Etalone database: $etalon_dbnm - has normal state and read_write mode." $log
-          fi
+	cat <<- EOF >$tmp
+	FB instance will be re-installed in the directory '$dir_to_install_fb'.
+	Parameter 'etalon_dbnm' in OLTP-EMUL config points to file:
+	${etalon_dbnm}
+	This database exists but its state will be checked after FB instalation.
+	EOF
+	bulksho $tmp $log
       else
-          sho "Could not find $fbc/gstat utility. Check parameter 'fbc' in OLTP-EMUL config!" $log
-          exit 1
+        # Check that etalon_dbnm is really FB database. If yes - get its read_only and shutdown state:
+        get_etalon_state "${fbc}" "${etalon_dbnm}" etalon_readonly etalon_shutdown
       fi
 else
-      sho "Parameter 'etalon_dbnm' points to non-existing file: '$etalon_dbnm'" $log
+      sho "Parameter 'etalon_dbnm' in OLTP-EMUL config points to non-existing file: '$etalon_dbnm'" $log
       exit 1
 fi
 
-
 #------------------------------------------------------------------------------
-if [[ "$fb" = "25" ]]; then
-    # NB: folder '/opt/fb25cs' is hardcoded in install.sh for FB 2.5
-    # Firebird will be installed as Classic.
-    # There is NO WAY to change its mode to SuperClassic non-interactively:
-    # command switch '-silent' does not prevent from asking question about
-    # preferred mode when launch script changeMultiConnectMode.sh
-    dir_to_install_fb=/opt/fb25cs
-    if [[ $update_fb_instance -eq 1 ]]; then
-        if [[ "$(dirname "$fbc")" != "$dir_to_install_fb" ]]; then
-            sho "Destination folder for installing Firebird 2.5 instance is hardcoded: '$dir_to_install_fb'" $log
-            sho "You have to change 'fbc' parameter in $oltp_emul_conf_name to: $dir_to_install_fb" $log
-            exit
-        fi
-    fi
-else
-    # get parent dir for  '/opt/fb30/bin' or '/opt/fb40/bin' --> '/opt/fb30'; '/opt/fb40'
-    dir_to_install_fb="$(dirname "$fbc")"
-fi
-
-#------------------------------------------------------------------------------
-fb_config_can_be_used=0
-if [[ -f "$fb_config_prototype" ]]; then
-    awk '$1=$1' $fb_config_prototype  | grep "^[^#]" | grep -i "FileSystemCacheThreshold" >$tmp
-    if [[ $? -eq 0 ]]; then
-        fb_config_can_be_used=1
-    else
-	cat <<-EOF >$tmp
-
-		Config file '$fb_config_prototype' can NOT be used now for test.
-		Value of parameter 'FileSystemCacheThreshold' must be uncommented
-		Its value must be greater then page cache size used for test DB.
-		Job terminated.
-
-	EOF
-	cat $tmp
-	cat $tmp >>$log
-    fi
-else
-	cat <<-EOF >$tmp
-
-		File for replacement of firebird.conf: '$fb_config_prototype' - does not exist.
-		Job terminated.
-
-	EOF
-	cat $tmp
-	cat $tmp >>$log
-fi
-rm -f $tmp
-
-if [[ $fb_config_can_be_used -ne 1 ]]; then
-    exit
-fi
 
 sho "Start parsing prototype of firebird.conf and change its RemoteServicePort and BugCheckAbort parameters." $log
+
 
 # Now we have to read $fb_config_prototype and change there 'port' to the value that is specified in oltp-emul cfg
 fb_cfg_for_work=$tmpdir/fb_config.conf
@@ -856,7 +1024,13 @@ cat <<- EOF >>$fb_cfg_for_work
 	BugCheckAbort=1
 EOF
 
-sho "Completed. FB config file has value RemoteServicePort from $oltp_emul_conf_name. BugCheckAbort=1 was added without conditions." $log
+cat <<- EOF >$tmp
+Completed.
+FB config '$fb_cfg_for_work' now has RemoteServicePort = $port
+(as it specified in '$oltp_emul_conf_name').
+BugCheckAbort=1 was added without conditions in order to allow dumps to be created.
+EOF
+bulksho $tmp $log
 
 #------------------------------------------------------------
 
@@ -1023,24 +1197,26 @@ if [[ $update_fb_instance -eq 1 ]]; then
         previous_fb_snapshot=$( echo "quit;" | $fbc/isql -q -z | awk '{print $3}' | awk -F '.' '{print $NF}' )
     fi
 
-    fb_snapshots_root=$FB_SNAPSHOTS_URL # http://web.firebirdsql.org/download/snapshot_builds/linux
+    # fb_snapshots_root=$FB_SNAPSHOTS_URL # http://web.firebirdsql.org/download/snapshot_builds/linux
+    if [[ "$fb" = "30" ]]; then
+	fb_major_vers_url=$FB3X_SNAPSHOT_URL
+    elif [[ "$fb" = "40" ]]; then
+	fb_major_vers_url=$FB4X_SNAPSHOT_URL
+    elif [[ "$fb" = "50" ]]; then
+	fb_major_vers_url=$FB5X_SNAPSHOT_URL
+    else
+        sho "Variable for storing URL of FB snapshots was not defined, fb=${fb}." $log
 
-    if [[ "$fb" = "25" ]]; then
-        systemctl list-unit-files | grep enabled | grep xinetd > /dev/null
-        if [[ $? -ne 0 ]]; then
-            sho "Service xinetd was disabled or absent. Install if need and enable it first." $log
-            exit
-        fi
-        #systemctl restart xinetd
-        #sho "Service xinetd was RESTARTED and now is running with PID=$(pgrep xinetd)." $log
-        fb_major_vers_url=$fb_snapshots_root/fb2.5
-        service_name=xinetd.service
-    elif [[ "$fb" = "30" ]]; then
-        fb_major_vers_url=$fb_snapshots_root/fb3.0
+        exit 1
+        
+    fi
+
+    if [[ "$fb" = "30" ]]; then
         fb_service_script_suffix="-superserver"
         service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _)${fb_service_script_suffix}.service
     elif [[ "$fb" = "40" ]]; then
-        fb_major_vers_url=$fb_snapshots_root/fbtrunk
+        service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _).service
+    elif [[ "$fb" = "50" ]]; then
         service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _).service
     else
         sho "Invalid/unsupported FB major version passed. Can not defined URL for downloading FB snapshot." $log
@@ -1056,16 +1232,38 @@ if [[ $update_fb_instance -eq 1 ]]; then
     fi
 
     #curl -v –trace --proxy <[protocol://][user:password@]proxyhost[:port]>  $fb_major_vers_url 1>$tmp
-    run_cmd="curl -L -v –trace $PROXY_DATA $fb_major_vers_url"
-    sho "Attempt to download list of FB snapshots from $fb_major_vers_url. Command:" $log
+    #run_cmd="curl -L -v –trace $PROXY_DATA $fb_major_vers_url"
+    run_cmd="curl ${PROXY_DATA} --location --verbose $fb_major_vers_url/ --output $lst --write-out %{http_code}"
+    chk_code=200
+    sho "Attempt to download *LIST* of FB snapshots from $fb_major_vers_url. Command:" $log
     sho "$run_cmd" $log
-    eval "$run_cmd" 1>$lst 2>$err
-    grep -q -i "HTTP.*[[:space:]]200[[:space:]]OK" $err
-    if [[ $? -eq 0 && -s "$lst" ]] ; then
-        sho "Success. Size of downloaded list $lst: $(stat -c%s $lst). Strings to be parsed:" $log
-        grep "<a href='.*${FB_SNAPSHOT_SUFFIX}'>" $lst >$tmp
-        cat $tmp
-        cat $tmp>>$log
+    #############################################################
+    ###    D O W N L O A D      L I S T     O F    F I L E S  ###
+    #############################################################
+    eval "$run_cmd" 1>$tmp 2>$err
+    elev=$?
+    if [[ $elev -eq 0 && $chk_code -eq $(head -1 $tmp) ]]; then
+	sho "Success. Size of downloaded list $lst: $(stat -c%s $lst)." $log
+	#grep "$FB_SNAPSHOT_SUFFIX" $lst
+	#grep "$FB_SNAPSHOT_SUFFIX" $lst >> $log
+	if [[ "$fb" == "30" ]]; then
+    	    parse_cmd="grep -E \" href='.*Firebird-.*${FB_SNAPSHOT_SUFFIX}\" $lst"
+        elif [[ "$fb" == "40" ]]; then
+    	    parse_cmd="grep -E \"\\<a href.*Firebird(-debug.*)?-4.*${FB_SNAPSHOT_SUFFIX}\" $lst"
+        elif [[ "$fb" == "50" ]]; then
+    	    parse_cmd="grep -E \"\\<a href.*Firebird-5.*linux-x64(-debug)?.*.tar.gz\" $lst"
+        else
+            sho "UNDEFINED command to parse LIST of files" $log
+    	    exit
+        fi
+        sho "Applying command to parse snapshot names: $parse_cmd" $log
+	eval "$parse_cmd" 1>$tmp 2>$err
+	elev=$?
+	sho "Result: elev=$elev" $log
+	sho "Content of downloaded file $lst:" $log
+	head $tmp
+	cat $tmp>>$log
+        
     else
         # NB: curl always set its retcode to 0. Check of $? value can not be used here!
         # Remove all CR characters that curl produces in its output:
@@ -1075,48 +1273,122 @@ if [[ $update_fb_instance -eq 1 ]]; then
         cat $tmp
         cat $tmp >>$log
         sho "Job terminated." $log
+
+        exit
+
+    fi
+    mv $tmp $lst
+
+    # Examples:
+    # <td nowrap class=content><a href='./Firebird-3.0.11.33675-0.amd64.tar.gz'>Firebird-3.0.11.33675-0.amd64.tar.gz</a></td>
+    # <td nowrap class=content><a href='./Firebird-debuginfo-3.0.11.33675-0.amd64.tar.gz'>Firebird-debuginfo-3.0.11.33675-0.amd64.tar.gz</a></td>
+    # <a href="/FirebirdSQL/snapshots/releases/download/snapshot-v4.0/Firebird-4.0.3.2923-0.amd64.tar.gz" ...>
+    # <a href="/FirebirdSQL/snapshots/releases/download/snapshot-v4.0/Firebird-debuginfo-4.0.3.2923-0.amd64.tar.gz" ...>
+    # <a href="/FirebirdSQL/snapshots/releases/download/snapshot-master/Firebird-5.0.0.1009-Beta2-linux-x64.tar.gz" ...>
+    # <a href="/FirebirdSQL/snapshots/releases/download/snapshot-master/Firebird-5.0.0.1009-Beta2-linux-x64-debugSymbols.tar.gz" ...>
+    
+    if [[ "$fb" == "30" ]]; then
+	parse_snapshot_name_cmd="grep -m1 -i -v \"\\-debug\" $lst | awk -F \"'\" '{print \$2}'"
+	parse_debug_package_cmd="grep -m1 -i \"\\-debug\" $lst | awk -F \"'\" '{print \$2}'"
+    elif  [[ "$fb" == "40" ]]; then
+	parse_snapshot_name_cmd="grep -m1 -i -v \"\\-debug\" $lst | awk -F'\"' '{print \$2}'"
+	parse_debug_package_cmd="grep -m1 -i \"\\-debug\" $lst | awk -F'\"' '{print \$2}'"
+    elif  [[ "$fb" == "50" ]]; then
+	parse_snapshot_name_cmd="grep -m1 -i -v \"\\-debug\" $lst | awk -F'\"' '{print \$2}'"
+	parse_debug_package_cmd="grep -m1 -i \"\\-debug\" $lst | awk -F'\"' '{print \$2}'"
+    else
+        sho "Command to parse snapshot number for fb='$fb' remains UNDEFINED." $log
         exit
     fi
-    rm -f $tmp $err
+	cat <<-EOF >$tmp
+	Attempt to extract filenames for snapshot itself and its debug package.
+	Commands:
+	$parse_snapshot_name_cmd
+	$parse_debug_package_cmd
+	EOF
+    bulksho $tmp $log
 
+    eval "$parse_snapshot_name_cmd" 1>$tmp 2>&1
+    eval "$parse_debug_package_cmd" 1>$tm2 2>&1
+    if grep -q -E "[[:digit:]]{1,2}.[[:digit:]]{1,2}.[[:digit:]]{1,2}.[[:digit:]]+.*.tar.gz" $tmp ; then
+        sho "Snapshot number extracted OK:" $log
+        bulksho $tmp $log 1
+    else
+	cat <<-EOF >$err
+	ABEND. Could not extract snapshot number:
+	-----------
+	$(cat $tmp)
+	-----------
+	EOF
+	bulksho $err $log
+	exit
+    fi
+    #mv $tmp $lst
+    
+    # 3x: ./Firebird-3.0.11.33675-0.amd64.tar.gz
+    # 4x: /FirebirdSQL/snapshots/releases/download/snapshot-v4.0/Firebird-4.0.3.2923-0.amd64.tar.gz
+    # 5x: /FirebirdSQL/snapshots/releases/download/snapshot-master/Firebird-5.0.0.1009-Beta2-linux-x64.tar.gz
+    x_snap_itself_name=$(<$tmp)
+    x_snap_debug_package=$(<$tm2)
+    if [[ "$fb" == "30" ]]; then
+        snapshot_itself_name="$fb_major_vers_url/$(basename $x_snap_itself_name)"
+        snapshot_dbg_pg_name="$fb_major_vers_url/$(basename $x_snap_debug_package)"
+    elif  [[ "$fb" == "40" ]]; then
+	snapshot_itself_name="https://github.com${x_snap_itself_name}"
+        snapshot_dbg_pg_name="https://github.com${x_snap_debug_package}"
+    elif  [[ "$fb" == "50" ]]; then
+	snapshot_itself_name="https://github.com${x_snap_itself_name}"
+        snapshot_dbg_pg_name="https://github.com${x_snap_debug_package}"
+    else
+        sho "Can not define snapshot URL for fb='$fb'." $log
+        exit
+    fi
+    sho "URL to snapshot itself binary: $snapshot_itself_name" $log
+    sho "URL to snapshot debug package: $snapshot_dbg_pg_name" $log
 
+	cat <<-EOF >$lst
+	$snapshot_itself_name
+	$snapshot_dbg_pg_name
+	EOF
+
+    rm -f  $err
     while read href; do
         sho "Loop for $lst, found element for download: $href" $log
         fb_tar_gz="$(basename -- $href)"
         fb_clean_name="${fb_tar_gz/-debuginfo/}" # Firebird-debuginfo-4.0.0.1946-Beta2.amd64.tar.gz --> Firebird-4.0.0.1946-Beta2.amd64.tar.gz
+        
+        # Firebird-3.0.11.33675-0.amd64.tar.gz       --> 33675
+        # Firebird-4.0.3.2923-0.amd64.tar.gz         -->  2923
+        # Firebird-5.0.0.1009-Beta2-linux-x64.tar.gz -->  1009
+        fb_tar_gz="$(basename -- $href)"
+        fb_clean_name="${fb_tar_gz/-debuginfo/}" # Firebird-debuginfo-4.0.0.1946-Beta2.amd64.tar.gz --> Firebird-4.0.0.1946-Beta2.amd64.tar.gz
         actual_fb_snapshot=$( echo $fb_clean_name | awk -F'-' '{print $2}' | awk -F '.' '{print $NF}' )
+        sho "fb_clean_name=${fb_clean_name}, actual_fb_snapshot=${actual_fb_snapshot}, previous_fb_snapshot=${previous_fb_snapshot}" $log
 
         run_download=0
         if [[ $previous_fb_snapshot -ge $actual_fb_snapshot ]]; then
                 sho "SKIP from downloading $fb_tar_gz: installed snapshot No. $previous_fb_snapshot is equal or more recent to offered on site: $actual_fb_snapshot." $log
         else
-            if [[ $fb_tar_gz == *"debuginfo"* && ${GET_DEBUG_PACKAGE} -eq 0 ]]; then
+            if [[ $fb_tar_gz == *"debug"* && ${GET_DEBUG_PACKAGE} -eq 0 ]]; then
                 sho "SKIP downloading package $fb_tar_gz, check config parameter GET_DEBUG_PACKAGE" $log
-            elif [[ "$fb" != "25" ]]; then
-                [[ $fb_tar_gz == Firebird-* ]] && run_download=1
-            elif [[ $fb_tar_gz == FirebirdCS* ]]; then
-                # 2.5.x only: one need to get FirebirdCS-* but NOT FirebirdSS-*
-                run_download=1
-            fi
-
-            if [[ $run_download -eq 1 ]]; then
+            else
                 sho "Downloading $fb_tar_gz: installed snapshot No. $previous_fb_snapshot is OLDER than offered on site: $actual_fb_snapshot." $log
-                run_cmd="curl -L -v -trace $PROXY_DATA $fb_major_vers_url/$fb_tar_gz"
+                run_cmd="curl ${PROXY_DATA} --location --time-cond --verbose ${href}  --output $tmpdir/$fb_tar_gz --write-out %{http_code}"
                 sho "Command: $run_cmd" $log
-                eval "$run_cmd" 1>$tmpdir/$fb_tar_gz 2>$err
-                sed 's/\r//' $err>$tmp
-                sho "Download of $fb_tar_gz completed." $log
-                rm -f $err
-                if grep -q -i "HTTP.*[[:space:]]200[[:space:]]OK" $tmp; then
-                    sho "Success. Size of downloaded file $tmpdir/$fb_tar_gz: $(stat -c%s $tmpdir/$fb_tar_gz)" $log
+                eval "$run_cmd" 1>$tmp 2>$err
+	        elev=$?
+	        if [[ $elev -eq 0 && $chk_code -eq $(head -1 $tmp) ]]; then
+		    sho "Success. Size of downloaded file: $(stat -c%s $tmpdir/$fb_tar_gz)." $log
                 else
                     sho "Failed. Check log:" $log
+                    sed 's/\r//' $err>$tmp
                     cat $tmp
                     cat $tmp >>$log
                     sho "Job terminated." $log
+                    
                     exit
-                fi
-                rm -f $tmp
+                    
+		fi
 
                 send_to_email=0
                 if [[ -n "${mail_hdr_from}" && -n "${mail_pwd_from}" && -n "${mail_hdr_to}" && -n "${mail_smtp_url}"  ]] ; then
@@ -1259,9 +1531,10 @@ if [[ $update_fb_instance -eq 1 ]]; then
             fi
             # [[ $run_download -eq 1 ]]
         fi
-    done < <( grep "<a href='.*${FB_SNAPSHOT_SUFFIX}'>" $lst | awk -F "'" '{print $2}' )
+    done < <( cat $lst )
     # Example: <td nowrap class=content><a href='./Firebird-4.0.0.1884-Beta1.amd64.tar.gz'>Firebird-4.0.0.1884-Beta1.amd64.tar.gz</a></td>
-    rm -f $lst
+    #rm -f $lst
+
 
     # :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
@@ -1324,49 +1597,48 @@ if [[ $update_fb_instance -eq 1 ]]; then
         # - must present there:
         cd $tmpdir/fb_extracted.$fb.tmp
 
-        if [[ "$fb" != "25" ]]; then
-            # Name of service must be defined via FOLDER where FB is to be installed:
-            # 1) for FB 3.x: firebird.opt_fb30-superserver.service
-            # 2) for FB 4.x: firebird.opt_fb40.service // ::: NB ::: without "-superserver" suffix.
-            # Replace slash with underscore character: /opt/fb30 --> _opt_fb30 ; /opt/fb40 --> _opt_fb40
-            # Then extract substring from this starting from 2nd char: opt_fb30; opt_fb40
-            service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _)${fb_service_script_suffix}.service
+        # Name of service must be defined via FOLDER where FB is to be installed:
+        # 1) for FB 3.x: firebird.opt_fb30-superserver.service
+        # 2) for FB 4.x: firebird.opt_fb40.service // ::: NB ::: without "-superserver" suffix.
+        # Replace slash with underscore character: /opt/fb30 --> _opt_fb30 ; /opt/fb40 --> _opt_fb40
+        # Then extract substring from this starting from 2nd char: opt_fb30; opt_fb40
+        service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _)${fb_service_script_suffix}.service
 
-            ##################################################
-            set -x
-            bash ./install.sh -silent -path $dir_to_install_fb
-            retcode=$?
-            set +x
-            if [[ $retcode -ne 0 ]]; then
-                exit
-            fi
-            ##################################################
+        ##################################################
+        set -x
+        bash ./install.sh -silent -path $dir_to_install_fb
+        retcode=$?
+        set +x
+        if [[ $retcode -ne 0 ]]; then
+            exit
+        fi
+        ##################################################
 
-            cd $this_script_directory
+        cd $this_script_directory
 
-            #########################################################################
-            # Create (if needed) $dir_to_install_fb/UDF and extract 'sleep-UDF' there
-            #########################################################################
-            check_for_sleep_UDF $dir_to_install_fb $fb_cfg_for_work $tmp $log
+        #########################################################################
+        # Create (if needed) $dir_to_install_fb/UDF and extract 'sleep-UDF' there
+        #########################################################################
+        check_for_sleep_UDF $dir_to_install_fb $fb_cfg_for_work $tmp $log
 
-            #######################################
-            # Replace firebird.conf with custom one
-            #######################################
-            cp --force --preserve $fb_cfg_for_work $dir_to_install_fb/firebird.conf
+        #######################################
+        # Replace firebird.conf with custom one
+        #######################################
+        cp --force --preserve $fb_cfg_for_work $dir_to_install_fb/firebird.conf
 
-            chown firebird -R $dir_to_install_fb
+        chown firebird -R $dir_to_install_fb
 
-            ##############################################################
-            ### Add/update SYSDBA user with giving him password=${pwd} ###
-            ##############################################################
-            upd_sysdba_pswd ${pwd} $sql $tmp $err $log
+        ##############################################################
+        ### Add/update SYSDBA user with giving him password=${pwd} ###
+        ##############################################################
+        upd_sysdba_pswd ${pwd} $sql $tmp $err $log
 
-            # already defined: svc_load_script=${svc_script_startup_dir}/${service_name}
-            svc_updated_txt=$tmpdir/$service_name
-            rm -f $svc_updated_txt
-            while read line; do
-                echo $line>>$svc_updated_txt
-                if [[ "$line" = "[Service]" ]]; then
+        # already defined: svc_load_script=${svc_script_startup_dir}/${service_name}
+        svc_updated_txt=$tmpdir/$service_name
+        rm -f $svc_updated_txt
+        while read line; do
+            echo $line>>$svc_updated_txt
+            if [[ "$line" = "[Service]" ]]; then
 		cat <<- EOF >>$svc_updated_txt
 			# Added by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S')
 			# ----------------------------------------
@@ -1375,44 +1647,11 @@ if [[ $update_fb_instance -eq 1 ]]; then
 			# ----------------------------------------
 			
 		EOF
-                fi
-            done < <(cat $svc_load_script)
-            cp --force --preserve $svc_updated_txt $svc_load_script
-            rm -f $svc_updated_txt
-
-            systemctl daemon-reload
-            systemctl start $service_name
-            systemctl status $service_name 1>$tmp 2>&1
-            cat $tmp
-            cat $tmp>>$log
-        else
-            # NB: installer of FB 2.5 does not know option '-path'. Only '-silent' can be use.
-            set -x
-            bash ./install.sh -silent
-            # Result: file /opt/fb25cs/SYSDBA.password will be created with random password like: ISC_PASSWD=ka2dbN7o
-            # We have to change it now to be equal to $oltp_emul_conf_name parameter ${pwd}
-            installer_random_pswd=$(grep ISC_PASSWD $dir_to_install_fb/SYSDBA.password | awk -F'=' '{print $2}')
-
-            set -x
-            $dir_to_install_fb/bin/gsec -user sysdba -password $installer_random_pswd -modify sysdba -pw ${pwd}
-            set +x
-
-            #########################################################################
-            # Create (if needed) $dir_to_install_fb/UDF and extract 'sleep-UDF' there
-            #########################################################################
-            check_for_sleep_UDF $dir_to_install_fb $fb_cfg_for_work $tmp $log
-
-            #######################################
-            # Replace firebird.conf with custom one
-            #######################################
-            cp --force --preserve $fb_cfg_for_work $dir_to_install_fb/firebird.conf
-            chown -R firebird $dir_to_install_fb
-            set +x
-            systemctl restart xinetd.service
-            systemctl status xinetd.service 1>$tmp 2>&1
-            cat $tmp
-            cat $tmp>>$log
-        fi
+            fi
+        done < <(cat $svc_load_script)
+    
+	# replace script for launch FB daemon, run systemctl commands:
+	launch_fb_daemon $update_fb_instance $svc_updated_txt $svc_load_script  $log $tmp $err
 
         if [[ -f $debug_package_tar_gz ]]; then
             #######################################################
@@ -1454,6 +1693,8 @@ if [[ $update_fb_instance -eq 1 ]]; then
             set bail on;
             create database 'localhost:/var/tmp/tmp4test.fdb' user '${usr}' password '${pwd}';
             select mon\$database_name, mon\$page_buffers,mon\$creation_date from mon\$database;
+            select * from mon\$attachments;
+            commit;
             create global temporary table gtt_test_firebird_tmp(s varchar(36) unique using index gtt_test_uniq_s);
             commit;
             set count on;
@@ -1541,16 +1782,9 @@ if [[ $update_fb_instance -eq 1 ]]; then
 	    drop database;
 	EOF
     $fbc/isql -q -z -i $sql 1>$tmp 2>$err
-    rm -f $sql
-    cat $tmp
-    cat $tmp>>$log
-    if [[ -s $err ]]; then
-        cat $err
-        cat $err >>$log
-        sho "ACHTUNG. Check failed. Job terminated." $log
-        exit
-    fi
-    rm -f $tmp $err
+    bulksho $tmp $log
+    catch_err $log $err
+    rm -f $tmp $err $sql
 
 else # update_fb_instance = 0 - do NOT update FB, just run test; e.g. change FB arch from SS to CS, etc.
 
@@ -1568,13 +1802,13 @@ else # update_fb_instance = 0 - do NOT update FB, just run test; e.g. change FB 
     #######################################
     cp --force --preserve $fb_cfg_for_work $dir_to_install_fb/firebird.conf
     chown -R firebird $dir_to_install_fb
-    if [[ "$fb" != "25" ]]; then
-        # get parent dir for  '/opt/fb30/bin' or '/opt/fb40/bin' --> '/opt/fb30'; '/opt/fb40'
-        if [[ "$fb" = "30" ]]; then
-            fb_service_script_suffix="-superserver"
-        fi
-        service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _)${fb_service_script_suffix}.service
-        if [ ! -f "${svc_script_startup_dir}/${service_name}" ]; then
+
+    # get parent dir for  '/opt/fb30/bin' or '/opt/fb40/bin' --> '/opt/fb30'; '/opt/fb40'
+    if [[ "$fb" == "30" ]]; then
+        fb_service_script_suffix="-superserver"
+    fi
+    service_name=firebird.$(echo "${dir_to_install_fb:1}" | tr / _)${fb_service_script_suffix}.service
+    if [ ! -f "${svc_script_startup_dir}/${service_name}" ]; then
             sho "Script for launching service: '${service_name}' - not found in the folder ${svc_script_startup_dir}." $log
             sho "Trying to find actual name by grep..." $log
             # svc_script_startup_dir
@@ -1588,112 +1822,99 @@ else # update_fb_instance = 0 - do NOT update FB, just run test; e.g. change FB 
             cat $tmp>>$log
             service_name=$(basename $(cat $tmp | cut -d':' -f1))
             sho "Actual script name for starting selected FB instance: >>>${service_name}<<<" $log
-        fi
+    fi
 
-        # 26.09.2020: adjust script that starts service *EVERY* time before launch test, even if FB is not updated.
-        # This is needed because we can build FB from sources and in this case script for start daemon will be overwritten by make.
-        svc_load_script=${svc_script_startup_dir}/${service_name}
-        svc_updated_txt=$tmpdir/$service_name
-        rm -f $svc_updated_txt
-        while read line; do
-            if [[ $line == *"$this_script_full_name"* ]]; then
-               continue
-            elif [[ $line == *"LimitNOFILE"* ]]; then
-               if [[ $line =~ ^#.* ]]; then
-                   continue
-               else
-                   echo "#commented by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S'): $line" >>$svc_updated_txt
-               fi
-            elif [[ $line == *"LimitCORE"* ]]; then
-               if [[ $line =~ ^#.* ]]; then
-                   continue
-               else
-                   echo "#commented by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S'): $line" >>$svc_updated_txt
-               fi
+    # 26.09.2020: adjust script that starts service *EVERY* time before launch test, even if FB is not updated.
+    # This is needed because we can build FB from sources and in this case script for start daemon will be overwritten by make.
+    svc_load_script=${svc_script_startup_dir}/${service_name}
+    svc_updated_txt=$tmpdir/$service_name
+    rm -f $svc_updated_txt
+    while read line; do
+        if [[ $line == *"$this_script_full_name"* ]]; then
+           continue
+        elif [[ $line == *"LimitNOFILE"* ]]; then
+            if [[ $line =~ ^#.* ]]; then
+                continue
             else
-                echo $line>>$svc_updated_txt
+                echo "#commented by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S'): $line" >>$svc_updated_txt
             fi
-            if [[ "$line" = "[Service]" ]]; then
+        elif [[ $line == *"LimitCORE"* ]]; then
+            if [[ $line =~ ^#.* ]]; then
+                continue
+            else
+                echo "#commented by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S'): $line" >>$svc_updated_txt
+            fi
+        else
+            echo $line>>$svc_updated_txt
+        fi
+        if [[ "$line" = "[Service]" ]]; then
 		cat <<- EOF >>$svc_updated_txt
 			# Added by $this_script_full_name $(date +'%d.%m.%Y %H:%M:%S')
 			LimitNOFILE=10000
 			LimitCORE=infinity
 		EOF
-            fi
-        done < <(cat $svc_load_script)
-        cp --force --preserve $svc_updated_txt $svc_load_script
-        rm -f $svc_updated_txt
-        set -x
-        systemctl daemon-reload
-        systemctl restart $service_name
-        set +x
-        systemctl status $service_name 1>$tmp 2>&1
-        cat $tmp
-        cat $tmp>>$log
-    fi
-
-    if [[ "$fb" = "25" && $preferred_fb_mode = "cs" ]]; then
-        sho "Check whether process xinetd is running: obtaining its PID using pgrep xinetd" $log
-        pgrep xinetd 1>$tmp 2>&1
-        retcode=$?
-        cat $tmp
-        cat $tmp>>$log
-        if [[ $retcode -ne 0 ]]; then
-            sho "Process xinetd is NOT running. Job terminated." $log
-            exit
-        else
-            systemctl restart xinetd.service
-            systemctl status $service_name 1>$tmp 2>&1
-            cat $tmp
-            cat $tmp>>$log
         fi
-    else
-        # check whether port $port is listening by some of following processes:
-        # firebird | fb_smp_server | fb_inet_server
-        # - and, if yes, that this process was launched from $fbc folder.
-        check_port $port $fbc $tmp $log
+    done < <(cat $svc_load_script)
 
-        # Return here means that all OK.
-        sho "Attempt to get FB server version." $log
-        $fbc/fbsvcmgr localhost/$port:service_mgr user ${usr} password ${pwd} info_server_version 1>$tmp 2>&1
-        retcode=$?
-        cat $tmp
-        cat $tmp>>$log
-        if [[ $retcode -ne 0 ]]; then
+    # replace script for launch FB daemon, run systemctl commands:
+    launch_fb_daemon $update_fb_instance $svc_updated_txt $svc_load_script  $log $tmp $err
+
+
+    # check whether port $port is listening by some of following processes:
+    # firebird | fb_smp_server | fb_inet_server
+    # - and, if yes, that this process was launched from $fbc folder.
+    check_port $port $fbc $tmp $log
+
+    # Return here means that all OK.
+    sho "Attempt to get FB server version." $log
+    $fbc/fbsvcmgr localhost/$port:service_mgr user ${usr} password ${pwd} info_server_version 1>$tmp 2>&1
+    retcode=$?
+    bulksho $tmp $log
+    if [[ $retcode -ne 0 ]]; then
             sho "Could not get FB server version. Job terminated." $log
             exit
-        fi
-        sho "Firebird is running. We are ready to launch OLTP-EMUL test." $log
     fi
+    sho "Firebird is running. We are ready to launch OLTP-EMUL test." $log
     
 fi # update_fb_instance = 1 or 0
 
 rm -f $fb_cfg_for_work $tmp $sql
 
+if [[ $update_fb_instance -eq 1 ]]; then
+    # Check that etalon_dbnm is really FB database. If yes - get its read_only and shutdown state:
+    get_etalon_state "${fbc}" "${etalon_dbnm}" etalon_readonly etalon_shutdown
+fi
+
 sho "Perform copying $etalon_dbnm to $dbnm. Please WAIT." $log
-
-
 cp --force --preserve $etalon_dbnm $dbnm
 if [[ $? -ne 0 ]]; then
     sho "Could not make copy of etalon database. You have to check access rights or disk space! Job terminated." $log
     exit
 fi
-sho "Completed." $log
+
+sho "Change owner of $dbnm to 'firebird'." $log
+chown firebird $dbnm
+if [[ $? -ne 0 ]]; then
+    sho "Could not change owner! Job terminated." $log
+    exit
+fi
+stat $dbnm >$tmp
+
+sho "Completed. Check attributes of ${dbnm}:" $log
+bulksho $tmp $log
 
 if [[ $etalon_shutdown -eq 1 ]]; then
     sho "Change state of target database from shutdown to normal." $log
     $fbc/gfix -online $dbnm 1>$tmp 2>&1
     retcode=$?
-    cat $tmp
-    cat $tmp>>$log
+    bulksho $tmp $log
     if [[ $retcode -ne 0 ]]; then
         sho "Could not change DB state to normal. Job terminated." $log
         exit
     else
         sho "Check attributes after change DB state:" $log
         $fbc/gstat -h $dbnm | grep -i attributes 1>$tmp 2>&1
-        cat $tmp
-        cat $tmp>>$log
+	bulksho $tmp $log 1
         if grep -q -i "attributes[[:space:]].*shutdown" $tmp; then
             sho "DB is still in shutdown state! Job terminated." $log
             exit
@@ -1707,16 +1928,14 @@ if [[ $etalon_readonly -eq 1 ]]; then
     sho "Change mode of target database from read_only to read_write." $log
     $fbc/gfix -mode read_write localhost/$port:$dbnm 1>$tmp 2>&1
     retcode=$?
-    cat $tmp
-    cat $tmp>>$log
+    bulksho $tmp $log
     if [[ $retcode -ne 0 ]]; then
         sho "Could not change DB mode to read_write. Job terminated." $log
         exit
     else
         sho "Check attributes after change DB mode:" $log
         $fbc/gstat -h $dbnm | grep -i attributes 1>$tmp 2>&1
-        cat $tmp
-        cat $tmp>>$log
+	bulksho $tmp $log 1
         if grep -q -i "attributes[[:space:]].*read only" $tmp; then
             sho "DB is still in read only mode! Job terminated." $log
             exit
@@ -1735,8 +1954,8 @@ fi
 if [[ -n "${create_with_fw}" ]]; then
     sho "Change FORCED WRITES for target DB, using parameter 'create_with_fw' = $create_with_fw." $log
     $fbc/gfix -w $create_with_fw localhost/$port:$dbnm 1>$tmp 2>&1
-    cat $tmp
-    cat $tmp>>$log
+    retcode=$?
+    bulksho $tmp $log
     if [[ $retcode -ne 0 ]]; then
         sho "Could not change FW attribute. Job terminated." $log
         exit
@@ -1745,15 +1964,14 @@ fi
 if [[ -n "${create_with_sweep}" ]]; then
     sho "Change SWEEP INTERVAL for target DB, using parameter 'create_with_sweep' = $create_with_sweep." $log
     $fbc/gfix -h $create_with_sweep localhost/$port:$dbnm 1>$tmp 2>&1
-    cat $tmp
-    cat $tmp>>$log
+    retcode=$?
+    bulksho $tmp $log
     if [[ $retcode -ne 0 ]]; then
         sho "Could not change sweep interval. Job terminated." $log
         exit
     fi
 fi
 rm -f $tmp
-
 
 if [[ $BACKUP_LOCK -eq 1 ]]; then
     sho "Config parameter 'BACKUP_LOCK' is 1." $log
@@ -1763,18 +1981,18 @@ if [[ $BACKUP_LOCK -eq 1 ]]; then
         sho "Could not drop file $dbnm.delta. Job terminated." $log
         exit
     fi
+
     $fbc/nbackup -L $dbnm 1>>$tmp 2>&1
     retcode=$?
-    cat $tmp
-    cat $tmp>>$log
+    bulksho $tmp $log
     if [[ $retcode -ne 0 ]]; then
         sho "Could not change DB mode to backup-lock. Job terminated." $log
         exit
     else
         sho "Check attributes after change DB mode to backup-lock:" $log
         $fbc/gstat -h $dbnm | grep -i attributes 1>$tmp 2>&1
-        cat $tmp
-        cat $tmp>>$log
+	retcode=$?
+        bulksho $tmp $log 1
         if grep -q -v -i "attributes[[:space:]].*backup lock" $tmp; then
             sho "DB state could not be changed to backup-lock. Job terminated." $log
             exit
@@ -1798,7 +2016,6 @@ unset ISC_PASSWORD
 
 sho "Clean file system cache..." $log
 
-
 free -m >>$tmp
 sync
 echo 3 > /proc/sys/vm/drop_caches
@@ -1813,6 +2030,6 @@ cd $OLTP_SRC_DIR
 sho "#################################################" $log
 sho "### ::: L a u n c h ::: O L T P - E M U L ::: ###" $log
 sho "#################################################" $log
-sho "Current dir: $PWD" $log
+sho "Current dir: ${PWD}, launch: ./1run_oltp_emul.sh $fb $winq" $log
 
 bash ./1run_oltp_emul.sh $fb $winq
