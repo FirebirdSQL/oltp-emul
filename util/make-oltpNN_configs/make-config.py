@@ -7,7 +7,7 @@ whoami = os.path.realpath(sys.argv[0])
 
 for os_name in ('win', 'nix'):
 
-    for fb in ('25', '30', '40', '50'):
+    for fb in ('25', '30', '40', '50', '60'):
 
         os_suffix = '_'+os_name
 

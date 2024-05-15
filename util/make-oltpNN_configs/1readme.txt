@@ -1,6 +1,6 @@
 This directory contains auxiliary Python script for generating OLTP-EMUL config files.
 All generated files with have names like: 'oltp<NN>_config.win.tmp' and 'oltp<NN>_config.nix.tmp',
-where <NN> is 25, 30 and 40.
+where <NN> is 25, 30, 40, 50 and 60.
 
 If you put here your actual config file then corresponding .tmp will create your actual values,
 but comments will be overwritten. Original config file will be untouched.

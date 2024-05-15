@@ -39,10 +39,9 @@ In case of any questions feel free to contact: p519446@yandex.ru
    !------------------!------------------------!---------------------------!
    !       2.5        !        Windows         ! oltp25_config.win.default !
    !       2.5        !        Linux           ! oltp25_config.nix.default !
-   !       3.0        !        Windows         ! oltp30_config.win.default !
-   !       3.0        !        Linux           ! oltp30_config.nix.default !
-   !       4.0        !        Windows         ! oltp40_config.win.default !
-   !       4.0        !        Linux           ! oltp40_config.nix.default !
+   !       N.x        !        Windows         ! oltpN0_config.win.default !
+   !       N.x        !        Linux           ! oltpN0_config.nix.default !
+   ! (where N = major version prefix: 3, 4, etc)                           !
    -------------------------------------------------------------------------
 
 3. Make copy of this file so that its extension will be without ".default", e.g.:
@@ -85,8 +84,8 @@ In case of any questions feel free to contact: p519446@yandex.ru
       Extract these UDFs:
         7zip -x -tzip .\util\udf64\SleepUDF.dll.zip 
         bzip2 -dk ./util/udf64/SleepUDF.so.bz2
-      - and put .dll /.so into UDF subfolder from your Firebird home directory.
-     
+       Put extracted .dll /.so into UDF subfolder of Firebird home.
+
    * 'wait_for_copy' - should test scenario make pause after test database will be filled-up with required number
      of documents. Value = 1 will save your time if you plan to launch test again later: make a copy of database
      that will be created and restore from it on 2nd, 3rd etc launches.
@@ -112,7 +111,7 @@ In case of any questions feel free to contact: p519446@yandex.ru
 5. It is highly recommended to increase values of following parameters in firebird.conf:
 
    * DefaultDBCachePages
-   * LockHashSlots and 
+   * LockHashSlots and
    * LockMemSize
 
    It is needed to EXPLICITLY SPECIFY parameter FileSystemCacheThreshold so that it will be greater than DefaultDBCachePages.

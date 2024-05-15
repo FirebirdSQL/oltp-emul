@@ -1068,7 +1068,7 @@ chk_FSCacheUsage() {
            check_fs_via_sql=1
        fi
     fi
-    
+
     if [[ $check_fs_via_sql -eq 0 ]]; then
         if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
             # This if FB 2.5 or 3.0: we have to check FileSystemCache
@@ -3022,11 +3022,16 @@ launch_preparing() {
   sho "sleep_min=$sleep_min, sleep_max=$sleep_max, sleep_udf=$sleep_udf, sleep_mul=$sleep_mul" $log4all
   
   if [[ ! -z "${sleep_udf}" && -z $sleep_mul ]]; then
-      sho "Input argument 'sleep_mul' is UNDEFINED." $log4all
-      sho "It must be defined in a caller because parameter 'sleep_udf' not empty: $sleep_udf" $log4all
-      exit 1
- fi
-  
+      if [[ $sleep_max -eq 0 ]]; then
+          sho "Value of argument 'sleep_mul' is set to 1 because sleep_max=0." $log4all
+          sleep_mul=1
+      else
+          sho "Input argument 'sleep_mul' is UNDEFINED." $log4all
+          sho "It must be defined in a caller because parameter sleep_udf='$sleep_udf' and sleep_max=$sleep_max" $log4all
+          exit 1
+      fi
+  fi
+
   # Make comparison of TIMESTAMPS: this batch vs $tmpsql.
   # If this batch is OLDER that $tmpsql than we can SKIP recreating $tmpsql
   local skipGenSQL=0
@@ -3245,7 +3250,7 @@ chk_conn_pool_support() {
     local tmpsql=$tmpdir/$prf.sql
     local tmpclg=$tmpdir/$prf.log
     local tmperr=$tmpdir/$prf.err
-    
+
 	cat <<-EOF >$tmpsql
     	    -- DO NOT BECAUSE WE HAVE TO DROP THIS DB AFTER! -- echo set bail on;
     	    create database '$host/$port:$rndname' user '$usr' password '$pwd';
@@ -3276,10 +3281,16 @@ chk_conn_pool_support() {
     run_isql="$isql_name -q -i $tmpsql"
 
     $run_isql 1>$tmpclg 2>$tmperr
-    
+
     if grep -q -i "SQLSTATE = 08001" $tmperr && grep -q -i "I/O error" $tmperr ; then
-        sho "Failed to create temporary database. Check access rights for '$tmpdir'" $log4all
-        sho "Perhaps you may need to run: chown firebird $tmpdir ?" $log4all
+cat <<-EOF >>$tmperr
+	-----------------------------------
+	Failed to create temporary database in '${dbnm%/*}'
+	Ensure that this directory exists.
+	Probably you may need to run:
+	chgrp firebird ${dbnm%/*}
+	chmod g+rw -R ${dbnm%/*}
+EOF
         cat $tmperr
         cat $tmperr>>$log4all
         rm -f $tmpsql $tmperr $tmpclg
@@ -3355,9 +3366,7 @@ chk_conn_pool_support() {
     fi
 
     rm -f $tmpsql $tmpclg $tmperr
-        
     sho "Routine $FUNCNAME: finish." $log4all
-
 }
 # end of chk_conn_pool_support
 
@@ -3888,6 +3897,7 @@ do
 	break
     fi
 done < <(cat $log4tmp)
+rm -f $log4tmp
 
 if [[ $unavail_db -eq 1 ]]; then
 	cat<<-EOF > $log4tmp

@@ -1,4 +1,4 @@
-Test for emulating OLTP workload on Firebird DBMS. Currently supported FB versions: 2.5, 3.0 and 4.0.
+Test for emulating OLTP workload on Firebird DBMS. Supports all FB versions since 2.5.
 
 The model of test is based on real business processes of a car-service enterprise:
 1. A customer does order (wants we supply him some set of parts); we also can make order for our purposes;
