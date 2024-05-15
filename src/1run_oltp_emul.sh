@@ -32,7 +32,22 @@ bulksho() {
 }
 
 #----------------------------------------------------------
-							    
+
+dsqlcache_caution() {
+	local tmp=$1
+	local log4all=$2
+	cat <<- EOF >>$tmp
+	#################################################
+	Unable to DROP table after changing its metadata.
+	Check content of firebird.conf or databases.conf:
+	parameter 'DSQLCacheSize' must be 0.
+	#################################################
+	EOF
+	bulksho $tmp $log4all
+}
+
+#----------------------------------------------------------
+
 display_intention() {
     local msg=$1
     local run_cmd=$2
@@ -523,6 +538,7 @@ chk_db_access()
   local tmperr=$tmpdir/$FUNCNAME.err
   local tmpsql=$tmpdir/$FUNCNAME.sql
   local tmpclg=$tmpdir/$FUNCNAME.log
+  local tmptmp=$tmpdir/$FUNCNAME.tmp
 
 	cat <<-EOF >$tmpsql
 		-- We check here that Firebird account has enough rights to WRITE into GTT files.
@@ -603,6 +619,9 @@ chk_db_access()
 		echo Content of STDERR file '$tmperr':
 		grep . $tmperr
 		echo
+		if grep -q -i "object .* in use" $tmperr; then
+			dsqlcache_caution $tmptmp $log4all
+		fi
 		pause Press any key to FINISH this script. . .
 		exit 1
 	else
@@ -967,6 +986,9 @@ EOF
     run_isql="$isql_name $dbconn $dbauth -nod -i $bld"
     display_intention "Build database: final phase." "$run_isql" "$log" "$err"
     $run_isql 1>>$log 2>$err
+    if grep -q -i "object .* in use" $err; then
+	dsqlcache_caution $tmp $log4all
+    fi
     catch_err $err "Could not build DB (script: $bld). Try to ERASE file '$dbnm' and repeat."
 
     sho "Creation of database objects COMPLETED." $log4all
