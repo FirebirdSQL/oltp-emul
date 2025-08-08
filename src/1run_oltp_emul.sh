@@ -109,30 +109,41 @@ msg_nocfg() {
 #----------------------------------------------------------
 
 catch_err() {
-  local tmperr=$1
-  local addnfo=${2:-""}
-  local quit_if_error=${3:-1}
-  if [ -s $tmperr ];then
-    echo
-    sho "Error log $tmperr is NOT EMPTY." $log4all
-    echo ...............................
-    cat $tmperr | sed -e 's/^/    /'
-    cat $tmperr | sed -e 's/^/    /' >>$log4all
-    echo ...............................
-    if [ ! -z "$addnfo" ]; then
-        echo
-        echo Additional info / advice:
-        echo $addnfo
-        echo $addnfo >>$log4all
-        echo
-    fi
+  local retcode=$1
+  local log4all=$2
+  local tmperr=$3
+  local addnfo=${4:-""}
+  local quit_if_error=${5:-1}
+  if [[ $retcode -eq 0 ]]; then
+      if [[ -s $tmperr ]]; then
+          echo
+          sho "Error log $tmperr is NOT EMPTY." $log4all
+          echo ...............................
+          cat $tmperr | sed -e 's/^/    /'
+          cat $tmperr | sed -e 's/^/    /' >>$log4all
+          echo ...............................
+          if [[ ! -z "$addnfo" ]]; then
+              echo
+              echo Additional info / advice:
+              echo $addnfo
+              echo $addnfo >>$log4all
+              echo
+          fi
 
-    if [ $quit_if_error -eq 1 ]; then
-        sho "Script is terminated." $log4all
-        exit 1
-    fi
+          if [[ $quit_if_error -eq 1 ]]; then
+              sho "Script is terminated." $log4all
+              exit 1
+          fi
+      else
+          sho "Result: SUCCESS." $log4all
+          rm -f $tmperr
+      fi
   else
-	sho "Result: SUCCESS." $log4all
+      sho "Retcode=$retcode. Check $tmperr:" $log4all
+      cat $tmperr | sed -e 's/^/    /'
+      cat $tmperr | sed -e 's/^/    /' >>$log4all
+      sho "Job terminated."  $log4all
+      exit 1
   fi
 }
 
@@ -147,7 +158,7 @@ msg_novar() {
   local this_script_name_only=$(basename $this_script_full_name)
   this_script_name_only=${this_script_name_only%.*}
   local this_script_abend_txt=$this_script_directory/$this_script_name_only.abend.err
-	cat <<-EOF >$this_script_abend_txt
+cat <<-EOF >$this_script_abend_txt
 
 	##########################################################
 	At least one variable: >>>$undef_var<<< - was NOT defined.
@@ -155,7 +166,7 @@ msg_novar() {
 	##########################################################
 
 	Script $this_script_full_name is now terminated.
-	EOF
+EOF
   cat $this_script_abend_txt
   if [[ -n ${log4all} ]]; then
       cat $this_script_abend_txt >>$log4all
@@ -166,7 +177,7 @@ msg_novar() {
 #----------------------------------------------------------
 
 msg_nofile() {
-	cat <<-EOF >$tmplog
+cat <<-EOF >$tmplog
 
 	############################################################################
 	At least one of Firebird command line utilities NOT FOUND in the folder
@@ -178,7 +189,7 @@ msg_nofile() {
 	############################################################################
 
 	Script terminated.
-	EOF
+EOF
   cat $tmplog
   cat $tmplog>>$log4all
   rm -f $tmplog $tmperr
@@ -245,6 +256,84 @@ msg_no_build_result() {
 
 #----------------------------------------------------------
 
+chk_rebuild_qdqs_ddl() {
+
+    local log4all=$1
+    local __rebuild_qdqs=$2 # output arg
+    local match_ok, array
+    local tmpsql=$tmpdir/tmp.$FUNCNAME.sql
+    local tmplog=$tmpdir/tmp.$FUNCNAME.log
+    local tmperr=$tmpdir/tmp.$FUNCNAME.err
+
+    sho "Routine $FUNCNAME: start." $log4all
+    # Although DB can be avliable and has flag that all DB objects exist, we have to check correspondense
+    # between values from config and those that are in settings table for some critical parameters, namely:
+    # create_with_split_heavy_tabs, create_with_separate_qdistr_idx and create_with_compound_columns_order.
+    # If some of them differs then we have to rebuild all DB objects (31.07.2025).
+
+cat <<-"EOF" >$tmpsql
+	set list on;
+	set bail on;
+	set term ^;
+	execute block returns(create_with_split_heavy_tabs smallint, create_with_separate_qdistr_idx smallint, create_with_compound_columns_order varchar(80)) as
+	begin
+	    select
+	         max(iif(s.mcode = upper('CREATE_WITH_SPLIT_HEAVY_TABS'), s.svalue, null)) as create_with_split_heavy_tabs
+	        ,max(iif(s.mcode = upper('CREATE_WITH_SEPARATE_QDISTR_IDX'), s.svalue, null)) as create_with_separate_qdistr_idx
+	        ,max(iif(s.mcode = upper('CREATE_WITH_COMPOUND_COLUMNS_ORDER'), s.svalue, null)) as create_with_compound_columns_order
+	    from rdb$database r
+	    left join settings s on
+	    s.mcode in (
+	        upper('CREATE_WITH_SPLIT_HEAVY_TABS')
+	       ,upper('CREATE_WITH_SEPARATE_QDISTR_IDX')
+	       ,upper('CREATE_WITH_COMPOUND_COLUMNS_ORDER')
+	    )
+	    into
+	        create_with_split_heavy_tabs, create_with_separate_qdistr_idx, create_with_compound_columns_order
+	    ;
+	    if (create_with_split_heavy_tabs is null) then
+	        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_SPLIT_HEAVY_TABS');
+	    if (create_with_separate_qdistr_idx is null) then
+	        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_SEPARATE_QDISTR_IDX');
+	    if (create_with_compound_columns_order is null) then
+	        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_COMPOUND_COLUMNS_ORDER');
+	    suspend;
+	end
+	^
+	set term ;^
+EOF
+
+    run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpsql"
+    display_intention "Check need to recreated heavy loaded tables." "$run_isql" "$tmplog" "$tmperr"
+    $run_isql 1>$tmplog 2>$tmperr
+    catch_err $? $log4all $tmperr "At least one record not found in the table SETTINGS."
+    match_ok=1
+    while read -r line; do
+        IFS=' ' read -r -a array <<< "$line"
+        db_param_name="${array[0]}"
+        db_param_value="${array[1]}"
+        cfg_param_name=$(echo "${db_param_name}" | tr '[:upper:]' '[:lower:]')
+        cfg_param_value=${!cfg_param_name}
+        #echo db_param_name=$db_param_name db_param_value=$db_param_value
+        #echo cfg_param_name=$cfg_param_name, cfg_param_value=$cfg_param_value
+        if [[ "${db_param_value}" == "${cfg_param_value}" ]]; then
+            sho "Parameter '$db_param_name' has same value in config and DB: ${db_param_value}" $log4all
+        else
+            sho "Parameter '$db_param_name' has DIFFERENT values in config and DB: cfg_param_value=${cfg_param_value}, db_param_value=${db_param_value}" $log4all
+            match_ok=0
+        fi
+    done  < <( grep . $tmplog )
+
+    # Returning value:
+    ##################
+    eval $__rebuild_qdqs="'$match_ok'"
+    rm -f $tmpsql $tmplog $tmperr
+    sho "Routine $FUNCNAME: finish, result: ${match_ok}" $log4all
+}
+# end of chk_rebuild_qdqs_ddl
+
+#----------------------------------------------------------
+
 chk4crash() {
     # Check for indications of FB crash in ERROR log of just completed ISQL.
     # Sample of use:
@@ -279,15 +368,24 @@ chk4crash() {
         exit 1
     fi
 
-    # 20.02.2019
-    # 42000 ==> -902    335544569 dsql_error     Dynamic SQL Error // token unkown et al
-    # 42S22 ==> -206    335544578 dsql_field_err Column unknown
-    # 42S02 ==> -204    335544580 Table unknown
-    # 39000 ==> function unknown: RDB // when forget to add backslash before rdb$get/rdb$set_context
-    syntax_pattern="SQLSTATE = 42000\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 39000"
+    # 07.08.2025
+    # XXXX DO NOT XXX 42000 ==> -902    335544569 dsql_error Dynamic SQL Error // token unkown et al
+    # 42000 ==> 335544842 : <Missing arg #1 - possibly status vector overflow> // when use_es = 1 or 2.
+    # See See: https://github.com/FirebirdSQL/firebird/issues/8692
+
+    # 1. 22003 ==> Numeric value out of range
+    # 2. 42S22 ==> -206  335544578   dsql_field_err  Column not found
+    # 3. 42S02 ==> -204  335544580   Table unknown
+    # 4. 22001 ==> arith overflow / string truncation
+    # 5. 39000 ==> function unknown: absent UDF or POSIX only: when forget to add backslash before rdb$get/rdb$set_context
+    # 6. 28000 ==> no permission for ... access to ... // 17.05.2020: OLTP_USER_nnnn via role WORKER instead of SYSDBA
+    # 7. 22018 ==> conversion error // 22.11.2020, when exec. sttm 'iif( <expr>, <val>, null)' - and null is not casted to datatype of <val>
+    # 8. 54001 ==> Too many concurrent executions of the same request // infinite recursive calls ?
+
+    syntax_pattern="SQLSTATE = 22003\|SQLSTATE = 42S22\|SQLSTATE = 42S02\|SQLSTATE = 22001\|SQLSTATE = 39000\|SQLSTATE = 28000\|SQLSTATE = 22018\|SQLSTATE = 54001\|Token unknown\|EX_FURTHER_WORK_FORBIDDEN\|EX_EMPTY_INPUT_STR"
     syntax_err_cnt=$(grep -i -c -e "$syntax_pattern" $tmperr)
     if [ $syntax_err_cnt -gt 0 ] ; then
-        sho "Syntax / copliler errors found occured $syntax_err_cnt times, pattern = $syntax_pattern." $log4all
+        sho "Syntax / compiler errors found occured $syntax_err_cnt times, pattern = $syntax_pattern." $log4all
         sho "Check details in $tmperr" $log4all
         sho "Script has been terminated." $log4all
         ###################################################
@@ -324,7 +422,7 @@ adjust_sweep_attrib()
 
     display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
     $run_fbs 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Check whether database exists, is online and has read_write access."
+    catch_err $? $log4all $tmperr "Check whether database exists, is online and has read_write access."
 
     sho "Check attributes line from DB header info:" $log4all
     run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
@@ -358,7 +456,7 @@ adjust_fw_attrib()
     msg="Changing FORCED WRITES attribute to '$required_fw'"
     display_intention "$msg" "$run_fbs" "$tmpclg" "$tmperr"
     $run_fbs 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Check whether database exists, is online and has read_write access."
+    catch_err $? $log4all $tmperr "Check whether database exists, is online and has read_write access."
 
     sho "Check attributes line from DB header info:" $log4all
     run_fbs="$fbspref action_db_stats dbname $dbnm sts_hdr_pages"
@@ -387,7 +485,7 @@ adjust_grants() {
     local run_isql 
     local fname="tmp_adjust_grants"
     local conn_as_locksmith
-    
+
     if [[ ${fb} -ne "25" ]]; then
 
         tmpsql=$tmpdir/sql/$fname.sql
@@ -417,7 +515,7 @@ adjust_grants() {
         run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpsql"
         display_intention "Run script for drop grants." "$run_isql" "$tmpclg" "$tmperr"
         $run_isql 1>$tmpclg 2>$tmperr
-        catch_err $tmperr "Could not drop grants."
+        catch_err $? $log4all $tmperr "Could not drop grants."
         if [[ $conn_as_locksmith -eq 1 ]]; then
 		sho "NOTE. All sessions will run as '$usr'" $log4all
         else
@@ -431,13 +529,20 @@ adjust_grants() {
                 sho "Create temporary ROLE '${mon_query_role}' and non-privileged USERS with mask '${mon_usr_prefix}' for querying  mon\$ tables." $log4all
                 display_intention "Step-1: generate temporary DDL." "$run_isql" "$tmpsql" "$tmperr"
                 $run_isql 1>$tmpsql 2>$tmperr
-                catch_err $tmperr "Could not generate SQL."
+                catch_err $? $log4all $tmperr "Could not generate SQL."
+
+                #################################################################################################
+                # remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+                #################################################################################################
+                sed 's/--TMP\$SQL\$CODE //g' $tmpsql | sed 's/[ \t]*$//' | cat -s 1>$tmpclg 2>$tmperr
+                catch_err $? $log4all $tmperr "Check line that was specified in error message."
+                mv $tmpclg $tmpsql
 
                 run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpsql"
                 display_intention "Step-2: update grants by applying generated DDL." "$run_isql" "$tmpclg" "$tmperr"
                 $run_isql 1>$tmpclg 2>$tmperr
-                catch_err $tmperr "Could not apply generated SQL."
-                
+                catch_err $? $log4all $tmperr "Could not apply generated SQL."
+
                 # Result: temp users with names like: 'TMP$OLTP$USER_nnnn' have been created.
 
             else
@@ -500,7 +605,7 @@ db_create() {
   run_isql="$isql_name -q -i $tmpsql"
   display_intention "Attempt to CREATE database for fb=$fb." "$run_isql" "$tmpclg" "$tmperr"
   $run_isql 1>$tmplog 2>$tmperr
-  catch_err $tmperr "Ensure that FB is running. Verify that parameter 'dbnm' is VALID: $dbnm"
+  catch_err $? $log4all $tmperr "Ensure that FB is running. Verify that parameter 'dbnm' is VALID: $dbnm"
 
   [[ $is_embed == 0 ]] && fbsrun=$host/$port:$dbnm || dbconn=$dbnm
   if [[ $is_embed == 0 ]]; then
@@ -758,6 +863,11 @@ EOF
 # conn_pool_support // 12.12.2020
 # resetting_support // 12.12.2020
 
+# create_with_debug_objects // 31.07.2025
+# create_with_split_heavy_tabs // 31.07.2025
+# create_with_separate_qdistr_idx // 31.07.2025
+# create_with_compound_columns_order // 31.07.2025
+
 inject_actual_setting $tmpsql $fb init working_mode upper\(\'$working_mode\'\)
 inject_actual_setting $tmpsql $fb common enable_mon_query \'$mon_unit_perf\'
 inject_actual_setting $tmpsql $fb common unit_selection_method \'$unit_selection_method\'
@@ -831,6 +941,12 @@ inject_actual_setting $tmpsql $fb init tmp_worker_user_pswd \'$mon_usr_passwd\' 
 # This will be used further for generating proper code of DB-level triggers:
 inject_actual_setting $tmpsql $fb init conn_pool_support \'$conn_pool_support\' 1
 inject_actual_setting $tmpsql $fb init resetting_support \'$resetting_support\' 1
+
+# Added 08.08.2025
+inject_actual_setting $tmpsql $fb common create_with_debug_objects \'$create_with_debug_objects\' 1
+inject_actual_setting $tmpsql $fb common create_with_split_heavy_tabs \'$create_with_split_heavy_tabs\' 1
+inject_actual_setting $tmpsql $fb common create_with_separate_qdistr_idx \'$create_with_separate_qdistr_idx\' 1
+inject_actual_setting $tmpsql $fb common create_with_compound_columns_order \'$create_with_compound_columns_order\' 1
 
 cat <<- EOF >>$tmpsql
     end
@@ -907,7 +1023,7 @@ EOF
     rm -f $log
     display_intention "Build database: initial phase." "$run_isql" "$log" "$err"
     $run_isql 1>>$log 2>$err
-    catch_err $err "Check SQL script at line that was specified in error message."
+    catch_err $? $log4all $err "Check SQL script at line that was specified in error message."
     rm -f $bld
 
 
@@ -926,15 +1042,19 @@ EOF
     echo Command: $run_isql
 
     $run_isql 1>>$log 2>$err
-    catch_err $err "Check line that was specified in error message."
-
+    catch_err $? $log4all $err "Check line that was specified in error message."
+    rm -f $bld
 
     local post_handling_out=$tmpdir/oltp_split_heavy_tabs_$(($create_with_split_heavy_tabs))_$vers_family.tmp
     # /var/tmp/oltp-emul/oltp_split_heavy_tabs_1_30.tmp
     rm -f $post_handling_out
-    echo
     sho "Generate SQL script for change DDL according to current value of 'create_with_split_heavy_tabs' parameter." $log4all
-    cat <<- EOF >>$bld
+
+    # 31.07.2025: every line in generated .sql will start with '--TMP$SQL$CODE' (without quotes) because
+    # empty names are prohibited in FB 6.x
+    # We have to remove this prefix further (before applying generted sql)
+
+cat <<- EOF >>$bld
 		set echo off;
 
 		-- 05.11.2022, strange message on LINUX ony, 3.x and 4.x:
@@ -957,7 +1077,22 @@ EOF
 		-- to the new temp file which will be applied on the next step.
 		-- Close current output:
 		out;
+EOF
 
+    $run_isql 1>>$log 2>$err
+    catch_err $? $log4all $err "Check line that was specified in error message."
+
+    sho "Process each line of $post_handling_out and remove prefix '--TMP$SQL$CODE'" $log4all
+
+    #################################################################################################
+    # remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+    #################################################################################################
+    sed 's/--TMP\$SQL\$CODE //g' $post_handling_out | sed 's/[ \t]*$//' | cat -s 1>$log 2>$err
+    catch_err $? $log4all $err "Check line that was specified in error message."
+    mv $log $post_handling_out
+
+
+cat <<- EOF >$bld
 		-- Aplying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=$create_with_split_heavy_tabs':
 		in $post_handling_out;
 
@@ -965,7 +1100,7 @@ EOF
 		in "$shdir/oltp_data_filling.sql";
 EOF
     if [ -n "$use_external_to_stop" ]; then
-	cat <<- EOF >>$bld
+cat <<- EOF >>$bld
 		-- External table for quick force running attaches to stop themselves by OUTSIDE command.
 		-- When all ISQL attachments need to be stopped before warm_time+test_time expired, this
 		-- external table (TEXT file) should be opened in editor and single ascii-character
@@ -989,7 +1124,7 @@ EOF
     if grep -q -i "object .* in use" $err; then
 	dsqlcache_caution $tmp $log4all
     fi
-    catch_err $err "Could not build DB (script: $bld). Try to ERASE file '$dbnm' and repeat."
+    catch_err $? $log4all $err "Could not build DB (script: $bld). Try to ERASE file '$dbnm' and repeat."
 
     sho "Creation of database objects COMPLETED." $log4all
 
@@ -1024,27 +1159,8 @@ chk_FSCacheUsage() {
     local run_isql
     local fb_home_dir
 
-    # Get current OS family. Outcome examples: #ID="centos" ; #ID="ubuntu" ;     #ID="debian"
+    # Get current OS family. Outcome examples: #ID="centos" ; #ID="ubuntu" ; #ID="debian"
     local os_family=$(cat /etc/*release* | grep -m1 -i "^id=")
-    
-    if [[ -n "${clu}" && ( $os_family == *"ubuntu"* || $os_family == *"debian"* ) ]]; then
-        if [[ "$fb_major" == "25" ]]; then
-            fb_home_dir=/etc/firebird/2.5
-        elif [[ "$fb_major" == "30" ]]; then
-            fb_home_dir=/etc/firebird/3.0
-        elif [[ "$fb_major" == "40" ]]; then
-            fb_home_dir=/etc/firebird/4.0
-        else
-            fb_home_dir=UNKNOWN_FB_HOME_DIR
-        fi
-    else
-        fb_home_dir="$(dirname "$fbc")"
-    fi
-    sho "Detected OS family: $os_family. Expected directory with firebird.conf: $fb_home_dir" $log4all
-    if [[ ! -s "$fb_home_dir/firebird.conf" ]]; then
-        sho "::: WARNING/ERROR ::: Could NOT find FB configuration file in $fb_home_dir" $log4all
-        sho "Values of 'DefaultDBCachePages' and 'FilySystemCacheThreshold' will not be defined properly." $log4all
-    fi
 
     # Introduce new virtual table RDB$CONFIG.
     # commit was 12.11.2020 23:34
@@ -1070,6 +1186,25 @@ chk_FSCacheUsage() {
     fi
 
     if [[ $check_fs_via_sql -eq 0 ]]; then
+        sho "Checked version/build does not allow to get config content from DB." $log4all
+        if [[ "${clu}" == "isql" ]] then
+            fb_home_dir="$(dirname "$fbc")"
+            sho "Value of 'clu' parameter exactly matches to default name of interactive SQL tool: 'isql'. Path to config is supposed to be: ${fb_home_dir}" $log4all
+        else
+            sho "Value of 'clu' parameter: ${clu} -- differs from default name of interactive SQL tool. Using heuristics to get path to firebird.conf" $log4all
+            if [[ -n "${clu}" && ( $os_family == *"ubuntu"* || $os_family == *"debian"* ) ]]; then
+                fb_home_dir=/etc/firebird/${fb_major:0:1}.${fb_major:1}
+            else
+                fb_home_dir=UNKNOWN_FB_HOME_DIR
+            fi
+        fi
+        sho "Detected OS family: $os_family. Expected directory with firebird.conf: $fb_home_dir" $log4all
+
+        if [[ ! -s "$fb_home_dir/firebird.conf" ]]; then
+            sho "::: WARNING/ERROR ::: Could NOT find FB configuration file in $fb_home_dir" $log4all
+            sho "Values of 'DefaultDBCachePages' and 'FilySystemCacheThreshold' may be defined not properly." $log4all
+        fi
+
         if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
             # This if FB 2.5 or 3.0: we have to check FileSystemCache
             awk '$1=$1' $fb_home_dir/firebird.conf | grep "^[^#]" | grep -i "FileSystemCacheThreshold" >$tmp_log
@@ -1106,7 +1241,7 @@ chk_FSCacheUsage() {
 	    # cat $tmp_sql >>$log4all
 	    $run_isql 1>$tmp_log 2>$tmp_err
 	    cat $tmp_err>>$log4all
-	    catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+	    catch_err $? $log4all $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
 
 	    fs_thresh=0
 	    db_pages=0
@@ -1144,7 +1279,8 @@ chk_FSCacheUsage() {
             
         fi # [ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]
     else
-        sho "Test is launched on FB major version that allows to obtain config parameters via SQL." $log4all
+
+        sho "Checked version/build allows to obtain config parameters via SQL." $log4all
 	cat <<-"EOF" >$tmp_sql
             set list on;
             select UseFileSystemCache
@@ -1179,7 +1315,7 @@ chk_FSCacheUsage() {
 	# cat $tmp_sql >>$log4all
 	$run_isql 1>$tmp_log 2>$tmp_err
 	cat $tmp_err>>$log4all
-	catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+	catch_err $? $log4all $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
 
 	use_fscache=0
 	fs_thresh=0
@@ -1251,7 +1387,7 @@ chk_FSCacheUsage() {
 	display_intention "Changed FB config parameters:" "$run_isql" "$tmp_log" "$tmp_err"
 	$run_isql 1>$tmp_log 2>$tmp_err
 	cat $tmp_err>>$log4all
-	catch_err $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
+	catch_err $? $log4all $tmp_err "Errors detected while running script $tmp_sql. Check STDOUT and STDERR logs."
 	cat $tmp_log
 	cat $tmp_log >> $log4all
 	
@@ -1322,7 +1458,7 @@ show_db_and_test_params() {
 
   # [[ $create_with_split_heavy_tabs == 0 ]] && inject_compound_ordr=",rdb\$get_context('USER_SESSION', 'BUILD_WITH_QD_COMPOUND_ORDR') build_with_qd_compound_ordr"
   # NB: use quoted "EOF" in heredoc clause in order to avoid specifying backslash leftside of any special characters, like $:
-  cat <<- EOF >$tmp_show_sql
+cat <<- EOF >$tmp_show_sql
 
          set heading off;
          select 'Intro script at ' || current_timestamp from rdb\$database;
@@ -1453,14 +1589,14 @@ show_db_and_test_params() {
 
          set heading off;
          set stat off;
-         select 'Workload level settings (see definitions in oltp_main_filling.sql):' as " " from rdb\$database;
+         select 'Workload level settings (see definitions in oltp_main_filling.sql):' as "--TMP$SQL$CODE" from rdb\$database;
          -- set stat on;
          set heading on;
          select * from z_settings_pivot;
 
          set heading off;
          set stat off;
-         select 'Main test settings:' as " " from rdb\$database;
+         select 'Main test settings:' as "--TMP$SQL$CODE" from rdb\$database;
          -- set stat on;
          set heading on;
          select z.setting_name, z.setting_value from z_current_test_settings z;
@@ -1471,13 +1607,13 @@ show_db_and_test_params() {
          -- normally query to view Z_QD_INDICES_DDL must be disabled.
          -- enable it for debug or benchmark purposes.
          -- set heading off;
-         -- select 'Index(es) for heavy-loaded table(s):' as " " from rdb\$database;
+         -- select 'Index(es) for heavy-loaded table(s):' as "--TMP$SQL$CODE" from rdb\$database;
          -- set heading on;
          -- select * from z_qd_indices_ddl;
 
          set heading off;
          set stat off;
-         select 'Table(s) WITHOUT primary and unique constrains:' as " " from rdb\$database;
+         select 'Table(s) WITHOUT primary and unique constrains:' as "--TMP$SQL$CODE" from rdb\$database;
          set stat off;
          set heading on;
          set count on;
@@ -1496,17 +1632,17 @@ show_db_and_test_params() {
          set count off;
          set heading off;
          set stat off;
-         select lpad('',32,'=') as " " from rdb\$database;
+         select lpad('',32,'=') as "--TMP$SQL$CODE" from rdb\$database;
          set heading on;
 
-	EOF
+EOF
 
   if [ $conn_pool_support -eq 1 ]; then
     # ::: NB ::: 05.11.2018
     # PSQL function sys_get_fb_arch uses ES/EDS which keeps infinitely connection in implementation for FB 2.5
     # If current implementation actually supports connection pool then we have to clear it, otherwise idle
     # connection will use metadata and we will not be able to drop existing PK from some tables.
-	cat <<- "EOF" >>$tmp_show_sql
+cat <<- "EOF" >>$tmp_show_sql
 	set bail on;
 	set count on;
 	set echo on;
@@ -1528,7 +1664,7 @@ show_db_and_test_params() {
 	set stat off;
 	set count off;
 	set bail off;
-	EOF
+EOF
   fi
 
 	 cat <<- EOF >>$tmp_show_sql
@@ -1549,14 +1685,14 @@ show_db_and_test_params() {
   sho "Return from ISQL to OS." $tmp_show_log
 
   cat $tmp_show_err>>$log4all
-  catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
+  catch_err $? $log4all $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
 
   # Display database and main test parameters + add them to main log:
   echo ...............................
   cat $tmp_show_log | sed -e 's/^/    /'
   echo ...............................
   cat $tmp_show_log | sed -e 's/^/    /'>>$log4all
-  catch_err $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
+  catch_err $? $log4all $tmp_show_err "Errors detected while running script $tmp_show_sql. Check STDOUT and STDERR logs."
 
   rm -f $tmp_show_sql $tmp_show_err $tmp_show_log $tmp_show_cfg
 
@@ -1621,7 +1757,7 @@ create_results_storage_fbk() {
       run_cmd="$fbc/gbak -se $host/$port:service_mgr -c -v -user ${usr} -pas ${pwd} $results_storage_fbk $tmpfdb"
       display_intention "Check ability to restore from results storage backup." "$run_cmd" "$tmplog" "$tmperr"
       eval "$run_cmd" 1>$tmplog 2>$tmperr
-      catch_err $tmperr "Could not restore from $results_storage_fbk. Make sure it was created in apropriate FB major version."
+      catch_err $? $log4all $tmperr "Could not restore from $results_storage_fbk. Make sure it was created in apropriate FB major version."
   else
 	rm -f $tmpfdb
 	if [[ -f $tmpfdb ]]; then
@@ -1641,18 +1777,18 @@ create_results_storage_fbk() {
     display_intention "Generating new storage DB for tests run results." "$run_cmd" "$tmplog" "$tmperr"
 
     eval "$run_cmd" 1>$tmplog 2>$tmperr
-    catch_err $tmperr "Could not create DB for storing results of tests."
+    catch_err $? $log4all $tmperr "Could not create DB for storing results of tests."
     run_cmd="$fbc/gfix -w async -user ${usr} -pas ${pwd} $host/$port:$tmpfdb"
     display_intention "Change FW of storage results to OFF." "$run_cmd" "$tmplog" "$tmperr"
     eval "$run_cmd" 1>$tmplog 2>$tmperr
-    catch_err $tmperr "Could not create DB for storing results of tests."
+    catch_err $? $log4all $tmperr "Could not create DB for storing results of tests."
 
     # NB: directory of $results_storage_fbk must be avaliable for 'firebird' system user
     # because we make backup using FB services:
     run_cmd="$fbc/gbak -se $host/$port:service_mgr -b -v -user ${usr} -pas ${pwd} $tmpfdb $results_storage_fbk"
     display_intention "Back up just created results storage." "$run_cmd" "$tmplog" "$tmperr"
     eval "$run_cmd" 1>$tmplog 2>$tmperr
-    catch_err $tmperr "Could not make backup of $tmpfdb. Perhaps access problems."
+    catch_err $? $log4all $tmperr "Could not make backup of $tmpfdb. Perhaps access problems."
   fi
 
 cat <<-EOF >$tmpsql
@@ -1667,7 +1803,7 @@ EOF
   run_cmd="$isql_name -q -i $tmpsql"
   echo $run_cmd
   eval "$run_cmd" 1>$tmplog 2>$tmperr
-  catch_err $tmperr "Could not drop temporsry database '$host/$port:$tmpfdb' that used to check ability to use results storage."
+  catch_err $? $log4all $tmperr "Could not drop temporsry database '$host/$port:$tmpfdb' that used to check ability to use results storage."
   rm -f $tmpsql $tmplog $tmperr
   sho "Routine $FUNCNAME: finish." $log4all
 
@@ -1855,27 +1991,25 @@ prepare_before_adding_init_data() {
   echo Command:
   echo $run_fbs
   $run_fbs 1>>$tmplog 2>>$tmperr
-  
-  # LI-T3.0.0.31394 Firebird 3.0 Beta 1
-  #[[ $fbb == *"Firebird 3"* ]] && echo alter database set linger to 15\;commit\;select rdb\$linger from rdb$database\; >>$tmpsql
+
+  echo "set list on;" >> $tmpsql
   if [[ ${fbb} != *"Firebird 2."* ]]; then
-     cat <<-"EOF" >>$tmpsql
-       alter database set linger to 15;
-       commit;
-       select rdb$linger from rdb$database;
-	EOF
+cat <<-"EOF" >>$tmpsql
+	alter database set linger to 15;
+	commit;
+	select rdb$linger from rdb$database;
+EOF
   fi
-  
-  cat <<- "EOF" >>$tmpsql
-    commit;
-    set transaction no wait;
-    alter sequence g_init_pop restart with 0;
-    commit;
-    show sequence g_init_pop;
-    set list on;
-    select iif(m.mon$forced_writes=1, 'ON', 'OFF') as forced_writes from mon$database m;
-    set list off;
-	EOF
+
+cat <<- "EOF" >>$tmpsql
+	commit;
+	set transaction no wait;
+	alter sequence g_init_pop restart with 0;
+	commit;
+	show sequence g_init_pop;
+	select iif(m.mon$forced_writes=1, 'ON', 'OFF') as forced_writes from mon$database m;
+	set list off;
+EOF
 
   echo Command that now to be run:
   echo $run_isql
@@ -2044,25 +2178,25 @@ if  [ "$mode" = "init_pop" ] ; then
 		cat <<- EOF >>$sql
 		set transaction read only read committed;
 		set term ^;
-		execute block returns( " " varchar(128) ) as
+		execute block returns( "--TMP_SQL_CODE" varchar(128) ) as
 		  declare v_lf char(1);
 		  declare taken_pause_in_seconds int;
 		  declare SECONDS_IN_MINUTE smallint = 60;
 		begin
 		    v_lf = ascii_char(10);
-		    " " = v_lf || cast('now' as timestamp);
+		    "--TMP_SQL_CODE" = v_lf || cast('now' as timestamp);
 		    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
 		        begin
 		            -- $mon_query_interval: see config parameter 'mon_query_interval'
 		            -- ($warm_time + $test_time) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
 		            taken_pause_in_seconds = minvalue( $mon_query_interval, maxvalue(1, $warm_time + $test_time) * SECONDS_IN_MINUTE / 20 ); 
-		            " " = " " || '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause ' || taken_pause_in_seconds || ' s.';
+		            "--TMP_SQL_CODE" = "--TMP_SQL_CODE" || '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause ' || taken_pause_in_seconds || ' s.';
 		            -- 15.12.2018 18:23:23.333. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause NNN s.
 		        end
 		    else
 		        begin
 		            taken_pause_in_seconds = cast( $sleep_min + rand() * ($sleep_max - $sleep_min) as int);
-		            " " = " " || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: ' || taken_pause_in_seconds || '. Use UDF ''$sleep_udf''.';
+		            "--TMP_SQL_CODE" = "--TMP_SQL_CODE" || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: ' || taken_pause_in_seconds || '. Use UDF ''$sleep_udf''.';
 		        end
 		    rdb\$set_context('USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds );
 		    suspend;
@@ -2112,11 +2246,11 @@ if  [ "$mode" = "init_pop" ] ; then
 		cat <<-EOF >>$sql
 		    set transaction read write read committed lock timeout 1; -- need for sp_pause: it DOES write operation into fixed table 'tpause'.
 		    set term ^;
-		    execute block returns( " " varchar(128) ) as
+		    execute block returns( "--TMP_SQL_CODE" varchar(128) ) as
 			declare v_lf char(1);
 		     begin
 			v_lf = ascii_char(10);
-			" " = v_lf || cast('now' as timestamp) || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: $random_delay. Use OS shell call.';
+			"--TMP_SQL_CODE" = v_lf || cast('now' as timestamp) || '. Point BEFORE pause from $sleep_min to $sleep_max seconds. Choosen value: $random_delay. Use OS shell call.';
 			suspend;
 		    end^
 		    set term ;^
@@ -2130,11 +2264,11 @@ if  [ "$mode" = "init_pop" ] ; then
 
 	    cat <<-EOF >>$sql
 		set term ^;
-		execute block returns( " " varchar(128) ) as
+		execute block returns( "--TMP_SQL_CODE" varchar(128) ) as
 		    declare v_lf char(1);
 		begin
 		v_lf = ascii_char(10);
-		    " " = v_lf || cast('now' as timestamp) || '. Point AFTER delay finish.';
+		    "--TMP_SQL_CODE" = v_lf || cast('now' as timestamp) || '. Point AFTER delay finish.';
 		    suspend;
 		end^
 		set term ;^
@@ -2176,17 +2310,17 @@ if  [ "$mode" = "init_pop" ] ; then
 			set transaction read only read committed;
 			set heading off;
 			set term ^;
-			execute block returns( " " varchar(128) ) as
+			execute block returns( "--TMP_SQL_CODE" varchar(128) ) as
 			begin
 			    if ( rdb\$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER') = 1 and rdb\$get_context('USER_SESSION','ENABLE_MON_QUERY') = 2 ) then
 			    begin
-			        " " = cast('now' as timestamp) || ' SID=1. This sesion is dedicated for gathering data from mon\$ tables. Take pause: use UDF $sleep_udf()...';
+			        "--TMP_SQL_CODE" = cast('now' as timestamp) || ' SID=1. This sesion is dedicated for gathering data from mon\$ tables. Take pause: use UDF $sleep_udf()...';
 			        suspend;
 			    end
 			end
 			^
 
-			execute block returns( " " varchar(128) ) as
+			execute block returns( "--TMP_SQL_CODE" varchar(128) ) as
 			    declare c int;
 			    declare d int;
 			    declare t timestamp;
@@ -2217,7 +2351,7 @@ if  [ "$mode" = "init_pop" ] ; then
 			            end
 			        end
 			        session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp)) * 1.000 / 1000;
-			        " " = cast('now' as timestamp) || ' SID=1. Completed pause between gathering data from mon$ tables, s: ' || session1_delay_before_mon_query;
+			        "--TMP_SQL_CODE" = cast('now' as timestamp) || ' SID=1. Completed pause between gathering data from mon$ tables, s: ' || session1_delay_before_mon_query;
 			        suspend;
 			    end
 			end
@@ -2264,14 +2398,14 @@ if  [ "$mode" = "init_pop" ] ; then
 		-- Sample of output:
 		-- Current value of 'stop'-flag: g_stop_test = 0, test_time: 2019-03-21 09:05:31.0390 ... 2019-03-21 12:05:31.0390
 		set term ^;
-		execute block returns(" " varchar(255)) as
+		execute block returns("--TMP_SQL_CODE" varchar(255)) as
 		    declare v_dts_beg timestamp;
 		    declare v_dts_end timestamp;
 		begin
 		    select test_time_dts_beg, test_time_dts_end
 		    from sp_get_test_time_dts -- this SP uses session-level context variables since its 2nd call and until reconnect
 		    into v_dts_beg, v_dts_end;
-		    " " = 'Current value of ''stop''-flag: g_stop_test = ' || gen_id(g_stop_test, 0)
+		    "--TMP_SQL_CODE" = 'Current value of ''stop''-flag: g_stop_test = ' || gen_id(g_stop_test, 0)
 		          || ', test_time: '
 		          || coalesce( v_dts_beg, '<?>' )
 		          || ' ... '
@@ -2474,9 +2608,9 @@ if  [ "$mode" = "init_pop" ] ; then
 		-- 16.01.2019. Avoid from querying rdb\$database: this can affect on performance
 		-- in case of extremely high workload (when number of attachments is ~1000 or more).
 		set term ^;
-		execute block returns(" " varchar(150)) as
+		execute block returns("--TMP_SQL_CODE" varchar(150)) as
 		begin
-		    " " = lpad('',50,'+') || ' Action # $i of $lim ' || rpad('',50,'+');
+		    "--TMP_SQL_CODE" = lpad('',50,'+') || ' Action # $i of $lim ' || rpad('',50,'+');
 		    suspend;
 		end
 		^
@@ -2869,11 +3003,16 @@ if  [ "$mode" = "init_pop" ] ; then
 		EOF
     fi
 
-
- done 
+  done
 
   echo -- SQL script generation finished at $(date +'%d.%m.%Y %H:%M:%S') >> $sql
 
+  #################################################################################################
+  # remove prefix "--TMP_SQL_CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+  #################################################################################################
+  sed 's/--TMP_SQL_CODE //g' $sql | sed 's/[ \t]*$//' | cat -s 1>$tmplog 2>$tmperr
+  catch_err $? $log4all $tmperr "Check line that was specified in error message."
+  mv $tmplog $tmpsql
 
   # i=1..$lim
   sho "Routine $FUNCNAME: finish." $log4all
@@ -3018,17 +3157,15 @@ launch_preparing() {
   local sleep_max=$3
   local sleep_udf=$4
   local sleep_mul=$5
-  
+
   sho "sleep_min=$sleep_min, sleep_max=$sleep_max, sleep_udf=$sleep_udf, sleep_mul=$sleep_mul" $log4all
-  
-  if [[ ! -z "${sleep_udf}" && -z $sleep_mul ]]; then
-      if [[ $sleep_max -eq 0 ]]; then
-          sho "Value of argument 'sleep_mul' is set to 1 because sleep_max=0." $log4all
-          sleep_mul=1
-      else
-          sho "Input argument 'sleep_mul' is UNDEFINED." $log4all
-          sho "It must be defined in a caller because parameter sleep_udf='$sleep_udf' and sleep_max=$sleep_max" $log4all
-          exit 1
+  if [ $sleep_max -gt 0 ]; then
+      if [[ $sleep_max -gt 0 ]]; then
+          if [[ -z $sleep_mul ]]; then
+              sho "Input argument 'sleep_mul' is UNDEFINED." $log4all
+              sho "It must be defined in a caller because parameter 'sleep_udf' is not empty and 'sleep_max' greater than 0: $sleep_max" $log4all
+              exit 1
+          fi
       fi
   fi
 
@@ -3250,7 +3387,7 @@ chk_conn_pool_support() {
     local tmpsql=$tmpdir/$prf.sql
     local tmpclg=$tmpdir/$prf.log
     local tmperr=$tmpdir/$prf.err
-
+    
 	cat <<-EOF >$tmpsql
     	    -- DO NOT BECAUSE WE HAVE TO DROP THIS DB AFTER! -- echo set bail on;
     	    create database '$host/$port:$rndname' user '$usr' password '$pwd';
@@ -3283,14 +3420,8 @@ chk_conn_pool_support() {
     $run_isql 1>$tmpclg 2>$tmperr
 
     if grep -q -i "SQLSTATE = 08001" $tmperr && grep -q -i "I/O error" $tmperr ; then
-cat <<-EOF >>$tmperr
-	-----------------------------------
-	Failed to create temporary database in '${dbnm%/*}'
-	Ensure that this directory exists.
-	Probably you may need to run:
-	chgrp firebird ${dbnm%/*}
-	chmod g+rw -R ${dbnm%/*}
-EOF
+        sho "Failed to create temporary database. Check access rights for '$tmpdir'" $log4all
+        sho "Perhaps you may need to run: chown firebird ${dbnm%/*} or chmod 774 ${dbnm%/*} ?" $log4all
         cat $tmperr
         cat $tmperr>>$log4all
         rm -f $tmpsql $tmperr $tmpclg
@@ -3366,7 +3497,9 @@ EOF
     fi
 
     rm -f $tmpsql $tmpclg $tmperr
+        
     sho "Routine $FUNCNAME: finish." $log4all
+
 }
 # end of chk_conn_pool_support
 
@@ -3583,17 +3716,17 @@ if [[ ! "$fb" == "25" ]]; then
                 data that was created by this session (i.e. within 'sandbox').
                 When statement is executed via EDS, the only way to provide it with number of working ISQL is name of user
                 who launched htis ISQL (and such name must end with unique numeric suffix).
-                
+
                 Following config parameters must be defined in that case:
                 'mon_query_role', 'mon_usr_prefix' and 'mon_usr_passwd'.
-                
+
                 Note that parameter 'mon_usr_prefix' must end with an underscore character (_) for proper extract number
                 of currently working ISQL session.
                 ----------------------------------------------------------------------------------------------------------
                 UNCOMMENT following parameters and assign them non-empty values. It can be defaults:
-            	    mon_query_role = tmp$oemul$worker
-            	    mon_usr_prefix = tmp$oemul$user_
-            	    mon_usr_passwd = #0Ltp-Emu1
+                    mon_query_role = tmp$oemul$worker
+                    mon_usr_prefix = tmp$oemul$user_
+                    mon_usr_passwd = #0Ltp-Emu1
 		EOF
 		cat $log4tmp
 		cat $log4tmp >> $log4all
@@ -3778,7 +3911,7 @@ cat <<-"EOF" >>$tmpchk
     set list on;
     set bail on;
     set term ^;
-    
+
     -- Here we check that:
     -- =+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     -- DB not in 'full shutdown' state or 'read only' mode;
@@ -3795,8 +3928,8 @@ cat <<-"EOF" >>$tmpchk
     -- This will fail when DB is in 'full shutdown' state or 'read only' mode:
     recreate exception exc_db_online_required 'Database is in maintenance state. Online required. CAN NOT PROCEED.'
     ^
-    
-    -- This will fail if DB is in any kind of 'maintenace' mode (i.e. not in 'online' state):
+
+    -- This will fail if DB is in any kind of maintenance mode (i.e. not in 'online' state):
     execute block as
     begin
         if ( exists(select 1 from mon$database where mon$shutdown_mode <> 0) ) then
@@ -3897,7 +4030,6 @@ do
 	break
     fi
 done < <(cat $log4tmp)
-rm -f $log4tmp
 
 if [[ $unavail_db -eq 1 ]]; then
 	cat<<-EOF > $log4tmp
@@ -3987,7 +4119,6 @@ else
     #..........  t e m p - l y    c h a n g e    F W    t o    O F F ........
     adjust_fw_attrib async
 
-
     # database DOES exist and ONLINE, but we have to ensure that ALL objects was successfully created in it.
     ########################################################################################################
     db_build_finished_ok=0
@@ -4009,18 +4140,27 @@ else
         # open log and parse it as config with 'param = value' string:
         if grep -q -i "all_dbo_exists" $tmpclg; then
             db_build_finished_ok=1
-    	    sho "Previous DB building process completed OK." $log4all
+            sho "Previous DB building process completed OK." $log4all
         fi
-        
+
         # Try to create GTT and add several rows in it (check that FIREBIRD_TMP points to valid and accessible folder).
         # Try to restart generator g_stop_test with 0.
         chk_db_access
     fi
 
-    echo db_build_finished_ok=\|$db_build_finished_ok\|
-    echo -e -n Result:' ' && [[ $db_build_finished_ok -eq 1 ]] && echo database is READY for work. || echo database needs to be REBUILT.
+    if [[ $db_build_finished_ok -eq 1 ]]; then
+        # Although DB can be avliable and has flag that all DB objects exist, we have to check correspondense
+        # between values from config and those that are in settings table for some critical parameters, namely:
+        # create_with_split_heavy_tabs, create_with_separate_qdistr_idx and create_with_compound_columns_order.
+        # If some of them differs then we have to rebuild all DB objects (31.07.2025).
+        chk_rebuild_qdqs_ddl $log4all db_build_finished_ok
+    fi
 
-    if [ $db_build_finished_ok -eq 0 ]; then
+    sho "db_build_finished_ok=${db_build_finished_ok}" $log4all
+    [[ $db_build_finished_ok -eq 1 ]] && msg="SUCCESS, all database objects created, config and DB settings match." || msg="database needs to be REBUILT."
+    sho "$msg" $log4all
+
+    if [[ $db_build_finished_ok -eq 0 ]]; then
         echo
         echo -e Database: \>$dbnm\< -- DOES exist but
         echo process of creation its objects was not completed.
@@ -4088,7 +4228,7 @@ if [[ $rebuild_was_invoked -eq 0 ]]; then
     display_intention "Apply generated SQL for synchronize settings with current config." "$run_isql" "$tmpclg" "$tmperr"
 
     $run_isql 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Table SETTINGS was not synchronized with current config values."
+    catch_err $? $log4all $tmperr "Table SETTINGS was not synchronized with current config values."
     grep -i "msg " $tmpclg
 fi
 
@@ -4102,7 +4242,8 @@ fi
 #    for PERF_SPLIT_nn tables
 
 run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $shdir/oltp_adjust_DDL.sql"
-display_intention "Update DDL to current value of 'separate_workers', step-1: generate SQL." "$run_isql" "$tmpclg" "$tmperr"
+display_intention "Update DDL to current value of 'separate_workers', step-1: generate SQL." "$run_isql" "$tmpadj" "$tmperr"
+
 $run_isql 1>$tmpadj 2>$tmperr
 # ::: NB ::: 30.09.2019
 # Script $shdir/oltp_adjust_DDL.sql temporarily changes DDL of view v_perf_estimated making it READ-ONLY (select ... from rdb$database).
@@ -4111,13 +4252,21 @@ $run_isql 1>$tmpadj 2>$tmperr
 #   gbak: ERROR:Error while parsing procedure SP_ADD_PERF_LOG's BLR
 #   gbak: ERROR:    attempted update of read-only column
 #   gbak:Exiting before completion due to errors
-catch_err $tmperr "Could not generate SQL script for adjust DDL to current value of 'separate_workers' parameter."
+catch_err $? $log4all $tmperr "Could not generate SQL script for adjust DDL to current value of 'separate_workers' parameter."
+
+#################################################################################################
+# remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+#################################################################################################
+sed 's/--TMP\$SQL\$CODE //g' $tmpadj | sed 's/[ \t]*$//' | cat -s 1>$tmpclg 2>$tmperr
+catch_err $? $log4all $tmperr "Check line that was specified in error message."
+mv $tmpclg $tmpadj
 
 # 2. APPLY temporary script "$tmpadj" which contains dynamic DDL.
 run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpadj"
 display_intention "Update DDL to current value of 'separate_workers', step-2: apply generated SQL." "$run_isql" "$tmpclg" "$tmperr"
 $run_isql 1>$tmpclg 2>$tmperr
-catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects remains unchanged. Check script $tmpadj"
+catch_err $? $log4all $tmperr "Could not apply generated SQL script. DDL of some DB objects remains unchanged. Check script $tmpadj"
+
 
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 # :::   A d j u s t     D D L    f o r     'u s e d _ i n _ r e p l i c a t i o n'     s e t t i n g   :::
@@ -4140,16 +4289,26 @@ catch_err $tmperr "Could not apply generated SQL script. DDL of some DB objects 
 run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $shdir/oltp_replication_DDL.sql"
 display_intention "Update DDL to 'used_in_replication' parameter: step-1: generate temporary DDL." "$run_isql" "$tmpa4r" "$tmperr"
 $run_isql 1>$tmpa4r 2>$tmperr
-catch_err $tmperr "Could not generate SQL for change indices according to 'used_in_replication' config parameter."
+catch_err $? $log4all $tmperr "Could not generate SQL for change indices according to 'used_in_replication' config parameter."
 
 # 4debug4debug4debug
 # echo -e "SHOW DATABASE;">>$tmpa4r
 
 run_isql="$isql_name $dbconn -q -nod -c 256 $dbauth -i $tmpa4r"
 display_intention "Update DDL to 'used_in_replication' parameter, step-2: apply generated DDL." "$run_isql" "$tmpclg" "$tmperr"
+
+#################################################################################################
+# remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+#################################################################################################
+sed 's/--TMP\$SQL\$CODE //g' $tmpa4r | sed 's/[ \t]*$//' | cat -s 1>$tmpclg 2>$tmperr
+catch_err $? $log4all $tmperr "Check line that was specified in error message."
+mv $tmpclg $tmpa4r
+
+
 $run_isql 1>$tmpclg 2>$tmperr
-catch_err $tmperr "Could not update DDL according to current value of 'used_in_replication' parameter. Check STDERR log $tmperr"
+catch_err $? $log4all $tmperr "Could not update DDL according to current value of 'used_in_replication' parameter. Check STDERR log $tmperr"
 rm -f $tmpa4r
+
 
 # Multiplier for input argument to sleep UDF for getting delays in SECONDS.
 # Value will be adjusted after test call of sleep UDF that must present in the script "$sleep_ddl" from config:
@@ -4183,7 +4342,7 @@ if [ -s "$sleep_ddl" ]; then
             # Get current OS family. Outcome examples: #ID="centos" ; #ID="ubuntu" ;     #ID="debian"
             os_family=$(cat /etc/*release* | grep -m1 -i "^id=")
             if [[ -n "${clu}" && ( $os_family == *"ubuntu"* || $os_family == *"debian"* ) ]]; then
-		cat <<- EOF >>$tmperr
+cat <<- EOF >>$tmperr
 		
 		Ensure that /etc/firebird/${fb:0:1}.${fb:1:1}/firebird.conf contains parameter
 		'UdfAccess' which points to the folder where UDF binary exists.
@@ -4191,20 +4350,20 @@ if [ -s "$sleep_ddl" ]; then
 		
 		UdfAccess =  Restrict /usr/lib/firebird/${fb:0:1}.${fb:1:1}/UDF
 		
-		EOF
+EOF
             else
-		cat <<- EOF >>$tmperr
+cat <<- EOF >>$tmperr
 		
 		Ensure that $fbc/firebird.conf contains parameter 'UdfAccess' which points to
 		the folder where UDF binary exists, e.g.:
 		
 		UdfAccess =  Restrict UDF
 		
-		EOF
+EOF
             fi
 	    cat $tmperr >>$log4all
 	fi
-        catch_err $tmperr "Could not create/update UDF for sleep. Check messages above and file $sleep_ddl"
+        catch_err $? $log4all $tmperr "Could not create/update UDF for sleep. Check messages above and file $sleep_ddl"
 
         if grep -q "multiplier_for_sleep_arg" $tmpclg; then
             #:::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -4252,19 +4411,30 @@ if [[ "$fb" != "25" ]]; then
     fi
 
     # NOTE: here we can be sure that 'use_es' can be 2 *only* if External Pool is supported by current FB instance!
+
+    ############################################################
+    ###   o l t p _ a d j u s t _ e d s _ c a l l s . s q l  ###
+    ############################################################
     run_isql="$isql_name $dbconn $dbauth -q -nod -i $shdir/oltp_adjust_eds_calls.sql"
     display_intention "Step-1: generating SQL script with necessary statements. Please wait." "$run_isql" "$tmpadj" "$tmperr"
     $run_isql 1>$tmpadj 2>$tmperr
-    catch_err $tmperr "Could not generate SQL script for current value of 'use_es'=$use_es. Check STDERR log $tmperr"
+    catch_err $? $log4all $tmperr "Could not generate SQL script for current value of 'use_es'=$use_es. Check STDERR log $tmperr"
 
+    #################################################################################################
+    # remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+    #################################################################################################
+    sed 's/--TMP\$SQL\$CODE //g' $tmpadj | sed 's/[ \t]*$//' | cat -s 1>$tmpclg 2>$tmperr
+    catch_err $? $log4all $tmperr "Check line that was specified in error message."
+    mv $tmpclg $tmpadj
 
     run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpadj"
     display_intention "Step-2: applying auxiliary script." "$run_isql" "$tmpclg" "$tmperr"
 
     $run_isql 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
+    catch_err $? $log4all $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
 
     sho "Completed. Source code has been adjusted according to 'use_es' config parameter." $log4all
+
 
     #-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=
 
@@ -4275,16 +4445,27 @@ if [[ "$fb" != "25" ]]; then
     fi
     sho "$msg" $log4all
 
+    ##########################################################
+    ###   o l t p _ a d j u s t _ e d s _ p e r f . s q l  ###
+    ##########################################################
     run_isql="$isql_name $dbconn $dbauth -q -nod -i $shdir/oltp_adjust_eds_perf.sql"
     display_intention "Step-1: generating SQL script with necessary statements. Please wait." "$run_isql" "$tmpadj" "$tmperr"
     $run_isql 1>$tmpadj 2>$tmperr
-    catch_err $tmperr "Could not generate SQL script for add/drop PERF_EDS_SPLIT_nn tables. Check STDERR log $tmperr"
+    catch_err $? $log4all $tmperr "Could not generate SQL script for add/drop PERF_EDS_SPLIT_nn tables. Check STDERR log $tmperr"
+
+
+    #################################################################################################
+    # remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+    #################################################################################################
+    sed 's/--TMP\$SQL\$CODE //g' $tmpadj | sed 's/[ \t]*$//' | cat -s 1>$tmpclg 2>$tmperr
+    catch_err $? $log4all $tmperr "Check line that was specified in error message."
+    mv $tmpclg $tmpadj
 
     sho "Step-2: applying auxiliary script." $log4all
     run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpadj"
     display_intention "Step-2: applying auxiliary script." "$run_isql" "$tmpclg" "$tmperr"
     $run_isql 1>$tmpclg 2>$tmperr
-    catch_err $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
+    catch_err $? $log4all $tmperr "Could not apply generated SQL script for 'use_es'=$use_es. Check STDERR log $tmperr"
 
     if [[ $use_es -eq 2 ]]; then
         sho "Completed. Logging of Ext. Pool events will be splitted on several PERF_EDS_SPLIT_nn tables." $log4all
@@ -4303,7 +4484,6 @@ fi
 # ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 # 17.05.2020
 adjust_grants $mon_unit_perf
-
 
 # 1. If config parameter $use_external_to_stop IS defined, output its value with note about ability to stop
 #    all working ISQL sessions by adding single character + LF into this file.
@@ -4371,7 +4551,7 @@ run_isql="$isql_name $dbconn $dbauth -q -nod -i $tmpchk"
 display_intention "Change state of DB-level triggers." "$run_isql" "$tmpclg" "$tmperr"
 
 $run_isql 1>$tmpclg 2>$tmperr
-catch_err $tmperr "Could not apply script for changing DB-level triggers. Check STDERR log $tmperr"
+catch_err $? $log4all $tmperr "Could not apply script for changing DB-level triggers. Check STDERR log $tmperr"
 
 sho "Completed." $log4all
 grep . $tmpclg
@@ -4379,13 +4559,10 @@ grep . $tmpclg>>$log4all
 
 rm -f $tmpchk $tmpclg $tmperr
 
-
 #=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#+#=#
 
-#if [[ $dbconn =~ .*localhost[/:]{1}.* || $dbconn =~ .*127.0.0.1[/:]{1}.* ]]; then
 adjust_sweep_attrib
 adjust_fw_attrib
-#fi
 
 # ...................... c r e a t e _ r e s u l t s _ s t o r a g e   ............
 
@@ -4422,7 +4599,6 @@ if [ $rebuild_was_invoked -eq 1 ]; then
       pause
     fi
 fi
-
 
 # get number of currently existed documents and update value of $init_docs if need:
 export existing_docs=0
@@ -4554,11 +4730,10 @@ echo $msg
 echo $msg>>$log4all
 echo>>$log4all
 
-
 if [ 1 -eq 0 ]; then
     echo "./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info AMP"
 
-    #pause ... :::DEBUG::: stop_before_launch_single_isql...
+    pause ... :::DEBUG::: stop_before_launch_single_isql...
 
     bash ./oltp_isql_run_worker.sh $cfg $sql $prf 1 $log4all $file_name_with_test_params $fbb ${conn_pool_support} $file_name_this_host_info
 
@@ -4590,4 +4765,3 @@ do
 done
 
 sho "Completed script $0" $log4all
-

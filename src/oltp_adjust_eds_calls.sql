@@ -8,7 +8,7 @@ set autoddl off;
 set bail on;
 commit;
 set transaction no wait;
-' as " "
+' as "--TMP$SQL$CODE"
 from rdb$database
 ;
 commit;
@@ -698,15 +698,15 @@ begin
     
         if ( 1=1 or v_obj_type in ('p','f') ) then
         begin
-            "-- blob_id" = "-- blob_id" || 'declare "!ACHTUNG_EDS_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON ' || trim(v_obj_name) ||'. DO NOT EDIT ###'';' || v_lf;
+            "-- blob_id" = "-- blob_id" || 'declare "-- ACHTUNG_EDS_READ_ME__1" varchar(255) = ''### GENERATED AUTO, BASED ON ' || trim(v_obj_name) ||'. DO NOT EDIT ###'';' || v_lf;
             if (v_use_es = 0) then
-                "-- blob_id" = "-- blob_id" || q'{declare "!ACHTUNG_EDS_READ_ME_2!" varchar(255) = '### STATIC code will be performed. For use ES[/EDS], change config parameter ''use_es'' to 1 for run ES w/o EDS, or 2 for run ES with EDS. ###';}' || v_lf
+                "-- blob_id" = "-- blob_id" || q'{declare "-- ACHTUNG_EDS_READ_ME__2" varchar(255) = '### STATIC code will be performed. For use ES[/EDS], change config parameter ''use_es'' to 1 for run ES w/o EDS, or 2 for run ES with EDS. ###';}' || v_lf
                 ;
             if (v_use_es = 1) then
-                "-- blob_id" = "-- blob_id" || q'{declare "!ACHTUNG_EDS_READ_ME_2!" varchar(255) = '### Part of code uses EXECUTE STATEMENT mechanism. Change config parameter ''use_es'' to 0 for disabling it, or 2 for run ES with EDS. ###';}' || v_lf
+                "-- blob_id" = "-- blob_id" || q'{declare "-- ACHTUNG_EDS_READ_ME__2" varchar(255) = '### Part of code uses EXECUTE STATEMENT mechanism. Change config parameter ''use_es'' to 0 for disabling it, or 2 for run ES with EDS. ###';}' || v_lf
                 ;
             if (v_use_es = 2) then
-                "-- blob_id" = "-- blob_id" || q'{declare "!ACHTUNG_EDS_READ_ME_2!" varchar(255) = '### Part of code uses ES/EDS mechanism. Change config parameter ''use_es'' to 1 for run ES w/o EDS, or 0 for disabling ES at all. ###';}' || v_lf
+                "-- blob_id" = "-- blob_id" || q'{declare "-- ACHTUNG_EDS_READ_ME__2" varchar(255) = '### Part of code uses ES/EDS mechanism. Change config parameter ''use_es'' to 1 for run ES w/o EDS, or 0 for disabling ES at all. ###';}' || v_lf
                 ;
         end
 
@@ -731,6 +731,6 @@ q'{
 set echo off;
 set list on;
 select 'oltp_adjust_eds_calls.sql finish at ' || current_timestamp as msg from rdb$database;
-}' as " "
+}' as "--TMP$SQL$CODE"
 from rdb$database
 ;

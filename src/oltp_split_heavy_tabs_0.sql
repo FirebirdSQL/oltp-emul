@@ -13,10 +13,10 @@ set echo off;
 set heading off;
 set list on;
 
-select 'select ''oltp_split_heavy_tabs_0.sql start at '' || current_timestamp as msg from rdb$database;' as " "
+select 'select ''oltp_split_heavy_tabs_0.sql start at '' || current_timestamp as msg from rdb$database;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set echo off;' as " "
+select 'set echo off;'
 from rdb$database
 ;
 commit;
@@ -39,7 +39,7 @@ commit;
 
 set transaction no wait;
 set term ^;
-execute block returns(" " varchar(32765)) as
+execute block returns("--TMP$SQL$CODE" varchar(32765)) as
     declare v_lf char(10);
 
     declare v_old_name varchar(31);
@@ -286,7 +286,7 @@ begin
     ;
 
 
-    " " = '-- Need to replace references of:';
+    "--TMP$SQL$CODE" = '-- Need to replace references of:';
     suspend;
     v_views_to_be_replaced = upper( v_views_to_be_replaced );
     v_tabs_for_replace_with = upper( v_tabs_for_replace_with );
@@ -298,13 +298,13 @@ begin
         join sys_list_to_rows( :v_tabs_for_replace_with ) b on a.line = b.line
         into vew_for_inject, tab_for_inject
     do begin
-        " " = '-- '|| i ||'. View "' || vew_for_inject || '" with table "' || tab_for_inject || '"';
+        "--TMP$SQL$CODE" = '-- '|| i ||'. View "' || vew_for_inject || '" with table "' || tab_for_inject || '"';
         insert into tmp$vew_to_tabs(vew_for_removal, tab_for_restore) values( :vew_for_inject, :tab_for_inject);
         suspend;
         i = i + 1;
     end
 
-    " " = 'set bail on;' ;
+    "--TMP$SQL$CODE" = 'set bail on;' ;
     suspend;
 
 
@@ -316,7 +316,7 @@ begin
         into vew_for_inject, tab_for_inject
     do begin
         -- this is written to oltp_split_heavy_tabs_0_NN.tmp:
-        " " = '-- vew_for_inject:' || vew_for_inject || ', tab_for_inject='|| tab_for_inject ||';';
+        "--TMP$SQL$CODE" = '-- vew_for_inject:' || vew_for_inject || ', tab_for_inject='|| tab_for_inject ||';';
         suspend;
         for
             select distinct rd.rdb$dependent_name, rd.rdb$dependent_type  -- 1=view; 5=sp; 2=trigger
@@ -327,13 +327,11 @@ begin
             update or insert into tmp$source(obj_depends_name, obj_depends_type)
             values( :v_who_depends_name, :v_who_depends_type)
             matching(obj_depends_name);
-            " " = '-- Point before replace code of: ' || v_who_depends_name || ', type: '|| v_who_depends_type  ||', depends on: ' || upper(:vew_for_inject) ||';';
+            "--TMP$SQL$CODE" = '-- Point before replace code of: ' || v_who_depends_name || ', type: '|| v_who_depends_type  ||', depends on: ' || upper(:vew_for_inject) ||';';
             suspend;
         end
     end
 
-    --for select obj_depends_name||', type: '||obj_depends_type from tmp$source into " " do suspend;
-    --exit;
 /*
 SP_MULTIPLY_ROWS_FOR_QDISTR    
 SP_KILL_QSTORNO_RET_QS2QD
@@ -358,7 +356,7 @@ Z_GET_DEPENDEND_DOCS
         from tmp$source
         into v_who_depends_name, v_who_depends_type
     do begin
-        " " = '-- Restore references to the table "' || tab_for_inject || '" in "' || v_who_depends_name || '"';
+        "--TMP$SQL$CODE" = '-- Restore references to the table "' || tab_for_inject || '" in "' || v_who_depends_name || '"';
         suspend;
 
         v_body_repl = '';
@@ -386,8 +384,8 @@ Z_GET_DEPENDEND_DOCS
             begin
                        v_add_comment = 1;
                        v_line_repl = v_lf
-                               || 'declare "!ACHTUNG_README_1!" VARCHAR(255) = ''### DO NOT EDIT: this source is result of auto post-handling. ### '';' || v_lf
-                               || 'declare "!ACHTUNG_README_2!" VARCHAR(255) = ''### References to TABLES "QDistr", "QStorned" have been restored instead of views.'';' || v_lf || v_lf 
+                               || 'declare "-- ACHTUNG_READ_ME_1" VARCHAR(255) = ''### DO NOT EDIT: this source is result of auto post-handling. ### '';' || v_lf
+                               || 'declare "-- ACHTUNG_READ_ME_2" VARCHAR(255) = ''### References to TABLES "QDistr", "QStorned" have been restored instead of views.'';' || v_lf || v_lf 
                                || v_line_repl;
             end
 
@@ -424,13 +422,13 @@ Z_GET_DEPENDEND_DOCS
                 end
             else
                 begin
-                    " " = v_body_repl;
+                    "--TMP$SQL$CODE" = v_body_repl;
                     suspend;
                     v_body_repl = v_line_repl || v_lf;
                 end
 
         end
-        " " = v_body_repl; 
+        "--TMP$SQL$CODE" = v_body_repl; 
         suspend;
 
         if ( v_who_depends_type = 5 ) then 
@@ -440,12 +438,12 @@ Z_GET_DEPENDEND_DOCS
             c_view_src;
     end
 
-    " " = 'commit;';
+    "--TMP$SQL$CODE" = 'commit;';
     suspend;
 
-    for select 'drop view ' || trim(vew_for_removal) ||';' from tmp$vew_to_tabs into " " do suspend;
+    for select 'drop view ' || trim(vew_for_removal) ||';' from tmp$vew_to_tabs into "--TMP$SQL$CODE" do suspend;
 
-    " " = 'commit;';
+    "--TMP$SQL$CODE" = 'commit;';
     suspend;
 
 end
@@ -462,10 +460,10 @@ commit;
 set heading off;
 set list on;
 
-select 'set echo off;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'select ''oltp_split_heavy_tabs_0.sql finish at '' || current_timestamp as msg from rdb$database;' as " "
+select 'select ''oltp_split_heavy_tabs_0.sql finish at '' || current_timestamp as msg from rdb$database;'
 from rdb$database
 ;
 commit;

@@ -6,28 +6,16 @@ set bail on;
 set list on;
 
 set term ^;
-execute block returns( " " varchar(255) ) as
+execute block returns( "--TMP$SQL$CODE" varchar(255) ) as
 begin
-    " " = 'set list on; select ''oltp_replication_DDL.sql start at '' || current_timestamp as msg from rdb$database;';
+    "--TMP$SQL$CODE" = 'set list on; select ''oltp_replication_DDL.sql start at '' || current_timestamp as msg from rdb$database;';
     suspend;
-    " " = 'set echo ON;'; suspend;
-    " " = 'set bail ON;'; suspend;
+    "--TMP$SQL$CODE" = 'set echo ON;'; suspend;
+    "--TMP$SQL$CODE" = 'set bail ON;'; suspend;
 end
 ^
 set term ;^
 commit;
-
---select 'set list on; select ''oltp_replication_DDL.sql start at '' || current_timestamp as msg from rdb$database;' as " "
---from rdb$database
---union all
---select 'set echo ON; set bail ON;' as " "
---from rdb$database
---union all
---select 'set autoddl ON; commit;' as " "
---from rdb$database
---;
---commit;
-
 
 create or alter procedure tmp_sp_generate_update_pk_ddl(a_create_pk smallint) as begin end
 ;
@@ -330,12 +318,12 @@ commit;
 --  by 1run_oltp_emul.bat (.sh) every time test is launched:
 set list on;
 set term ^;
-execute block returns(" " varchar(512)) as
+execute block returns("--TMP$SQL$CODE" varchar(512)) as
 begin
     for 
         select sql_expr 
         from tmp_sp_generate_update_pk_ddl( (select svalue from settings s where s.mcode ='USED_IN_REPLICATION') )
-    into " "
+    into "--TMP$SQL$CODE"
     do 
         suspend;
 end
@@ -352,10 +340,10 @@ commit;
 set heading off;
 set list on;
 
-select 'set echo off;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set list on; select ''oltp_replication_DDL.sql finish at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set list on; select ''oltp_replication_DDL.sql finish at '' || current_timestamp as msg from rdb$database;'
 from rdb$database
 ;
 

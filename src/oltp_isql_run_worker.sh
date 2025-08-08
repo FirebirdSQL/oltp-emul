@@ -17,6 +17,8 @@ msg_noarg() {
   pause "Press any key to exit. . ."
 }
 
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 sho() {
   local msg=$1
   local log=$2 # ${2:-"UNKNOWN_LOG"}
@@ -35,6 +37,8 @@ sho() {
 #      echo $dts. $msg>>$log
 #  fi
 }
+
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 apply_cmd() {
   local run_cmd=$1
@@ -63,6 +67,7 @@ apply_cmd() {
   echo >> $log_file
 }
 
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 catch_err() {
   local retcode=$1
@@ -103,6 +108,8 @@ catch_err() {
   fi
 }
 
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
 log_elapsed_time() {
     local s1=$1
 
@@ -122,6 +129,7 @@ log_elapsed_time() {
     fi
 }
 
+# -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 get_diff_fblog() {
     local mode=$1
@@ -2079,7 +2087,7 @@ do
 
     if [[ $can_shutdown -eq 1 ]]; then
         run_fbs_online="$fbc/fbsvcmgr $host/$port:service_mgr $dbauth action_properties prp_db_online dbname $dbnm"
-        sho "SID=$sid. Return DB to online state. Command: $run_fbs_online" $rpt 1
+        sho "SID=$sid. Bring DB online. Command: $run_fbs_online" $rpt 1
         # -----------------------------------
         # r e t u r n     D B     o n l i n e
         # -----------------------------------
@@ -2110,7 +2118,7 @@ do
 		commit;
 		
 		set heading off;
-		select 'Attachments that still alive:' as " " from rdb$database;
+		select 'Attachments that still alive:' as "TMP_SQL_CODE" from rdb$database;
 		set heading on;
 		set list on;
 		set blob all;
@@ -2172,6 +2180,14 @@ do
 		EOF
 	fi
     # /var/tmp/logs-oltp30/oltp30.report.txt
+
+    #################################################################################################
+    # remove prefix "--TMP$SQL$CODE"; remove trailing spaces; replace duplicate EOLs with single EOL:
+    #################################################################################################
+    sed 's/--TMP_SQL_CODE //g' $psql | sed 's/[ \t]*$//' | cat -s 1>$tmpauxlog 2>$tmpauxerr
+    catch_err $? $tmpauxerr "Check line that was specified in error message."
+    mv $tmpauxlog $psql
+
     $isql_name $dbconn -nod -n -q -pag 9999 -i $psql $dbauth 1>>$rpt 2>&1
 
     if [[ $conn_as_locksmith -eq 0 ]]; then
@@ -3702,9 +3718,9 @@ do
 		cat <<- "EOF" >$psql
 			set heading off;
 			set term ^;
-			execute block returns(" " dm_info) as
+			execute block returns("--TMP_SQL_CODE" dm_info) as
 			begin
-			    " " = ascii_char(10) || ( select p.page_cache_info from srv_get_page_cache_info p ) ;
+			    "--TMP_SQL_CODE" = ascii_char(10) || ( select p.page_cache_info from srv_get_page_cache_info p ) ;
 			    suspend;
 			end
 			^

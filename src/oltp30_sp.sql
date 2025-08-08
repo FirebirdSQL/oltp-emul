@@ -159,6 +159,9 @@ begin
                 'unknown_source'
               );
 
+    if (v_source_for_random_id = 'unknown_source' ) then
+        exception ex_record_not_found using ( 'a_optype_id = ' || coalesce(a_optype_id , '[null]'), 'optypes' );
+
     v_source_for_min_id =
         decode( a_optype_id,
                 fn_oper_order_for_supplier(), 'v_min_id_clo_ord',
@@ -3329,6 +3332,7 @@ begin
                     -- of IDLE state for this connect in the Ext. Conn. Pool.
                     execute procedure sp_perf_eds_logging('B');
     
+                    -- NB: https://github.com/FirebirdSQL/firebird/issues/8681
                     select id_selected --#EDS#TAG#
                     from sp_get_random_id(
                         :a_view_for_search
@@ -3350,6 +3354,7 @@ begin
                     suspend;
                 end
             }';
+            
             execute statement (v_sttm)
             (
                 v_source_for_random_id    -- 1

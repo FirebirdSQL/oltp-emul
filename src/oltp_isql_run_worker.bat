@@ -1,5 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion enableextensions
+chcp 65001
 
 set THIS_DIR=%~dp0
 set THIS_DIR=!THIS_DIR:~0,-1!
@@ -62,26 +63,16 @@ set fname=%8
 
 @rem since 12.09.2021:
 set fb=UNKNOWN
-echo %build% | findstr /i /r /c:"[V,T]2.5.[0-9]" > nul
-if NOT errorlevel 1 (
-    set fb=25
-)
-if /i .!fb!.==.UNKNOWN. (
-    echo %build% | findstr /i /r /c:"[V,T]3.[0-9].[0-9]" > nul
-    if NOT errorlevel 1 (
-        set fb=30
-    )
-)
-if /i .!fb!.==.UNKNOWN. (
-    echo %build% | findstr /i /r /c:"[V,T]4.[0-9].[0-9]" > nul
-    if NOT errorlevel 1 (
-        set fb=40
-    )
-)
-if /i .!fb!.==.UNKNOWN. (
-    echo %build% | findstr /i /r /c:"[V,T]5.[0-9].[0-9]" > nul
-    if NOT errorlevel 1 (
-        set fb=50
+set major_digit_list=2.5,3,4,5,6
+for /d %%x in (!major_digit_list!) do (
+    if /i "!fb!"=="UNKNOWN" (
+        set major_digit_i=%%x
+        echo !fbb! | findstr /i /r /c:"[V,T]!major_digit_i!.[0-9]" > nul
+        if NOT errorlevel 1 (
+            set fb=!major_digit_i!0
+            set fb=!fb:.=!
+            set fb=!fb:~0,2%!
+        )
     )
 )
 
@@ -362,33 +353,36 @@ if .!check_for_locksmith!.==.1. (
     echo "end^"
     if !conn_as_locksmith! EQU 0 (
         if .!use_es!.==.2. (
-            echo "set list on^"
-            echo "execute block returns( who_am_i varchar(31), whats_my_role varchar(31), my_connection int, use_es_from_settings smallint, local_worker_seq_number smallint, remote_worker_seq_number smallint, msg varchar(255) ) as"
-            echo "    declare passed_check smallint = 0;"
-            echo "begin"
-            echo "    who_am_i = current_user;"
-            echo "    whats_my_role = current_role;"
-            echo "    my_connection = current_connection;"
-            echo "    use_es_from_settings = rdb$get_context('USER_SESSION', 'USE_ES');"
-            echo "    local_worker_seq_number = rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER');"
-            echo "    execute statement 'select fn_this_worker_seq_no() from rdb$database'"
-            echo "            on external '%host%/%port%:' || rdb$get_context('SYSTEM','DB_NAME')"
-            echo "            as user '!mon_usr_prefix!!v_username_for_sid!' password '!mon_usr_passwd!' role '!mon_query_role!'"
-            echo "    into remote_worker_seq_number;"
-            echo "    if (local_worker_seq_number = remote_worker_seq_number) then"
-            echo "        begin"
-            echo "            passed_check=1;"
-            echo "            msg = 'PASSED check for equality of worker_id in EDS connection and in "parent" code. Values are equal.';"
-            echo "        end"
-            echo "    else"
-            echo "        begin"
-            echo "           msg = 'FAILED check detected: value of worker_id in EDS differs from one that was assigned in the "parent" code.';"
-            echo "        end"
-            echo "    suspend;"
-            echo "    if (passed_check = 0) then"
-            echo "        exception ex_further_work_forbidden;"
-            echo "end^"
-            echo "set list off^"
+            @rem added 01.08.2025 check for separate_workers==1:
+            if .!separate_workers!.==.1. (
+                echo "set list on^"
+                echo "execute block returns( who_am_i varchar(31), whats_my_role varchar(31), my_connection int, use_es_from_settings smallint, local_worker_seq_number smallint, remote_worker_seq_number smallint, msg varchar(255) ) as"
+                echo "    declare passed_check smallint = 0;"
+                echo "begin"
+                echo "    who_am_i = current_user;"
+                echo "    whats_my_role = current_role;"
+                echo "    my_connection = current_connection;"
+                echo "    use_es_from_settings = rdb$get_context('USER_SESSION', 'USE_ES');"
+                echo "    local_worker_seq_number = rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER');"
+                echo "    execute statement 'select fn_this_worker_seq_no() from rdb$database'"
+                echo "            on external '%host%/%port%:' || rdb$get_context('SYSTEM','DB_NAME')"
+                echo "            as user '!mon_usr_prefix!!v_username_for_sid!' password '!mon_usr_passwd!' role '!mon_query_role!'"
+                echo "    into remote_worker_seq_number;"
+                echo "    if (local_worker_seq_number = remote_worker_seq_number) then"
+                echo "        begin"
+                echo "            passed_check=1;"
+                echo "            msg = 'PASSED check for equality of worker_id in EDS connection and in "parent" code. Values are equal.';"
+                echo "        end"
+                echo "    else"
+                echo "        begin"
+                echo "           msg = 'FAILED check detected: value of worker_id in EDS differs from one that was assigned in the "parent" code.';"
+                echo "        end"
+                echo "    suspend;"
+                echo "    if (passed_check = 0) then"
+                echo "        exception ex_further_work_forbidden;"
+                echo "end^"
+                echo "set list off^"
+            )
         )
     )
     echo "set term ;^"
@@ -621,7 +615,6 @@ call :sho "Start ISQL #%sid% of total %winq%." %sts%
 if .%sid%.==.1. (
     call :sho "SID=1. This ISQL session will create reports after test finish." %sts%
 )
-
 
 @rem ########################|  S M O O T H    W O R K L O A D   G R O W T H  |##########################
 @rem # Make smooth workload increasing. ISQl with sid=1...%winq% must perform attachments NOT INSTANTLY #
@@ -931,10 +924,12 @@ if .1.==.0. (
 
 
     @rem -------------------------------------------------------------------------
-    @rem c h e c k    t h a t   n o    s y n t a x    e r r o r s    o c c u r e d
+    @rem CHECK THAT NO ERRORS OCCURRED THAT MUST BE HANDLED AS "FATAL" BECAUSE OF
+    @rem compilation problem or config mismatch.
     @rem -------------------------------------------------------------------------
 
-    @rem --- DO NOT --- 1. 42000 ==> -902 	335544569 	dsql_error 	Dynamic SQL Error
+    @rem --- DO NOT --- 1. 42000 ==> 335544842 : <Missing arg #1 - possibly status vector overflow> // when use_es = 1 or 2; see #8692
+    @rem Syntax error or access violation
     @rem ~~~~~~~~~~~~~~
     @rem 1. 22003 ==> Numeric value out of range
     @rem 2. 42S22 ==> -206 	335544578 	dsql_field_err 	Column not found
@@ -942,20 +937,27 @@ if .1.==.0. (
     @rem 4. 22001 ==> arith overflow / string truncation
     @rem 5. 39000 ==> function unknown: absent UDF or POSIX only: when forget to add backslash before rdb$get/rdb$set_context
     @rem 6. 28000 ==> no permission for ... access to ... // 17.05.2020: OLTP_USER_nnnn via role WORKER instead of SYSDBA
-    @rem 7. 22018 ==> conversion wrror // 22.11.2020, when exec. sttm 'iif( <expr>, <val>, null)' - and null is not casted to datatype of <val>
+    @rem 7. 22018 ==> conversion error // 22.11.2020, when exec. sttm 'iif( <expr>, <val>, null)' - and null is not casted to datatype of <val>
     @rem 8. 54001 ==> Too many concurrent executions of the same request // infinite recursive calls ?
 
-    @rem -- do NOT -- set syntax_msg1="SQLSTATE = 42000" -- this can be when FB crashes and client did EXECUTE STATEMENT at this time!
-    set syntax_msg1="SQLSTATE = 22003"
-    set syntax_msg2="SQLSTATE = 42S22"
-    set syntax_msg3="SQLSTATE = 42S02"
-    set syntax_msg4="SQLSTATE = 22001"
-    set syntax_msg5="SQLSTATE = 39000"
-    set syntax_msg6="SQLSTATE = 28000"
-    set syntax_msg7="SQLSTATE = 22018"
-    set syntax_msg8="SQLSTATE = 54001"
+    @rem -- do NOT -- set fatal_err1="SQLSTATE = 42000" -- this can be when FB crashes and client did EXECUTE STATEMENT at this time!
+    set fatal_err1="SQLSTATE = 22003"
+    set fatal_err2="SQLSTATE = 42S22"
+    set fatal_err3="SQLSTATE = 42S02"
+    set fatal_err4="SQLSTATE = 22001"
+    set fatal_err5="SQLSTATE = 39000"
+    set fatal_err6="SQLSTATE = 28000"
+    set fatal_err7="SQLSTATE = 22018"
+    set fatal_err8="SQLSTATE = 54001"
 
-    set run_cmd=findstr /i /m /c:!syntax_msg1! /c:!syntax_msg2! /c:!syntax_msg3! /c:!syntax_msg4! /c:!syntax_msg5! /c:!syntax_msg6! /c:!syntax_msg7! /c:!syntax_msg8!
+    @rem -- do not -- set fatal_err9="SQLSTATE = 42000" // 42000 ==> 335544842 : <Missing arg #1 - possibly status vector overflow> // when use_es = 1 or 2.
+    @rem See: https://github.com/FirebirdSQL/firebird/issues/8692
+
+    set fatal_err9="Token unknown"
+    set fatal_erra="EX_FURTHER_WORK_FORBIDDEN"
+    set fatal_errb="EX_EMPTY_INPUT_STR"
+
+    set run_cmd=findstr /i /m /c:!fatal_err1! /c:!fatal_err2! /c:!fatal_err3! /c:!fatal_err4! /c:!fatal_err5! /c:!fatal_err6! /c:!fatal_err7! /c:!fatal_err8! /c:!fatal_erra! /c:!fatal_errb!
     if .%use_mtee%.==.2. (
         @rem STDERR is merged with STDOUT, %worker_err% contains only 'dummy' message about this.
         @rem Weh have to search problematic SQLSTATE codes in >>> %worker_LOG% <<<
@@ -992,7 +994,12 @@ if .1.==.0. (
             echo.
         ) > %worker_tmp%
 
-        call :bulksho %worker_tmp% %sts%
+        call :bulksho %worker_tmp% %sts% 1
+        if .%use_mtee%.==.2. (
+            call :bulksho %worker_tmp% %worker_log%
+        ) else (
+            call :bulksho %worker_tmp% %worker_err%
+        )
 
         goto end
 
@@ -1338,7 +1345,7 @@ if .1.==.0. (
 		echo "set term #;"
 		echo "commit;"
 		echo "set heading off;"
-		echo "select 'Attachments that still alive:' as " " from rdb$database;"
+		echo "select 'Attachments that still alive:' as msg from rdb$database;"
 		echo "set heading on;"
 		echo "set list on;"
 		echo "set blob all;"
@@ -1378,7 +1385,7 @@ if .1.==.0. (
 	    @rem 06.10.2020: update record in perf_log about test finish outcome:
 	    @rem write info about FB crash when changed DB state to shutdown.
   		echo "set heading off;"
-  		echo "select 'Update test finish record: add info about crash when DB state was changed to shutdown.' as " " from rdb$database;"
+  		echo "select 'Update test finish record: add info about crash when DB state was changed to shutdown.' as msg from rdb$database;"
   		echo "set heading on;"
 		echo "set list on;"
 	    echo "set echo on;"
@@ -1415,7 +1422,7 @@ if .1.==.0. (
 		@rem because SP sp_halt_on_error was not called for test self-stop.
 		@rem We have to *add* new record into perf_log in order to show it in the final report:
   		echo "set heading off;"
-  		echo "select 'Insert record about crash during test run.' as " " from rdb$database;"
+  		echo "select 'Insert record about crash during test run.' as msg from rdb$database;"
   		echo "set heading on;"
 		echo "set list on;"
 	    echo "set echo on;"
@@ -1441,7 +1448,7 @@ if .1.==.0. (
         @rem ######################################################
         (
     		echo set heading off;
-    		echo select 'Drop all non-prvileged users with names defined by mon_usr_prefix=''%%mon_usr_prefix%%''' as " " from rdb$database;
+    		echo select 'Drop all non-prvileged users with names defined by mon_usr_prefix=''%%mon_usr_prefix%%''' as msg from rdb$database;
     		echo set heading on;
             echo commit;
             echo set transaction no wait;
@@ -4667,7 +4674,8 @@ for /f "tokens=*" %%a in ('find /n /v "" ^< !sourfile!') do (
 endlocal 
 goto:eof
 
-@rem -+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+@rem -=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+-=+
+
 
 :repl_with_bound_quotes
 

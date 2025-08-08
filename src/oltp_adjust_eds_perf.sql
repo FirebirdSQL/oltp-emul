@@ -8,10 +8,10 @@ set bail on;
 set list off;
 
 set heading off;
-select 'set list on; select ''oltp_adjust_eds_perf.sql start at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set list on; select ''oltp_adjust_eds_perf.sql start at '' || current_timestamp as msg from rdb$database;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set echo off; commit; set transaction no wait;' as " "
+select 'set echo off; commit; set transaction no wait;'
 from rdb$database
 ;
 commit;
@@ -232,7 +232,7 @@ commit;
 
 
 set term ^;
-execute block returns(" " varchar(32765)) as
+execute block returns("--TMP$SQL$CODE" varchar(32765)) as
     declare v_lf char(1) = x'0A';
 
     declare v_use_es smallint = null;
@@ -253,7 +253,7 @@ begin
 
     v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO, see oltp_adjust_eds_perf.sql';
 
-    " " = 'set bail on; '
+    "--TMP$SQL$CODE" = 'set bail on; '
     ;
     suspend;
 
@@ -272,7 +272,7 @@ begin
     -- +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     -- g e n e r a t e     S Q L     f o r    D R O P     t e m p o r a r y   P E R F _ E D S _ S P L I T _ nn
     -- +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-    for select sql_sttm from srv_gen_4drop_perf_eds_split into " "
+    for select sql_sttm from srv_gen_4drop_perf_eds_split into "--TMP$SQL$CODE"
     do 
         suspend;
 
@@ -304,7 +304,7 @@ begin
     i = 0;
     while ( i < v_perf_eds_split_cnt ) do
     begin
-        " " = v_lf || 'recreate table perf_eds_split_' || i || '(' || v_perf_eds_fld_ddl || ');'
+        "--TMP$SQL$CODE" = v_lf || 'recreate table perf_eds_split_' || i || '(' || v_perf_eds_fld_ddl || ');'
         ;
         suspend;
 
@@ -312,7 +312,7 @@ begin
             begin
                 -- ::: NB ::: Index on column ID must be created in ANY CASE, regardless of involving to replication.
                 -- See below 'for select perf_eds_split_<i> ... order by ID' - this order is MANDATORY for correct results of aggregation!
-                " " =  v_lf || 'alter table perf_eds_split_' || i || ' add constraint perf_eds_split_' || i || '_pk primary key(id);'
+                "--TMP$SQL$CODE" =  v_lf || 'alter table perf_eds_split_' || i || ' add constraint perf_eds_split_' || i || '_pk primary key(id);'
                 ;
                 suspend;
             end
@@ -320,7 +320,7 @@ begin
             begin
                 -- 4debug only, when perf_eds_split_NN rows are preserved rather than deleted
                 -- See below WHERE-expression of query: ' and p.att >=0 and p.id >= 0'
-                " " =  v_lf || 'alter table perf_eds_split_' || i || ' add constraint perf_eds_split_' || i || '_pk primary key(att, id);'
+                "--TMP$SQL$CODE" =  v_lf || 'alter table perf_eds_split_' || i || ' add constraint perf_eds_split_' || i || '_pk primary key(att, id);'
                 ;
                 suspend;
             end
@@ -328,33 +328,33 @@ begin
         
         i = i + 1;
     end
-    " " = 'commit;' ;
+    "--TMP$SQL$CODE" = 'commit;' ;
     suspend;
 
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
     --      a l t e r     v i e w     V _ P E R F _ E D S:    m a k e    i t    a s    " U N I O N E D "
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
-    " " = v_lf || 'Alter view v_perf_eds as ' ;
+    "--TMP$SQL$CODE" = v_lf || 'Alter view v_perf_eds as ' ;
     suspend;
     i = 0;
     while ( i < v_perf_eds_split_cnt ) do
     begin
         if ( i = 0 ) then
         begin
-            " " = v_lf || v_autogen ;
+            "--TMP$SQL$CODE" = v_lf || v_autogen ;
             suspend;
         end
-        " " = v_lf || 'select * from perf_eds_split_' || i || ' as p'||i -- add alias in order to reduce plan text length (4debug only)
+        "--TMP$SQL$CODE" = v_lf || 'select * from perf_eds_split_' || i || ' as p'||i -- add alias in order to reduce plan text length (4debug only)
         ;
         suspend;   
         
-        " " = v_lf || trim( iif( i <= v_perf_eds_split_cnt-2, 'union all', ';') )
+        "--TMP$SQL$CODE" = v_lf || trim( iif( i <= v_perf_eds_split_cnt-2, 'union all', ';') )
         ;
         suspend;
         
         i = i + 1;
     end
-    " " = 'commit;' ;
+    "--TMP$SQL$CODE" = 'commit;' ;
     suspend;
 
 
@@ -364,7 +364,7 @@ begin
     for
         select sql_sttm
         from tmp$sp$gen_trg_4_v_perf_eds( :v_perf_eds_split_cnt )
-        into " "
+        into "--TMP$SQL$CODE"
     do
         suspend;
 
@@ -377,7 +377,7 @@ begin
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
 
 
-    " " = v_lf || 'set term ^;'
+    "--TMP$SQL$CODE" = v_lf || 'set term ^;'
        || v_lf || 'create or alter procedure tmp_aggregate_perf_eds_autogen('
        || v_lf || '    a_ignore_stop_flag dm_sign = 0'
        || v_lf || ') returns(msg dm_info) as'
@@ -393,7 +393,7 @@ begin
     suspend;
 
 
-    " " = v_lf
+    "--TMP$SQL$CODE" = v_lf
        || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
        || v_lf || '    begin'
        || v_lf || '        -- Check that table `ext_stoptest` (external text file) is EMPTY,'
@@ -404,7 +404,7 @@ begin
     suspend;
 
 
-    " " = v_lf
+    "--TMP$SQL$CODE" = v_lf
        || v_lf || '    select p.test_time_dts_beg'
        || v_lf || '    from sp_get_test_time_dts p'
        || v_lf || '    into v_test_time_dts_beg;'
@@ -423,7 +423,7 @@ begin
 
         if (v_perf_eds_split_cnt > 1) then
         begin
-            " " =  v_lf || '-- ' || lpad( '', 80, '#' )
+            "--TMP$SQL$CODE" =  v_lf || '-- ' || lpad( '', 80, '#' )
                 || v_lf || '-- iter '|| (i+1) ||' of ' || v_perf_eds_split_cnt
             ;
             suspend;
@@ -433,7 +433,7 @@ begin
         if (i > 0) then
         begin
             -- All sessions except SID=1 must check stop-flag here:
-            " " =  v_lf 
+            "--TMP$SQL$CODE" =  v_lf 
                 || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
                 || v_lf || '    begin'
                 || v_lf || '        -- NB: only sessions with SID > 1 must check need to stop work'
@@ -445,7 +445,7 @@ begin
         end
 
 
-        " " =  v_lf || '    for'
+        "--TMP$SQL$CODE" =  v_lf || '    for'
             || v_lf || '        select'
             || v_lf || '             att'
             || v_lf || '            ,dts'
@@ -456,22 +456,22 @@ begin
 
         if (DBG_PRESERVE_PERF_EDS_ROWS = 1) then
             -- We have to handle rows from perf_eds_split<I> in the order of their appearance! INDEX IS MANDATORY HERE!
-            " " = " " || ' and p.att >=0 and p.id >= 0 order by p.att, p.id'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || ' and p.att >=0 and p.id >= 0 order by p.att, p.id'
             ;
 
         else
             -- We have to handle rows from perf_eds_split<I> in the order of their appearance! INDEX IS MANDATORY HERE!
-            " " = " " || ' order by p.id'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || ' order by p.id'
             ;
 
-        " " = " " 
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" 
             || v_lf || '    as cursor c'
             || v_lf || '    do begin'
         ;
         suspend;
 
         -- All sessions except SID=1 must check stop-flag here:
-        " " =  v_lf || '        v_rownum = v_rownum + 1;'
+        "--TMP$SQL$CODE" =  v_lf || '        v_rownum = v_rownum + 1;'
             || v_lf || '        if ( a_ignore_stop_flag = 0 and mod(v_rownum, v_stopcheck) = 0 ) then'
             || v_lf || '        begin'
             || v_lf || '            -- NB: only sessions with SID > 1 must check need to stop work'
@@ -514,7 +514,7 @@ begin
 
 
         -- Accumulate data about life activity: get avg_idle_ms, max_idle_ms (will be used in SP report_extpool_lifetime):
-        " " =  v_lf || '        update v_perf_eds_life_agg a set '
+        "--TMP$SQL$CODE" =  v_lf || '        update v_perf_eds_life_agg a set '
             || v_lf || '            dts_born = minvalue(dts_born, c.dts)' -- timestamp of EDS creation
             || v_lf || '           ,dts_last = iif(c.evt<>''D'', maxvalue(dts_last, c.dts), dts_last)' -- last EDS-activity before this connection gone
             || v_lf || '           ,dts_gone = maxvalue(dts_gone, c.dts)'  -- timestamp of detach
@@ -529,7 +529,7 @@ begin
         ;
         suspend;
 
-        " " =  v_lf || '        if ( row_count  = 0 ) then '
+        "--TMP$SQL$CODE" =  v_lf || '        if ( row_count  = 0 ) then '
             || v_lf || '            insert into v_perf_eds_life_agg('
             || v_lf || '                 att'           --  1
             || v_lf || '                ,dts_born'      --  2
@@ -593,7 +593,7 @@ begin
         */
         
         --  evt_overall_cnt = computed_by: sum of all evt_* counters
-        " " =  v_lf || '        v_minute_since_test_start = cast( datediff(second from v_test_time_dts_beg to c.dts) / 60 as int );'
+        "--TMP$SQL$CODE" =  v_lf || '        v_minute_since_test_start = cast( datediff(second from v_test_time_dts_beg to c.dts) / 60 as int );'
             || v_lf || '        update v_perf_eds_agg a set'
             || v_lf || '             evt_N_total_cnt = evt_N_total_cnt + iif(c.evt = ''N'', 1, 0)'
             || v_lf || '            ,evt_A_total_cnt = evt_A_total_cnt + iif(c.evt = ''A'', 1, 0)'
@@ -605,7 +605,7 @@ begin
         ;
         suspend;
 
-        " " =  v_lf || '        if ( row_count  = 0 ) then'
+        "--TMP$SQL$CODE" =  v_lf || '        if ( row_count  = 0 ) then'
             || v_lf || '            begin'
             || v_lf || '                insert into v_perf_eds_agg('
             || v_lf || '                    minute_since_test_start'
@@ -623,7 +623,7 @@ begin
         ;
         suspend;
 
-        " " =  v_lf || '                v_ins_rows = v_ins_rows + 1;'
+        "--TMP$SQL$CODE" =  v_lf || '                v_ins_rows = v_ins_rows + 1;'
             || v_lf || '            end'
             || v_lf || '        else'
             || v_lf || '            v_upd_rows = v_upd_rows + 1;'
@@ -633,7 +633,7 @@ begin
 
         if ( DBG_PRESERVE_PERF_EDS_ROWS = 0 ) then
             begin
-                " " =  v_lf || '       delete from perf_eds_split_' || i
+                "--TMP$SQL$CODE" =  v_lf || '       delete from perf_eds_split_' || i
                     || v_lf || '       where current of c;'
                 ;
                 suspend;
@@ -641,26 +641,26 @@ begin
         else
             begin
                 -- 4debug only: preserve rows rather than delete:
-                " " =  v_lf || '       update perf_eds_split_' || i || ' set att = -abs(att), id = -abs(id)'
+                "--TMP$SQL$CODE" =  v_lf || '       update perf_eds_split_' || i || ' set att = -abs(att), id = -abs(id)'
                     || v_lf || '       where current of c;'
                 ;
                 suspend;
             end
 
-        " " = v_lf || '    end' ;
+        "--TMP$SQL$CODE" = v_lf || '    end' ;
         suspend;
 
         i = i + 1;
 
     end
 
-    " " = v_lf || '    msg = ''i='' || v_ins_rows || '', u='' || v_upd_rows;'
+    "--TMP$SQL$CODE" = v_lf || '    msg = ''i='' || v_ins_rows || '', u='' || v_upd_rows;'
        || v_lf || '    rdb$set_context(''USER_SESSION'', ''ADD_INFO'', msg); -- to be displayed in result log of isql'
        || v_lf || '    suspend;'
     ;
     suspend;
 
-    " " =  v_lf 
+    "--TMP$SQL$CODE" =  v_lf 
         || v_lf || 'end ^'
         || v_lf || 'set term ;^'
         || v_lf || 'commit;'
@@ -679,10 +679,10 @@ commit;
 set heading off;
 set list on;
 
-select 'set echo off;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set list on; select ''oltp_adjust_eds_perf.sql finish at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set list on; select ''oltp_adjust_eds_perf.sql finish at '' || current_timestamp as msg from rdb$database;'
 from rdb$database
 ;
 commit;

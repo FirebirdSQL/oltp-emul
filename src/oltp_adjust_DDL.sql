@@ -10,12 +10,27 @@
 set bail on;
 set list on;
 
-select 'set list on; select ''oltp_adjust_DDL.sql start at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set echo off; commit; set transaction no wait;' as " "
+select 'set list on;'
+from rdb$database
+union all
+select 'select ''oltp_adjust_DDL.sql start at '' || current_timestamp as msg from rdb$database;'
+from rdb$database
+union all
+select 'set echo off; commit; set transaction no wait;'
 from rdb$database
 ;
+
+
+--select 'set list on; select ''oltp_adjust_DDL.sql start at '' || current_timestamp as msg from rdb$database;' as " "
+--from rdb$database
+--union all
+--select 'set echo off; commit; set transaction no wait;' as " "
+--from rdb$database
+--;
+
 commit;
 
 set transaction no wait;
@@ -314,7 +329,7 @@ commit;
 
 
 set term ^;
-execute block returns(" " varchar(32765)) as
+execute block returns("--TMP$SQL$CODE" varchar(32765)) as
     declare v_lf char(1);
     declare v_separate_workers smallint = null;
     declare v_sessions_count smallint = null;
@@ -337,14 +352,14 @@ begin
     v_lf = ascii_char(10);
     v_autogen = '-- ### ACHTUNG ### DO NOT EDIT, GENERATED AUTO, see oltp_adjust_DDL.sql';
 
-    " " = 'set bail on; ' || v_autogen
+    "--TMP$SQL$CODE" = 'set bail on; ' || v_autogen
     ;
     suspend;
 
     -- +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
     -- g e n e r a t e     S Q L     f o r    D R O P      o l d     t e m p o r a r y   P E R F_ S P L I T _ nn
     -- +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-    for select sql_sttm from srv_gen_4drop_perf_log_split into " " 
+    for select sql_sttm from srv_gen_4drop_perf_log_split into "--TMP$SQL$CODE" 
     do 
         suspend;
 
@@ -401,7 +416,7 @@ begin
       || v_lf || ' ,dump_trn bigint default current_transaction'
     ; -- len = ~520
 
-    " " = '-- char_length(v_perf_log_fld_ddl) = ' || char_length(v_perf_log_fld_ddl);
+    "--TMP$SQL$CODE" = '-- char_length(v_perf_log_fld_ddl) = ' || char_length(v_perf_log_fld_ddl);
     suspend;
 
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
@@ -411,53 +426,53 @@ begin
     i = 0;
     while ( i < v_perf_log_split_cnt ) do
     begin
-        " " = v_lf || 'recreate table perf_split_' || i || '(' || v_perf_log_fld_ddl || ');'
+        "--TMP$SQL$CODE" = v_lf || 'recreate table perf_split_' || i || '(' || v_perf_log_fld_ddl || ');'
         ;
         suspend;
 
         if ( v_used_in_repl = 1 ) then
             begin
-              " " =  v_lf || 'alter table perf_split_' || i || ' add constraint perf_split_' || i || '_pk primary key(id);'
+              "--TMP$SQL$CODE" =  v_lf || 'alter table perf_split_' || i || ' add constraint perf_split_' || i || '_pk primary key(id);'
               ;
               suspend;
 
             end
         else -- ==> UNIONED-view V_PERF_LOG will be used instead of TABLE PERF_LOG in all queries (NB: reports!)
             begin
-              " " =  v_lf || '-- SKIP adding primary key to PERF_SPLIT_' || i 
+              "--TMP$SQL$CODE" =  v_lf || '-- SKIP adding primary key to PERF_SPLIT_' || i 
               ;
               suspend;
             end
 
         i = i + 1;
     end
-    " " = 'commit;' ;
+    "--TMP$SQL$CODE" = 'commit;' ;
     suspend;
 
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
     --      a l t e r     v i e w     V _ P E R F _ L O G:    m a k e    i t    a s    " U N I O N E D "
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
-    " " = v_lf || 'Alter view v_perf_log as ' ;
+    "--TMP$SQL$CODE" = v_lf || 'Alter view v_perf_log as ' ;
     suspend;
     i = 0;
     while ( i < v_perf_log_split_cnt ) do
     begin
         if ( i = 0 ) then
         begin
-            " " = v_lf || v_autogen ;
+            "--TMP$SQL$CODE" = v_lf || v_autogen ;
             suspend;
         end
-        " " = v_lf || 'select * from perf_split_' || i || ' as p'||i -- add alias in order to reduce plan text length (4debug only)
+        "--TMP$SQL$CODE" = v_lf || 'select * from perf_split_' || i || ' as p'||i -- add alias in order to reduce plan text length (4debug only)
         ;
         suspend;   
         
-        " " = v_lf || trim( iif( i <= v_perf_log_split_cnt-2, 'union all', ';') )
+        "--TMP$SQL$CODE" = v_lf || trim( iif( i <= v_perf_log_split_cnt-2, 'union all', ';') )
         ;
         suspend;
         
         i = i + 1;
     end
-    " " = 'commit;' ;
+    "--TMP$SQL$CODE" = 'commit;' ;
     suspend;
 
 
@@ -466,7 +481,7 @@ begin
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
     for
         select sql_sttm from tmp$sp$gen_trigger_4_v_per_log( :v_perf_log_split_cnt )
-        into " "
+        into "--TMP$SQL$CODE"
     do
         suspend;
 
@@ -477,7 +492,7 @@ begin
     --     g e n e r a t e        p r o c     f o r     a g g.    p e r f.    r e s u l t s
     -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
 
-    " " = v_lf || 'set term ^;'
+    "--TMP$SQL$CODE" = v_lf || 'set term ^;'
        || v_lf || 'create or alter procedure tmp_aggregate_perf_log_autogen('
        || v_lf || '    a_ignore_stop_flag dm_sign = 0' -- added 19.09.2020
        || v_lf || ') returns(msg dm_info) as'
@@ -502,7 +517,7 @@ begin
     suspend;
 
     -- added 19.09.2020:
-    " " = v_lf
+    "--TMP$SQL$CODE" = v_lf
        || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
        || v_lf || '    begin'
        || v_lf || '        -- Check that table `ext_stoptest` (external text file) is EMPTY,'
@@ -513,7 +528,7 @@ begin
     suspend;
 
     --   || v_lf || '        -- We can SKIP from logging in perf_* tables if WARM_TIME not yet elapsed, i.e. when database is warmed-up.'
-    " " = v_lf
+    "--TMP$SQL$CODE" = v_lf
        || v_lf || '    select p.test_time_dts_beg, p.test_time_dts_end, p.test_intervals'
        || v_lf || '    from sp_get_test_time_dts p'
        || v_lf || '    into v_test_time_dts_beg, v_test_time_dts_end, v_intervals_number;'
@@ -533,7 +548,7 @@ begin
 
         if (v_perf_log_split_cnt > 1) then
         begin
-            " " =  v_lf || '-- ' || lpad( '', 80, '#' )
+            "--TMP$SQL$CODE" =  v_lf || '-- ' || lpad( '', 80, '#' )
                 || v_lf || '-- iter '|| (i+1) ||' of ' || v_perf_log_split_cnt
             ;
             suspend;
@@ -543,7 +558,7 @@ begin
         if (i > 0) then
         begin
             -- added 19.09.2020: all essions except SID=1 must check stop-flag here:
-            " " =  v_lf 
+            "--TMP$SQL$CODE" =  v_lf 
                 || v_lf || '    if ( a_ignore_stop_flag = 0 ) then'
                 || v_lf || '    begin'
                 || v_lf || '        -- NB: only sessions with SID > 1 must check need to stop work'
@@ -556,7 +571,7 @@ begin
 
 
 
-        " " =  v_lf || '    for'
+        "--TMP$SQL$CODE" =  v_lf || '    for'
             || v_lf || '        select'
             || v_lf || '             unit'
             || v_lf || '            ,exc_unit'
@@ -572,12 +587,12 @@ begin
         if ( DBG_PRESERVE_PERF_LOG_ROWS = 1  ) then
         begin
             -- temply, 4debug only: need for compare results with old report SPs
-            " " =  v_lf || '              and id > 0'
+            "--TMP$SQL$CODE" =  v_lf || '              and id > 0'
             ;
             suspend;
         end
 
-        " " =  v_lf || '        into'
+        "--TMP$SQL$CODE" =  v_lf || '        into'
             || v_lf || '             unit'
             || v_lf || '            ,exc_unit'
             || v_lf || '            ,fb_gdscode'
@@ -589,7 +604,7 @@ begin
         suspend;
 
         -- added 19.09.2020: all essions except SID=1 must check stop-flag here:
-        " " =  v_lf || '        v_rownum = v_rownum + 1;'
+        "--TMP$SQL$CODE" =  v_lf || '        v_rownum = v_rownum + 1;'
             || v_lf || '        if ( a_ignore_stop_flag = 0 and mod(v_rownum, v_stopcheck) = 0 ) then'
             || v_lf || '        begin'
             || v_lf || '            -- NB: only sessions with SID > 1 must check need to stop work'
@@ -599,7 +614,7 @@ begin
         ;
         suspend;
 
-        " " =  v_lf || '        v_dts_interval = 1 + cast( datediff(second from v_test_time_dts_beg to v_dts_end) / v_seconds_per_interval as int);'
+        "--TMP$SQL$CODE" =  v_lf || '        v_dts_interval = 1 + cast( datediff(second from v_test_time_dts_beg to v_dts_end) / v_seconds_per_interval as int);'
             || v_lf || '        update v_perf_agg a set'
             || v_lf || '             total_cnt = total_cnt + 1'
             || v_lf || '            ,total_ms = total_ms + :elapsed_ms'
@@ -614,7 +629,7 @@ begin
         ;
         suspend;
 
-        " " =  v_lf || '        if ( row_count  = 0 ) then'
+        "--TMP$SQL$CODE" =  v_lf || '        if ( row_count  = 0 ) then'
             || v_lf || '            begin'
             || v_lf || '                insert into v_perf_agg( unit,  exc_unit,  fb_gdscode,  dts_interval,    total_cnt, total_ms,    min_ms,      max_ms )'
             || v_lf || '                                values( :unit, :exc_unit, :fb_gdscode, :v_dts_interval,         1, :elapsed_ms, :elapsed_ms, :elapsed_ms );'
@@ -629,33 +644,33 @@ begin
         if ( DBG_PRESERVE_PERF_LOG_ROWS = 1  ) then
             begin
                 -- temply, 4debug only: need for compare results with old report SPs
-                " " =  v_lf || '        update perf_split_' || i || ' set id = -id'
+                "--TMP$SQL$CODE" =  v_lf || '        update perf_split_' || i || ' set id = -id'
                     || v_lf || '        where current of c;'
                 ;
                 suspend;
             end
         else
             begin
-                " " =  v_lf || '       delete from perf_split_' || i
+                "--TMP$SQL$CODE" =  v_lf || '       delete from perf_split_' || i
                     || v_lf || '       where current of c;'
                 ;
                 suspend;
             end
 
-        " " = v_lf || '    end' ;
+        "--TMP$SQL$CODE" = v_lf || '    end' ;
         suspend;
 
         i = i + 1;
 
     end
 
-    " " = v_lf || '    msg = ''i='' || v_ins_rows || '', u='' || v_upd_rows;'
+    "--TMP$SQL$CODE" = v_lf || '    msg = ''i='' || v_ins_rows || '', u='' || v_upd_rows;'
        || v_lf || '    rdb$set_context(''USER_SESSION'', ''ADD_INFO'', msg); -- to be displayed in result log of isql'
        || v_lf || '    suspend;'
     ;
     suspend;
 
-    " " =  v_lf 
+    "--TMP$SQL$CODE" =  v_lf 
         || v_lf || 'end ^'
         || v_lf || 'set term ;^'
         || v_lf || 'commit;'
@@ -670,7 +685,7 @@ end
 --    g e n e r a t e        D D L      f o r     d r o p / c r e a t e    i n d i c e s
 --    o n    t a b l e s     D O C _ L I S T,     P D I S T R,     P S T O R N E D
 -- +#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#+#
-execute block returns(" " varchar(32765)) as
+execute block returns("--TMP$SQL$CODE" varchar(32765)) as
     declare v_lf char(1);
     declare v_separate_workers smallint = null;
     declare v_old_index_name varchar(31);
@@ -692,7 +707,7 @@ begin
               )
         into v_old_index_name
     do begin
-        " " = v_lf || 'drop index ' || trim(v_old_index_name) || ';' ;
+        "--TMP$SQL$CODE" = v_lf || 'drop index ' || trim(v_old_index_name) || ';' ;
         suspend;
     end
 
@@ -710,7 +725,7 @@ begin
                        )
                ) then
             begin
-                " " = v_lf || 'alter table doc_list drop constraint worker_id_nn;'
+                "--TMP$SQL$CODE" = v_lf || 'alter table doc_list drop constraint worker_id_nn;'
                    || v_lf || 'commit;' 
                 ;
                 suspend;
@@ -728,14 +743,14 @@ begin
                        )
                ) then
             begin
-                " " = v_lf || 'alter table doc_list alter column worker_id drop NOT null;'
+                "--TMP$SQL$CODE" = v_lf || 'alter table doc_list alter column worker_id drop NOT null;'
                    || v_lf || 'commit;' 
                 ;
                 suspend;
             end
         end
 
-    " " = v_lf || 'commit;';
+    "--TMP$SQL$CODE" = v_lf || 'commit;';
     suspend;
 
 
@@ -757,7 +772,7 @@ begin
             -- This field contains 'sequential number' of each ISQL and serves for separating
             -- scope of documents which can be handled by "this" ISQL session.
 
-            " " = 'create index doc_list_worker_optype on doc_list(worker_id, optype_id);' || v_lf ||
+            "--TMP$SQL$CODE" = 'create index doc_list_worker_optype on doc_list(worker_id, optype_id);' || v_lf ||
                   'commit;' ;
             suspend;
 
@@ -768,20 +783,20 @@ begin
                 -- Otherwise we have to leave existing documents with worker_id = null:
 
                 if ( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.5' ) then
-                    " " = 'alter table doc_list add constraint worker_id_nn check( worker_id is not null );' ;
+                    "--TMP$SQL$CODE" = 'alter table doc_list add constraint worker_id_nn check( worker_id is not null );' ;
                 else
-                    " " = 'alter table doc_list alter column worker_id set NOT null;' ;
+                    "--TMP$SQL$CODE" = 'alter table doc_list alter column worker_id set NOT null;' ;
 
-                " " = " " || v_lf || 'commit;' ;
+                "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;' ;
                 suspend;
             end
 
             ---------------------------------------------------------------------------------------------
-            " " = 'create index pdistr_worker_snd_id on pdistr(worker_id, snd_id);' || v_lf ||
+            "--TMP$SQL$CODE" = 'create index pdistr_worker_snd_id on pdistr(worker_id, snd_id);' || v_lf ||
                   'commit;' ;
             suspend;
             ---------------------------------------------------------------------------------------------
-            " " = 'create index pstorned_worker_id on pstorned(worker_id);' || v_lf ||
+            "--TMP$SQL$CODE" = 'create index pstorned_worker_id on pstorned(worker_id);' || v_lf ||
                   'commit;' ;
             suspend;
         end -- v_separate_workers = 1
@@ -791,7 +806,7 @@ begin
 
             -- NB: it seems that index on doc_list(optype_id) is HARMFUL because of too low selectivity!
             -- Benchmark is needed; index creation is deferred.
-            " " =    v_lf || 'create index pdistr_snd_id on pdistr(snd_id);' 
+            "--TMP$SQL$CODE" =    v_lf || 'create index pdistr_snd_id on pdistr(snd_id);' 
                   || v_lf || 'commit;' ;
             suspend;
         end -- v_separate_workers = 0
@@ -809,10 +824,10 @@ commit;
 set heading off;
 set list on;
 
-select 'set echo off;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set list on; select ''oltp_adjust_DDL.sql finish at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set list on; select ''oltp_adjust_DDL.sql finish at '' || current_timestamp as msg from rdb$database;' as "--TMP$SQL$CODE"
 from rdb$database
 ;
 commit;

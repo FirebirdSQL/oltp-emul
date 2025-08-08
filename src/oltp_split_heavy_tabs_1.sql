@@ -314,20 +314,30 @@ commit;
 
 -- |||||||||||||||||||||||||||||||||||   M A I N     S T A R T   |||||||||||||||||||||||||||||||
 
---set heading off;
 set list on;
 
-select 'select ''oltp_split_heavy_tabs_1.sql start at '' || current_timestamp as msg from rdb$database;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'set echo off;' as " "
+select 'set list on;'
+from rdb$database
+union all
+select 'select ''oltp_split_heavy_tabs_1.sql start at '' || current_timestamp as msg from rdb$database;'
 from rdb$database
 ;
+
+--select 'select ''oltp_split_heavy_tabs_1.sql start at '' || current_timestamp as msg from rdb$database;' as "--TMP$SQL$CODE"
+--from rdb$database
+--union all
+--select 'set echo off;'
+--from rdb$database
+--;
+
 commit;
 
 --set transaction no wait;
 set term ^;
-execute block returns(" " varchar(32765)) as
+execute block returns("--TMP$SQL$CODE" varchar(32765)) as
   declare v_lf char(10);
 
   declare v_old_name varchar(31);
@@ -387,7 +397,7 @@ begin
     v_lf = ascii_char(10);
 
     
-    " " =    v_lf || 'set bail on;'
+    "--TMP$SQL$CODE" =    v_lf || 'set bail on;'
           || v_lf || '-- #########'
           || v_lf || 'execute procedure tmp_init_autogen_qdistr_tables;'
           || v_lf || 'execute procedure tmp_init_autogen_qstorn_tables;'
@@ -399,19 +409,19 @@ begin
 
     -- Change target table that will be affected in SP_MULTIPLY_ROWS_FOR_QDISTR when
     -- client order is created ("Qdistr" ==> "XQD_1000_1200"):
-    " " = 'alter view v_qdistr_multiply_1 as '; 
-    " " = " " || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
-    " " = " " || v_lf || 'select * from XQD_1000_1200';
-    " " = " " || v_lf || ';'
+    "--TMP$SQL$CODE" = 'alter view v_qdistr_multiply_1 as '; 
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'select * from XQD_1000_1200';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || ';'
     ;
 
     suspend;
 
 
-    " " = 'alter view v_qdistr_multiply_2 as '; 
-    " " = " " || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
-    " " = " " || v_lf || 'select * from XQD_1000_3300';
-    " " = " " || v_lf || ';'
+    "--TMP$SQL$CODE" = 'alter view v_qdistr_multiply_2 as '; 
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '-- ### DDL has been auto replaced because of test config requirements. DO NOT EDIT! ###';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'select * from XQD_1000_3300';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || ';'
     ;
 
     suspend;
@@ -490,23 +500,23 @@ begin
         end
 
       
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:v_sp_auto_name,-1,0) where src is not null into v_src
         do begin
-            " " = " " || v_lf || replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
         end
     
-        " " = " " || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_lf;
     
-        " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "v_qdistr_name_for_*" were replaced with "'||upper(v_qd_name_4del)||'" and "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### References to "v_qstorno_name_for_*" were replaced with "'||upper(v_qs_name_4del)||'" and "'||upper(v_qs_name_4ins)||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "v_qdistr_name_for_*" were replaced with "'||upper(v_qd_name_4del)||'" and "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### References to "v_qstorno_name_for_*" were replaced with "'||upper(v_qs_name_4del)||'" and "'||upper(v_qs_name_4ins)||'" ###'';' || v_lf;
     
-        " " = " " || v_lf || v_body_repl;
-        " " = " " || v_lf;
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_body_repl;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
     
         suspend;
 
@@ -544,23 +554,23 @@ begin
       v_body_repl = v_body_repl || v_line_repl || v_lf;
     end
 
-    " " = 'set term ^;' || v_lf;
+    "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
     for
         select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
     do begin
-        " " = " " || v_src || v_lf; -- add empty line after last SP header line
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf; -- add empty line after last SP header line
     end
 
-    " " = " " || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
 
-    " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### Deletion from "v_qdistr_name_for_del" was replaced with "'||upper(v_qd_name_4del)||'" ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### Insertion into "v_qstorno_name_for_ins" was replaced with "'||upper(v_qs_name_4ins)||'" ###'';' || v_lf || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### Deletion from "v_qdistr_name_for_del" was replaced with "'||upper(v_qd_name_4del)||'" ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### Insertion into "v_qstorno_name_for_ins" was replaced with "'||upper(v_qs_name_4ins)||'" ###'';' || v_lf || v_lf;
 
-    " " = " " || v_body_repl;
-    " " = " " || v_lf;
-    " " = " " || v_lf || '^';
-    " " = " " || v_lf || 'set term ;^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
     suspend;
 
@@ -599,24 +609,24 @@ begin
           v_body_repl = v_body_repl || v_line_repl || v_lf;
     end
 
-    " " = 'set term ^;' || v_lf;
+    "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
     for
         select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
     do begin
         v_src = trim(trailing from v_src);
-        " " = " " || v_src || v_lf;  -- add empty line after last SP header line
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf;  -- add empty line after last SP header line
     end
 
-    " " = " " || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
 
-    " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "v_qdistr_target_*" were replaced with "xqd_1000_3300" and "xqd_1000_1200" ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### References to "v_qstorned_target_*" were replaced with "xsd_1000_3300" and "xsd_1000_1200" ###'';' || v_lf || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "v_qdistr_target_*" were replaced with "xqd_1000_3300" and "xqd_1000_1200" ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### References to "v_qstorned_target_*" were replaced with "xsd_1000_3300" and "xsd_1000_1200" ###'';' || v_lf || v_lf;
 
-    " " = " " || v_body_repl;
-    " " = " " || v_lf;
-    " " = " " || v_lf || '^';
-    " " = " " || v_lf || 'set term ;^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
     suspend;
 
@@ -660,25 +670,25 @@ begin
           v_body_repl = v_body_repl || v_line_repl || v_lf;
         end
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:sp_init_name,-1,0) where src is not null into v_src
         do begin
-            " " = " " || v_src || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf;
         end
 
     
-        " " = " " || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_lf;
     
-        " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "V_QD_ALIAS_FOR_DEL" were replaced with "'||upper(v_qd_name_4del)||'" ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### References to "V_QD_ALIAS_FOR_INS" were replaced with "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "V_QD_ALIAS_FOR_DEL" were replaced with "'||upper(v_qd_name_4del)||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### References to "V_QD_ALIAS_FOR_INS" were replaced with "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf;
 
     
-        " " = " " || v_body_repl;
-        " " = " " || v_lf;
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
     
         suspend;
 
@@ -722,23 +732,23 @@ begin
           v_body_repl = v_body_repl || v_line_repl || v_lf;
     end
 
-    " " = 'set term ^;' || v_lf;
+    "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
     for
         select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
     do begin
-        " " = " " || v_src || v_lf;  -- add empty line after last SP header line
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf;  -- add empty line after last SP header line
     end
 
-    " " = " " || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
 
-    " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### Deletion from "v_qdistr_name_for_del" was replaced with "'||upper(v_qs_name_4del)||'" ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### Insertion into "v_qdistr_name_for_ins" was replaced with "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### Deletion from "v_qdistr_name_for_del" was replaced with "'||upper(v_qs_name_4del)||'" ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### Insertion into "v_qdistr_name_for_ins" was replaced with "'||upper(v_qd_name_4ins)||'" ###'';' || v_lf || v_lf;
 
-    " " = " " || v_body_repl;
-    " " = " " || v_lf;
-    " " = " " || v_lf || '^';
-    " " = " " || v_lf || 'set term ;^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
     suspend;
 
@@ -755,16 +765,16 @@ begin
         sp_repl_name = 'SP_LOCK_DEPENDENT_DOCS'; -- used when we call sp_cancel_supplier_invoice and sp_cancel_supplier_order
         v_sp_auto_name = iif(i=1, 'X_LOCK_DEPDOCS_ON_CANC_SUP_ORD', 'X_LOCK_DEPDOCS_ON_CANC_INVOICE'); -- new names of 'SP_LOCK_DEPENDENT_DOCS'
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
         do begin
             v_src = trim(trailing from v_src);
-            " " = " " || v_lf || replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
         end
-        " " = " " || 'begin' || v_lf || 'end';
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'begin' || v_lf || 'end';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
         suspend;
         -- Result: STUB code has been generated for X_LOCK_DEPDOCS_ON_CANC_SUP_ORD and X_LOCK_DEPDOCS_ON_CANC_INVOICE.
         -- In the next loop we can refer to these procedures while doing injections into source code of 
@@ -813,24 +823,24 @@ begin
         end
 
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_line_repl
         do begin
             --v_line_repl = trim(trailing from v_src);
             v_line_repl = replace( v_line_repl collate unicode_ci , ' '||sp_repl_name, ' '||lower(v_sp_auto_name)) ||v_lf;
-            " " = " " || v_lf || v_line_repl; -- replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_line_repl; -- replace(v_src, ' '||sp_repl_name, ' '||v_sp_auto_name) || v_lf;
         end
 
-        " " = " " || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_lf;
     
-        " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "v_qstorned_source" were replaced with "'||upper(v_qs_auto_name)||'" ###'';' || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "v_qstorned_source" were replaced with "'||upper(v_qs_auto_name)||'" ###'';' || v_lf || v_lf;
     
-        " " = " " || v_body_repl;
-        " " = " " || v_lf;
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
         suspend;
 
@@ -842,7 +852,7 @@ begin
         v_add_comment = 0;
         -- sp_init_name = iif(i=1, 'SP_CANCEL_SUPPLIER_ORDER', 'SP_ADD_INVOICE_TO_STOCK'); -- where we replace call to old name ('SP_LOCK_DEPENDENT_DOCS') with new one
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
 
         for
             select src from SYS_GET_PROC_DDL(:sp_init_name,1,0) where src is not null into v_line_repl
@@ -852,7 +862,7 @@ begin
             begin
                v_add_comment = 1;
                v_line_repl = v_lf
-                       || 'declare "!ACHTUNG_README!" VARCHAR(255) = ''### References of "'||sp_repl_name||'" were replaced with "'|| v_sp_auto_name ||'" DO NOT EDIT.### '';'
+                       || 'declare "-- ACHTUNG_READ_ME" VARCHAR(255) = ''### References of "'||sp_repl_name||'" were replaced with "'|| v_sp_auto_name ||'" DO NOT EDIT.### '';'
                        || v_lf || v_lf 
                        || v_line_repl;
             end
@@ -871,11 +881,11 @@ begin
             else if ( v_line_repl containing sp_repl_name ) then
                 v_line_repl = replace( v_line_repl collate unicode_ci, sp_repl_name, lower('X_LOCK_DEPDOCS_ON_CANC_INVOICE') );
 
-            " " = " " || v_lf || v_line_repl;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_line_repl;
 
         end
 
-        " " = " " || v_lf || '^' || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^' || v_lf || 'set term ;^';
         suspend;
 
         i = i + 1;
@@ -947,7 +957,7 @@ begin
         -- Generate procedures with name = 'X_MAKE_QSTORNO_NNNN_MMMM'
         -- They will be called from SP_SUPPLIER_ORDER, SP_SUPPLIER_INVOICE, SP_CUSTOMER_RESERVE
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) -- get header of 'SP_MAKE_QTY_STORNO'
             where src is not null
@@ -955,14 +965,14 @@ begin
         do begin
             --v_src = trim(trailing from v_src);
             v_line_repl = replace( v_line_repl collate unicode_ci , :sp_repl_name, v_sp_auto_name ); 
-            " " = " " || v_line_repl || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_line_repl || v_lf;
         end
-        " " = " " || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "v_qdistr_source_1" were replaced with "'||v_qd_name_4del||'" ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_3!" varchar(255) = ''### References to "v_qdistr_target_1" were replaced with "'||v_qd_name_4ins||'" ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_4!" varchar(255) = ''### References to "v_qstorned_target_1" were replaced with "'||v_qs_name_4ins||'" ###'';' || v_lf;
-        " " = " " || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### GENERATED AUTO, BASED ON '||sp_repl_name||'. DO NOT EDIT ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "v_qdistr_source_1" were replaced with "'||v_qd_name_4del||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_3" varchar(255) = ''### References to "v_qdistr_target_1" were replaced with "'||v_qd_name_4ins||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_4" varchar(255) = ''### References to "v_qstorned_target_1" were replaced with "'||v_qs_name_4ins||'" ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
         suspend;
 
 
@@ -990,25 +1000,25 @@ begin
             v_line_repl = replace( v_line_repl collate unicode_ci , 'v_qstorned_target_1', v_qs_name_4ins ); 
             v_line_repl = replace( v_line_repl collate unicode_ci , 'v_qstorned_target_2', 'xqs_1000_3300'); -- 'autogen_qs1000' );
 
-            -- //// " " = v_line_repl;
+            -- //// "--TMP$SQL$CODE" = v_line_repl;
             if ( char_length(v_body_repl) + char_length(v_line_repl) + 2 < 32000 ) then
                 begin
                   v_body_repl = v_body_repl || v_line_repl || v_lf;
                 end
             else
                 begin
-                    " " = v_body_repl;
+                    "--TMP$SQL$CODE" = v_body_repl;
                     suspend;
                     v_body_repl = v_line_repl || v_lf ;
                 end
 
             -- ///suspend;
         end
-        " " = v_body_repl; 
+        "--TMP$SQL$CODE" = v_body_repl; 
         suspend;
 
 
-        " " = v_lf || '^' || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = v_lf || '^' || v_lf || 'set term ;^';
         suspend;
 
 
@@ -1038,22 +1048,22 @@ begin
 
         v_proc_body = replace(replace(v_proc_body, lower(sp_repl_name), lower(v_sp_auto_name) ), upper(sp_repl_name), upper(v_sp_auto_name) );
 
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
 
         for
             select src from SYS_GET_PROC_DDL(:sp_init_name,-1,0) where src is not null into v_src
         do begin
             v_src = trim(trailing from v_src);
-            " " = " " || v_src || v_lf;
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf;
         end
 
-        " " = " " || v_lf || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME!" varchar(255) = ''### AUTO REPLACED CALLS OF "'||sp_repl_name||'" WITH "'||v_sp_auto_name||'". DO NOT EDIT ###'';' || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME" varchar(255) = ''### AUTO REPLACED CALLS OF "'||sp_repl_name||'" WITH "'||v_sp_auto_name||'". DO NOT EDIT ###'';' || v_lf || v_lf;
 
-        " " = " " || v_proc_body;
-        " " = " " || v_lf;
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_proc_body;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
         suspend;
 
@@ -1116,11 +1126,11 @@ begin
 
                   v_body_repl = v_body_repl || v_line_repl || v_lf;
 
-                  --" " = v_line_repl; -- output arg.
+                  --"--TMP$SQL$CODE" = v_line_repl; -- output arg.
                   -- suspend;
               end
 
-              " " = v_body_repl;
+              "--TMP$SQL$CODE" = v_body_repl;
               suspend;
 
               i = i + 1;
@@ -1158,19 +1168,19 @@ begin
           v_body_repl = v_body_repl || v_line_repl || v_lf;
         end
     
-        " " = 'set term ^;' || v_lf;
+        "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
         for
             select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
         do begin
-            " " = " " || v_src || v_lf; -- add empty line after last SP header line
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf; -- add empty line after last SP header line
         end
-        " " = " " || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### DO NOT EDIT ###'';' || v_lf;
-        " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "v_qdistr_source" were replaced with "'||v_qd_auto_name||'" ###'';' || v_lf || v_lf;
-        " " = " " || v_body_repl;
-        " " = " " || v_lf;
-        " " = " " || v_lf || '^';
-        " " = " " || v_lf || 'set term ;^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### DO NOT EDIT ###'';' || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "v_qdistr_source" were replaced with "'||v_qd_auto_name||'" ###'';' || v_lf || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
     
         suspend;
         i = i + 1;
@@ -1218,19 +1228,19 @@ begin
       v_body_repl = v_body_repl || v_line_repl || v_lf;
     end
 
-    " " = 'set term ^;' || v_lf;
+    "--TMP$SQL$CODE" = 'set term ^;' || v_lf;
     for
         select src from SYS_GET_PROC_DDL(:sp_repl_name,-1,0) where src is not null into v_src
     do begin
-        " " = " " || v_src || v_lf; -- add empty line after last SP header line
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_src || v_lf; -- add empty line after last SP header line
     end
-    " " = " " || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_1!" varchar(255) = ''### DO NOT EDIT ###'';' || v_lf;
-    " " = " " || 'declare "!ACHTUNG_READ_ME_2!" varchar(255) = ''### References to "QDISTR" and "QSTORNED" were replaced with list of auto generated tables XQD_* and XQS_* ###'';' || v_lf;
-    " " = " " || v_body_repl;
-    " " = " " || v_lf;
-    " " = " " || v_lf || '^';
-    " " = " " || v_lf || 'set term ;^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_1" varchar(255) = ''### DO NOT EDIT ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'declare "-- ACHTUNG_READ_ME_2" varchar(255) = ''### References to "QDISTR" and "QSTORNED" were replaced with list of auto generated tables XQD_* and XQS_* ###'';' || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_body_repl;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf;
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || '^';
+    "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'set term ;^';
 
     suspend;
 
@@ -1242,7 +1252,7 @@ begin
     k = 1;
     while (k <= 2) do
     begin
-        " " = 'alter view '|| iif(k=1, 'v_qdistr_source', 'v_qstorned_source') ||' as '||v_lf
+        "--TMP$SQL$CODE" = 'alter view '|| iif(k=1, 'v_qdistr_source', 'v_qstorned_source') ||' as '||v_lf
               || '-- DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1":'
               || v_lf;
         i = 0;
@@ -1252,18 +1262,18 @@ begin
             where q.snd_optype_id is not null
             into v_qd_auto_name
         do begin
-            " " = " " || iif(i = 0, '', v_lf||'UNION ALL'||v_lf);
-            " " = " " || 'select '''||iif(k=1,'xqd_', 'xqs_') || v_qd_auto_name ||''' as src, q.* from '
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || iif(i = 0, '', v_lf||'UNION ALL'||v_lf);
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || 'select '''||iif(k=1,'xqd_', 'xqs_') || v_qd_auto_name ||''' as src, q.* from '
                       || iif(k=1, 'xqd_', 'xqs_') || v_qd_auto_name ||' q';
             i = i + 1;
         end
-        " " = " " || v_lf || ';';
+        "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || ';';
         suspend;
         k = k + 1;
     end
 
    
-    " " = '
+    "--TMP$SQL$CODE" = '
     create or alter view z_autogen_qd_qs as
     -- DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1":
     -- 4debug: analysis of dumped dirty data (filled by SP zdump4dbg in some critical errors)
@@ -1309,7 +1319,7 @@ begin
     -- DISABLED 11.01.2019! REPLACED WITH MORE APPROPRIATE CODE, SEE BELOW:
     ----- 13.11.2015: query to this view can be significantly faster if it is replaced 
     ----- with just single select to xqd_1000_3300 which has index on doc_id:
-    --" " =  'alter view v_min_id_clo_res as' || v_lf
+    --"--TMP$SQL$CODE" =  'alter view v_min_id_clo_res as' || v_lf
     --    || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
     --    || 'select doc_id as id' || v_lf
     --    || 'from xqd_1000_3300' || v_lf
@@ -1319,7 +1329,7 @@ begin
     --
     --suspend;
     --
-    --" " =  'alter view v_random_find_clo_res as' || v_lf
+    --"--TMP$SQL$CODE" =  'alter view v_random_find_clo_res as' || v_lf
     --    || '-- ### DO NOT EDIT! ### DDL was replaced by oltp_split_heavy_tabs_1.sql due to config "create_with_split_heavy_tabs = 1"' || v_lf
     --    || 'select h.id' || v_lf
     --    || 'from doc_list h' || v_lf
@@ -1331,7 +1341,7 @@ begin
     --;
     --suspend;
     --
-    --" " = 'commit;';
+    --"--TMP$SQL$CODE" = 'commit;';
     --suspend;
 
 
@@ -1344,17 +1354,17 @@ begin
         begin
 
             -------------------------------- v _ m i n _ i d  _ c l o _ r e s ------------------------------
-            " " =  v_lf
+            "--TMP$SQL$CODE" =  v_lf
                 || 'alter view v_min_id_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'COMPOUND_ASCENDING' ), '@2', 'worker_id, doc_id')
             ;
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'select doc_id as id' || v_lf
                 || 'from xqd_1000_3300 q' || v_lf
                 || 'where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
                 || '    q.worker_id is not distinct from '
             ;
-            " " = " "
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE"
                 || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
                         '(select result from fn_this_worker_seq_no)', 
                         'fn_this_worker_seq_no()' 
@@ -1364,30 +1374,30 @@ begin
                 || 'order by q.worker_id, q.doc_id' || v_lf
                 || 'rows 1;' || v_lf
             ;
-            " " = " " || v_lf || 'commit;'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;'
             ;
             suspend;
 
 
             -------------------------------- v _ m a x _ i d  _ c l o _ r e s ------------------------------
-            " " =  v_lf
+            "--TMP$SQL$CODE" =  v_lf
                 || 'alter view v_max_id_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'COMPOUND_DESCENDING' ), '@2', 'worker_id, doc_id')
             ;
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'select doc_id as id' || v_lf
                 || 'from xqd_1000_3300 q' || v_lf
                 || 'where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
                 || '    q.worker_id is not distinct from '
             ;
-            " " = " "
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE"
                 || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
                         '(select result from fn_this_worker_seq_no)', 
                         'fn_this_worker_seq_no()' 
                       )
             ;
 
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || '-- NB: column "worker_id" must present in ''ORDER_BY'' clause only for FB 2.5' || v_lf
                 || '-- Otherwise plan will be: SORT Q INDEX <ascending_index>' || v_lf
                 || '-- i.e. desc index will be ignored.' || v_lf
@@ -1395,42 +1405,42 @@ begin
             ;
 
 
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'order by q.worker_id DESC, q.doc_id DESC' || v_lf
                 || 'rows 1;' || v_lf
             ;
-            " " = " " || v_lf || 'commit;'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;'
             ;
             suspend;        
 
 
             -------------------------------- v _ r a n d o m  _ f i n d _ c l o _ r e s ------------------------------
-            " " =  'alter view v_random_find_clo_res as' || v_lf
+            "--TMP$SQL$CODE" =  'alter view v_random_find_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'COMPOUND' ), '@2', 'doc_id')
             ;
 
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'select h.id' || v_lf
                 || 'from doc_list h' || v_lf
                 || 'where ' || v_lf
                 || '    h.optype_id = 1000' || v_lf
                 || '    and h.worker_id is not distinct from '
             ;
-            " " = " "
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE"
                 || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
                         '(select result from fn_this_worker_seq_no)', 
                         'fn_this_worker_seq_no()' 
                       )
             ;
 
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || '    and exists(' || v_lf
                 || '        select * from xqd_1000_3300 q' || v_lf
                 || '        where -- column q.worker_id is compared with result of rdb$get_context():' || v_lf
                 || '            q.worker_id is not distinct from '
             ;
 
-            " " = " "
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE"
                 || iif( rdb$get_context('SYSTEM','ENGINE_VERSION') starting with '2.', 
                         '(select result from fn_this_worker_seq_no)', 
                         'fn_this_worker_seq_no()' 
@@ -1440,7 +1450,7 @@ begin
             ;
             suspend;
 
-            " " = 'commit;';
+            "--TMP$SQL$CODE" = 'commit;';
             suspend;
 
 
@@ -1448,39 +1458,39 @@ begin
     else --    ______________________________  s e p a r a t e _ w o r k e r s = 0 _________________________
         begin
             -------------------------------- v _ m i n _ i d  _ c l o _ r e s ------------------------------
-            " " =  v_lf
+            "--TMP$SQL$CODE" =  v_lf
                 || 'alter view v_min_id_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN_ASCENDING' ), '@2', 'doc_id')
             ;
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'select doc_id as id' || v_lf
                 || 'from xqd_1000_3300 q' || v_lf
                 || 'order by doc_id' || v_lf
                 || 'rows 1;' || v_lf
             ;
-            " " = " " || v_lf || 'commit;'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;'
             ;
             suspend;
 
 
             -------------------------------- v _ m a x _ i d  _ c l o _ r e s ------------------------------
-            " " =  v_lf
+            "--TMP$SQL$CODE" =  v_lf
                 || 'alter view v_max_id_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN_DESCENDING' ), '@2', 'doc_id')
             ;
-            " " = " " || v_lf
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf
                 || 'select doc_id as id' || v_lf
                 || 'from xqd_1000_3300 q' || v_lf
                 || 'order by doc_id DESC' || v_lf
                 || 'rows 1;' || v_lf
             ;
-            " " = " " || v_lf || 'commit;'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;'
             ;
             suspend;
 
 
             -------------------------------- v _ r a n d o m  _ f i n d _ c l o _ r e s ------------------------------
-            " " =  'alter view v_random_find_clo_res as' || v_lf
+            "--TMP$SQL$CODE" =  'alter view v_random_find_clo_res as' || v_lf
                 || replace(replace( v_body_line, '@1', 'SINGLE_COLUMN' ), '@2', 'doc_id')
                 || 'select h.id' || v_lf
                 || 'from doc_list h' || v_lf
@@ -1491,7 +1501,7 @@ begin
                 || '    where q.doc_id = h.id' || v_lf
                 || ');' || v_lf
             ;
-            " " = " " || v_lf || 'commit;'
+            "--TMP$SQL$CODE" = "--TMP$SQL$CODE" || v_lf || 'commit;'
             ;
             suspend;
 
@@ -1504,7 +1514,7 @@ begin
 
 
   
-    " " = 'set term ^;' || v_lf
+    "--TMP$SQL$CODE" = 'set term ^;' || v_lf
           || 'alter procedure SP_KILL_QSTORNO_RET_QS2QD as' || v_lf
           || 'begin' || v_lf
           || '    -- Source code has been removed by script "oltp_split_heavy_tabs_1.sql".' || v_lf
@@ -1536,54 +1546,54 @@ begin
           --|| 'set term ;^';
     suspend;
 
-    " " = 'commit;';
+    "--TMP$SQL$CODE" = 'commit;';
     suspend;
 
     -- |||||||||||||||||||||||
     -- Removing views that are NOT used anymore. Finally - removal of tables QDistr and QStorned.
 
-    " " = 'create or alter view z_qdqs as select 1 id from rdb$database; drop view z_qdqs;';
+    "--TMP$SQL$CODE" = 'create or alter view z_qdqs as select 1 id from rdb$database; drop view z_qdqs;';
     suspend;
 
-    " " = 'create or alter view v_qdistr_source_1 as select 1 id from rdb$database; drop view v_qdistr_source_1;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_source_1 as select 1 id from rdb$database; drop view v_qdistr_source_1;';
     suspend;
-    " " = 'create or alter view v_qdistr_source_2 as select 1 id from rdb$database; drop view v_qdistr_source_2;';
-    suspend;
-
-
-    " " = 'create or alter view v_qdistr_target_1 as select 1 id from rdb$database; drop view v_qdistr_target_1;';
-    suspend;
-    " " = 'create or alter view v_qdistr_target_2 as select 1 id from rdb$database; drop view v_qdistr_target_2;';
-    suspend;
-
-    " " = 'create or alter view v_qdistr_name_for_del as select 1 id from rdb$database; drop view v_qdistr_name_for_del;';
-    suspend;
-    " " = 'create or alter view v_qdistr_name_for_ins as select 1 id from rdb$database; drop view v_qdistr_name_for_ins;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_source_2 as select 1 id from rdb$database; drop view v_qdistr_source_2;';
     suspend;
 
 
-
-    " " = 'create or alter view v_qstorned_target_1 as select 1 id from rdb$database; drop view v_qstorned_target_1;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_target_1 as select 1 id from rdb$database; drop view v_qdistr_target_1;';
     suspend;
-    " " = 'create or alter view v_qstorned_target_2 as select 1 id from rdb$database; drop view v_qstorned_target_2;';
-    suspend;
-
-    " " = 'create or alter view v_qstorno_name_for_del as select 1 id from rdb$database; drop view v_qstorno_name_for_del;';
-    suspend;
-    " " = 'create or alter view v_qstorno_name_for_ins as select 1 id from rdb$database; drop view v_qstorno_name_for_ins;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_target_2 as select 1 id from rdb$database; drop view v_qdistr_target_2;';
     suspend;
 
-    " " = 'drop table qdistr;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_name_for_del as select 1 id from rdb$database; drop view v_qdistr_name_for_del;';
     suspend;
-
-    " " = 'drop table qstorned;';
+    "--TMP$SQL$CODE" = 'create or alter view v_qdistr_name_for_ins as select 1 id from rdb$database; drop view v_qdistr_name_for_ins;';
     suspend;
 
 
-    " " = 'commit;';
+
+    "--TMP$SQL$CODE" = 'create or alter view v_qstorned_target_1 as select 1 id from rdb$database; drop view v_qstorned_target_1;';
+    suspend;
+    "--TMP$SQL$CODE" = 'create or alter view v_qstorned_target_2 as select 1 id from rdb$database; drop view v_qstorned_target_2;';
     suspend;
 
-    " " = 'drop procedure tmp_init_autogen_qdistr_tables;' || v_lf ||
+    "--TMP$SQL$CODE" = 'create or alter view v_qstorno_name_for_del as select 1 id from rdb$database; drop view v_qstorno_name_for_del;';
+    suspend;
+    "--TMP$SQL$CODE" = 'create or alter view v_qstorno_name_for_ins as select 1 id from rdb$database; drop view v_qstorno_name_for_ins;';
+    suspend;
+
+    "--TMP$SQL$CODE" = 'drop table qdistr;';
+    suspend;
+
+    "--TMP$SQL$CODE" = 'drop table qstorned;';
+    suspend;
+
+
+    "--TMP$SQL$CODE" = 'commit;';
+    suspend;
+
+    "--TMP$SQL$CODE" = 'drop procedure tmp_init_autogen_qdistr_tables;' || v_lf ||
           'drop procedure tmp_init_autogen_qstorn_tables;' || v_lf ||
           'commit;' ;
     suspend;
@@ -1598,10 +1608,10 @@ commit;
 set heading off;
 set list on;
 
-select 'set echo off;' as " "
+select 'set echo off;' as "--TMP$SQL$CODE"
 from rdb$database
 union all
-select 'select ''oltp_split_heavy_tabs_1.sql finish at '' || current_timestamp as msg from rdb$database;' as " "
+select 'select ''oltp_split_heavy_tabs_1.sql finish at '' || current_timestamp as msg from rdb$database;' as "--TMP$SQL$CODE"
 from rdb$database
 ;
 commit;

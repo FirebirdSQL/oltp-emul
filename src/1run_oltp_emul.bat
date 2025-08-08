@@ -4,6 +4,7 @@
 @rem arg #2 = number of ISQL sessions to be launched.
 @rem ----------------------------------------------
 setlocal enabledelayedexpansion enableextensions
+chcp 65001
 
 set THIS_DIR=%~dp0
 set THIS_DIR=!THIS_DIR:~0,-1!
@@ -34,6 +35,7 @@ if .%fb%.==.25. goto chk2
 if .%fb%.==.30. goto chk2
 if .%fb%.==.40. goto chk2
 if .%fb%.==.50. goto chk2
+if .%fb%.==.60. goto chk2
 call :no_arg1 !abendlog!
 
 :chk2
@@ -509,10 +511,10 @@ if .!gather_hardware_info!.==.1. (
     echo !host! | findstr /i /c:"localhost" /c:"127.0.0.1">nul
     if errorlevel 1 (
         (
-		echo CONFIGURATION ISSUE.
-		echo Parameter 'gather_hardware_info' = 1 requires parameter 'host' having value 'localhost' or '127.0.0.1'.
-		echo Hardware and OS info will not be gathered because probably you are going to run test on REMOTE server.
-		echo Current value of 'host' parameter is: !host!
+            echo CONFIGURATION ISSUE.
+            echo Parameter 'gather_hardware_info' = 1 requires parameter 'host' having value 'localhost' or '127.0.0.1'.
+            echo Hardware and OS info will not be gathered because probably you are going to run test on REMOTE server.
+            echo Current value of 'host' parameter is: !host!
 		) >!tmplog!
         call :bulksho !tmplog! !log4tmp!
         if .%can_stop%.==.1. (
@@ -548,15 +550,14 @@ call :check_for_prev_build_err %tmpdir% %fb% build_was_cancelled %can_stop% %log
 
 @rem Result: build_was_cancelled = 1 ==> previous building process was cancelled (found "SQLSTATE = HY008" in .err).
 
-
 for /d %%x in (isql,gfix,fbsvcmgr,gbak) do (
     if not exist %fbc%\%%x.exe goto bad_fbc_path
 )
 
 call :sho "All needed FB utilities found in the folder defined by parameter 'fbc': %fbc%" %log4tmp%
 
-set tmplog=%tmpdir%\tmp_get_fb_db_info.log
-set tmperr=%tmpdir%\tmp_get_fb_db_info.err
+@rem set tmplog=%tmpdir%\tmp_get_fb_db_info.log
+@rem set tmperr=%tmpdir%\tmp_get_fb_db_info.err
 
 @rem 18.09.2015 0217
 call :repl_with_bound_quotes %tmplog% tmplog
@@ -637,7 +638,6 @@ if not defined fbb (
 
 call :sho "Build: %fbb%, prefix of server OS: %fbo%" %log4tmp%
 
-
 @rem #######################################
 
 call :sho "Check that database is avaliable." %log4tmp%
@@ -698,7 +698,7 @@ call :sho "Check that database is avaliable." %log4tmp%
     echo "commit;"
     echo "drop exception exc_gen_stop_test_invalid;"
     echo "commit;"
-)>!tmpsql!
+) > !tmpsql!
 
 call :remove_enclosing_quotes !tmpsql!
 
@@ -769,85 +769,87 @@ if .!unavail_db!.==.1. (
 )
 
 :chk4open
+
+call :sho "build_was_cancelled=!build_was_cancelled!" !log4tmp!
+
 if exist !tmperr! (
+
     findstr /m /i /c:"Error while trying to open file" !tmperr! > nul
     if errorlevel 1 (
 
-    if .%build_was_cancelled%.==.0. (
+        if .%build_was_cancelled%.==.0. (
 
-        findstr /i /c:"collation" !tmperr! | findstr /i /c:"not installed" >nul
-        if NOT errorlevel 1 (
-            (
-                echo Missed collation. Database probably was copied from host with different ICU libraries set.
-                echo Run following command locally:
-                echo.
-                echo !fbc!\gfix -icu !dbnm!
-                echo.
-                echo After this you can resume this test.
-            ) > !tmplog!
-            type !tmplog!
-            type !tmplog!>>%log4tmp%
-            del !tmplog!
+            findstr /i /c:"collation" !tmperr! | findstr /i /c:"not installed" >nul
+            if NOT errorlevel 1 (
+                (
+                    echo Missed collation. Database probably was copied from host with different ICU libraries set.
+                    echo Run following command locally:
+                    echo.
+                    echo !fbc!\gfix -icu !dbnm!
+                    echo.
+                    echo After this you can resume this test.
+                ) > !tmplog!
+                call :bulksho !tmplog! %log4tmp%
 
-            if .%can_stop%.==.1. (
-                echo.
-                echo Press any key to FINISH this batch. . .
-                pause>nul
+                if .%can_stop%.==.1. (
+                    echo.
+                    echo Press any key to FINISH this batch. . .
+                    pause>nul
+                )
+                goto final
+
             )
-            goto final
 
-        )
+            for /f "usebackq tokens=*" %%a in ('%tmperr%') do (
+                set size=%%~za
+            )
+            if .!size!.==.. set size=0
 
-        for /f "usebackq tokens=*" %%a in ('%tmperr%') do (
-            set size=%%~za
-        )
-        if .!size!.==.. set size=0
-
-        if !size! gtr 0 (
-            set db_build_finished_ok=0
-        ) else (
-            @rem Database DOES exist and ONLINE, no errors raised before, but we still have to ensure that ALL objects 
-            @rem was successfully created in it - so, check that log of last .sql contains text "all_dbo_exists"
-            @rem -------------------------------------------------------------------------------------------------------
-            set db_build_finished_ok=1
-            find /c /i "all_dbo_exists" !tmpclg! >nul
-            if errorlevel 1 (
+            if !size! gtr 0 (
                 set db_build_finished_ok=0
+            ) else (
+                @rem Database DOES exist and ONLINE, no errors raised before, but we still have to ensure that ALL objects 
+                @rem was successfully created in it - so, check that log of last .sql contains text "all_dbo_exists"
+                @rem -------------------------------------------------------------------------------------------------------
+                set db_build_finished_ok=0
+                find /c /i "all_dbo_exists" !tmpclg! >nul
+                if NOT errorlevel 1 (
+                    set db_build_finished_ok=1
+                )
             )
+        ) else (
+            set db_build_finished_ok=0
         )
-    ) else (
-        set db_build_finished_ok=0
-    )
-    echo.
-    echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
-    echo ############################
-    echo.
-    del %tmperr% 2>nul
-    del %tmpclg% 2>nul
+        echo.
+        echo db_build_finished_ok=^>^>^>!db_build_finished_ok!^<^<^<
+        echo ############################
+        echo.
+        del %tmperr% 2>nul
+        del %tmpclg% 2>nul
 
-    if .!db_build_finished_ok!.==.0. (
-        echo.
-        echo Database: ^>%dbnm%^< -- DOES exist but its creation was not completed.
-        echo.
+        if .!db_build_finished_ok!.==.0. (
+            echo.
+            echo Database: ^>%dbnm%^< -- DOES exist but its creation was not completed.
+            echo.
 
             if .%wait_if_not_exists%.==.1. (
                 if .%can_stop%.==.1. (
-            echo ################################################################################
-            echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
-            echo ################################################################################
-            echo.
-            pause>nul
-        )
+                    echo ################################################################################
+                    echo Press ENTER to start again recreation of all DB objects or Ctrl-C to FINISH. . .
+                    echo ################################################################################
+                    echo.
+                    pause>nul
+                )
             )
 
-        set need_rebuild_db=1
-        @rem ==> then we have to invoke :prepare->:make_db_objects subroutines
+            set need_rebuild_db=1
+            @rem ==> then we have to invoke :prepare->:make_db_objects subroutines
 
-    ) else (
-        set need_rebuild_db=0
-        echo Database ^>%dbnm%^< does exist and has all needed objects.
-    )
-    @rem db_build_finished_ok = 0 xor 1
+        ) else (
+            set need_rebuild_db=0
+            echo Database ^>%dbnm%^< does exist and has all needed objects.
+        )
+        @rem db_build_finished_ok = 0 xor 1
 
 
     ) else (
@@ -870,7 +872,16 @@ if exist !tmperr! (
 ) else (
     set need_rebuild_db=0
 )
-@rem end of: if exist / not exist !tmperr! 
+@rem end of: if exist !tmperr! 
+
+if !need_rebuild_db! EQU 0 (
+    @rem Although DB can be avliable and has flag that all DB objects exist, we have to check correspondense
+    @rem between values from config and those that are in settings table for some critical parameters, namely:
+    @rem create_with_split_heavy_tabs, create_with_separate_qdistr_idx and create_with_compound_columns_order.
+    @rem If some of them differs then we have to rebuild all DB objects (31.07.2025).
+
+    call :chk_rebuild_qdqs_ddl !tmpclg! !log4tmp! need_rebuild_db
+)
 
 del %tmpclg% 2>nul
 del %tmperr% 2>nul
@@ -947,6 +958,7 @@ call :chk_FSCacheUsage
 @rem    I/O error during "CreateFile (create)" operation for file ""
 @rem    -Error while trying to create file
 call :chk_db_access
+echo need_rebuild_db=!need_rebuild_db!
 
 if .!need_rebuild_db!.==.0. (
 
@@ -960,7 +972,6 @@ if .!need_rebuild_db!.==.0. (
 
     call :sync_settings_with_conf %fb% %log4tmp%
 )
-
 
 @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 @rem :::   A d j u s t     D D L    f o r     's e p a r a t e _ w o r k e r s'     s e t t i n g   + :::
@@ -1022,7 +1033,6 @@ if NOT .%sleep_ddl%.==.. (
     )
 )
 
-
 @rem ################### check for non-empty stoptest.txt ################################
 
 if  defined use_external_to_stop (
@@ -1053,8 +1063,10 @@ if not .!fb!.==.25. (
 
     set run_cmd=%fbc%\isql %dbconn% %dbauth% -nod -i %~dp0oltp_adjust_eds_calls.sql
     cmd /c !run_cmd! 1>!tmpsql! 2>!tmperr!
-
     call :catch_err run_cmd !tmperr! n/a
+
+    @rem Remove prefix "--TMP$SQL$CODE" in each line of !tmpsql! (prefix needed in 6.x because no empty columns allowed there):
+    call :remove_lines_prefix !tmpsql! !tmpclg! !log4tmp!
 
     call :sho "Adjust DDL with current 'use_es' value. Step-2: applying auxiliary script." !log4tmp!
 
@@ -1065,9 +1077,7 @@ if not .!fb!.==.25. (
 
     call :sho "Completed. Source code has been adjusted according to 'use_es' config parameter." !log4tmp!
 
-
     @rem copy !tmpsql! !tmpdir!\check_adjust.port_!port!.use_es_!use_es!.sql
-
 
     for /d %%x in (!tmpsql!,!tmpclg!) do (
         del %%x
@@ -1083,14 +1093,15 @@ if not .!fb!.==.25. (
 
     set run_cmd=%fbc%\isql %dbconn% %dbauth% -nod -i %~dp0oltp_adjust_eds_perf.sql
     cmd /c !run_cmd! 1>!tmpsql! 2>!tmperr!
-
     call :catch_err run_cmd !tmperr! n/a
+
+    @rem Remove prefix "--TMP$SQL$CODE" in each line of !tmpsql! (prefix needed in 6.x because no empty columns allowed there):
+    call :remove_lines_prefix !tmpsql! !tmpclg! !log4tmp!
 
     call :sho "Step-2: applying auxiliary script." !log4tmp!
 
     set run_cmd=%fbc%\isql %dbconn% %dbauth% -nod -i !tmpsql!
     cmd /c !run_cmd! 1>!tmpclg! 2>!tmperr!
-
     call :catch_err run_cmd !tmperr! n/a
 
     if !use_es! EQU 2 (
@@ -1098,10 +1109,10 @@ if not .!fb!.==.25. (
     ) else (
         call :sho "Completed. Objects for logging Ext. Pool events have been dropped." !log4tmp!
     )
+
     for /d %%x in (!tmpsql!,!tmpclg!) do (
         del %%x
     )
-
 )
 @rem fb <> 25 --> adjust code with 'use_es' and activate DB-level triggers
 
@@ -1112,7 +1123,6 @@ if not .!fb!.==.25. (
 @rem ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
 call :adjust_grants !mon_unit_perf! !log4tmp!
-
 
 @rem 16.11.2019
 @rem :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
@@ -1293,7 +1303,6 @@ echo.
 @echo ##############################################################
 @echo ###             w o r k i n g     p h a s e                ###
 @echo ##############################################################
-
 
 set mode=oltp_%1
 
@@ -1984,6 +1993,119 @@ goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
+:chk_rebuild_qdqs_ddl
+    setlocal
+
+    call :sho "Internal routine: chk_rebuild_qdqs_ddl " %log4tmp%
+    
+    set log4tmp=%1
+
+    @rem output arg:
+    set need_rebuild_db=0
+
+    for /f %%a in ("log4tmp!") do (
+        set tmpsql=%%~dpna.chk_qdqs_ddl.sql
+        set tmpclg=%%~dpna.chk_qdqs_ddl.log
+        set tmperr=%%~dpna.chk_qdqs_ddl.err
+    )
+  
+    (
+        echo "set list on;"
+        echo "set bail on;"
+        echo "set term ^;"
+        echo "execute block returns(create_with_split_heavy_tabs smallint, create_with_separate_qdistr_idx smallint, create_with_compound_columns_order varchar(80)) as"
+        echo "begin"
+        echo "    select"
+        echo "         max(iif(s.mcode = upper('CREATE_WITH_SPLIT_HEAVY_TABS'), s.svalue, null)) as create_with_split_heavy_tabs"
+        echo "        ,max(iif(s.mcode = upper('CREATE_WITH_SEPARATE_QDISTR_IDX'), s.svalue, null)) as create_with_separate_qdistr_idx"
+        echo "        ,max(iif(s.mcode = upper('CREATE_WITH_COMPOUND_COLUMNS_ORDER'), s.svalue, null)) as create_with_compound_columns_order"
+        echo "    from rdb$database r"
+        echo "    left join settings s on"
+        echo "        s.mcode in ("
+        echo "            upper('CREATE_WITH_SPLIT_HEAVY_TABS')"
+        echo "           ,upper('CREATE_WITH_SEPARATE_QDISTR_IDX')"
+        echo "           ,upper('CREATE_WITH_COMPOUND_COLUMNS_ORDER')"
+        echo "        )"
+	    echo "    into"
+	    echo "        create_with_split_heavy_tabs, create_with_separate_qdistr_idx, create_with_compound_columns_order"
+	    echo "    ;"
+	    echo "    if (create_with_split_heavy_tabs is null) then"
+	    echo "        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_SPLIT_HEAVY_TABS');"
+	    echo "    if (create_with_separate_qdistr_idx is null) then"
+	    echo "        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_SEPARATE_QDISTR_IDX');"
+	    echo "    if (create_with_compound_columns_order is null) then"
+	    echo "        exception ex_record_not_found using('SETTINGS', 'CREATE_WITH_COMPOUND_COLUMNS_ORDER');"
+	    echo "    suspend;"
+        echo "end ^"
+        echo "set term ;^"
+    ) > !tmpsql!
+
+    call :remove_enclosing_quotes !tmpsql!
+
+    set run_isql=%fbc%\isql
+    call :repl_with_bound_quotes %run_isql% run_isql
+
+    set run_isql=!run_isql! %dbconn% %dbauth% -i %tmpsql% -q -n -nod
+    set msg="Command: !run_isql!"
+    echo !msg! & echo !msg! >> %log4tmp%
+
+    cmd /c %run_isql% 1>%tmpclg% 2>%tmperr%
+
+    (
+        for /f "delims=" %%a in ('type %tmpsql%') do echo RUNSQL: %%a
+        echo %time%. Got:
+        for /f "delims=" %%a in ('type %tmpclg%') do echo STDOUT: %%a
+        for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
+    ) >>%log4tmp% 2>&1
+
+
+    @rem 31.07.2025
+    call :sho "We have to check whether params affecting on QDistr/QStorned DDL were changed in config." !log4tmp!
+    set changed_cfg_params=
+    for /d %%x in (CREATE_WITH_SPLIT_HEAVY_TABS,CREATE_WITH_SEPARATE_QDISTR_IDX,CREATE_WITH_COMPOUND_COLUMNS_ORDER) do (
+        set checked_parameter=%%x
+        call :sho "checked_parameter=!checked_parameter!" !log4tmp!
+        for /f "tokens=2 delims==" %%a in ('set ^| findstr /i /b /c:"!checked_parameter!"') do (
+            set value_from_config=%%a
+            call :sho "value_from_config=!value_from_config!" !log4tmp!
+        )
+        for /f "tokens=2" %%a in ('findstr /i /b /c:"%%x" !tmpclg!') do (
+            set db_settings_value=%%a
+            echo db_settings_value=!db_settings_value!
+            if not .!db_settings_value!.==.!value_from_config!. (
+                call :sho "Parameter '!checked_parameter!' has DIFFERENT values in config and DB: !db_settings_value!." !log4tmp!
+                set changed_cfg_params=!changed_cfg_params!!checked_parameter!,
+            ) else (
+                call :sho "Parameter '!checked_parameter!' has same value in config and DB: !db_settings_value!." !log4tmp!
+            )
+        )
+    )
+    if .!changed_cfg_params!.==.. (
+        call :sho "Parameters affecting on QDistr/QStorned DDL remained unchanged in config and DB." !log4tmp!
+        set need_rebuild_db=0
+    ) else (
+        call :sho "At least one parameter affecting on QDistr/QStorned DDL WAS CHANGED in config vs DB." !log4tmp!
+        set need_rebuild_db=1
+    )
+
+    (
+        echo changed_cfg_params=!changed_cfg_params!
+        echo need_rebuild_db=!need_rebuild_db!
+    ) > !tmpclg!
+    call :bulksho !tmpclg! %log4tmp%
+
+    for /d %%x in (!tmpsql!,!tmpclg!,!tmperr!) do (
+        if exist %%x del %%x
+    )
+    call :sho "Leaving routine chk_rebuild_qdqs_ddl: need_rebuild_db=!need_rebuild_db!" !log4tmp!
+
+    endlocal & set "%~2=%need_rebuild_db%"
+
+goto:eof
+@rem end of :chk_rebuild_qdqs_ddl
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 :gen_working_sql
       setlocal
 
@@ -2187,7 +2309,7 @@ goto:eof
 
                               echo set transaction read only read committed;
                               echo set term ^^;
-                              echo execute block returns(" " varchar(!MSG_WID!^)^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+                              echo execute block returns("--TMP$SQL$CODE" varchar(!MSG_WID!^)^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
                               echo     declare v_lf char(1^);
                               echo     declare SECONDS_IN_MINUTE smallint = 60;
                               echo     declare taken_pause_in_seconds int;
@@ -2199,7 +2321,7 @@ goto:eof
                               echo             -- MAXVALUE( %warm_time + %test_time% ^) * SECONDS_IN_MINUTE / 20: see config parameters 'warm_time' and 'test_time'
                               echo             taken_pause_in_seconds = minvalue( %mon_query_interval%, maxvalue( %warm_time% + %test_time% ^) * SECONDS_IN_MINUTE / 20 ^);
                               echo             rdb$set_context( 'USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds ^);
-                              echo             " " = left( v_lf ^|^| cast('now' as timestamp^) 
+                              echo             "--TMP$SQL$CODE" = left( v_lf ^|^| cast('now' as timestamp^) 
                               echo                         ^|^| '. Dedicated session N1 for query to mon$ tables. Point BEFORE constant pause '
                               echo                         ^|^| taken_pause_in_seconds ^|^| ' seconds.'
                               echo                        ,!MSG_WID!^)
@@ -2210,7 +2332,7 @@ goto:eof
                               echo         begin
                               echo             taken_pause_in_seconds = cast( !sleep_min! + rand(^) * (!sleep_max! - !sleep_min!^) as int ^);
                               echo             rdb$set_context( 'USER_TRANSACTION', 'TAKE_PAUSE', taken_pause_in_seconds ^);
-                              echo             " " = left( v_lf ^|^| cast('now' as timestamp^)
+                              echo             "--TMP$SQL$CODE" = left( v_lf ^|^| cast('now' as timestamp^)
                               echo                         ^|^| '. Point BEFORE delay within scope !sleep_min!..!sleep_max! seconds. Chosen value: ' 
                               echo                         ^|^| taken_pause_in_seconds ^|^| '. Use UDF ''!sleep_udf!''.'
                               echo                        ,!MSG_WID!^)
@@ -2274,11 +2396,11 @@ goto:eof
                               set MSG_WID=128
                               @rem ==========
                               echo set term ^^;
-                              echo execute block returns( " " varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+                              echo execute block returns( "--TMP$SQL$CODE" varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
                               echo     declare v_lf char(1^);
                               echo begin
                               echo     v_lf = ascii_char(10^);
-                              echo     " " = left( v_lf ^|^| cast('now' as timestamp^) ^|^| '. '
+                              echo     "--TMP$SQL$CODE" = left( v_lf ^|^| cast('now' as timestamp^) ^|^| '. '
                               echo                 ^|^| 'Point BEFORE delay within ' ^|^| %sleep_min% ^|^| ' ... ' ^|^| %sleep_max% ^|^|' s. Use OS shell call.'
                               echo                 ,!MSG_WID!^)
                               echo     ;
@@ -2303,17 +2425,17 @@ goto:eof
                           set MSG_WID=128
                           @rem ==========
                           echo set term ^^;
-                          echo execute block returns( " " varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+                          echo execute block returns( "--TMP$SQL$CODE" varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
                           echo     declare v_lf char(1^);
                           echo     declare v_dts varchar(!MSG_WID!^);
                           echo begin
                           echo     v_lf = ascii_char(10^);
-                          echo     " " = left( v_lf ^|^| cast('now' as timestamp^) ^|^| '. Point AFTER delay finish.', !MSG_WID!^);
+                          echo     "--TMP$SQL$CODE" = left( v_lf ^|^| cast('now' as timestamp^) ^|^| '. Point AFTER delay finish.', !MSG_WID!^);
                           echo     v_dts = left( rdb$get_context( 'USER_TRANSACTION', 'DELAY_START_DTS' ^), !MSG_WID!^);
                           echo     if ( v_dts is NOT null ^) then
                           echo     begin
-                          echo         " " = left (
-                          echo                      " " ^|^| ' Actual delay value is: '
+                          echo         "--TMP$SQL$CODE" = left (
+                          echo                      "--TMP$SQL$CODE" ^|^| ' Actual delay value is: '
                           echo                          ^|^| cast( 
                           echo                                     datediff( millisecond 
                           echo                                               from cast( v_dts as timestamp^) 
@@ -2366,11 +2488,11 @@ goto:eof
                                       echo set transaction read only read committed;
                                       echo set heading off;
                                       echo set term ^^;
-                                      echo execute block returns( " " varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+                                      echo execute block returns( "--TMP$SQL$CODE" varchar(!MSG_WID!^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
                                       echo begin
                                       echo     if ( rdb$get_context('USER_SESSION', 'WORKER_SEQUENTIAL_NUMBER'^) = 1 and rdb$get_context('USER_SESSION','ENABLE_MON_QUERY'^) = 2 ^) then
                                       echo     begin
-                                      echo         " " = left( cast('now' as timestamp^)
+                                      echo         "--TMP$SQL$CODE" = left( cast('now' as timestamp^)
                                       echo                     ^|^| ' SID=1. This sesion is dedicated for gathering data from mon$ tables. Take pause: use UDF !sleep_udf!...'
                                       echo                     ,!MSG_WID!^)
                                       echo         ;
@@ -2379,7 +2501,7 @@ goto:eof
                                       echo end
                                       echo ^^
                                       echo.
-                                      echo execute block returns( " " varchar( !MSG_WID! ^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+                                      echo execute block returns( "--TMP$SQL$CODE" varchar( !MSG_WID! ^) ^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
                                       echo     declare c int;
                                       echo     declare d int;
                                       echo     declare t timestamp;
@@ -2410,7 +2532,7 @@ goto:eof
                                       echo             end
                                       echo         end
                                       echo         session1_delay_before_mon_query = datediff(millisecond from t to cast('now' as timestamp^)^) * 1.000 / 1000;
-                                      echo         " " = left( cast('now' as timestamp^)
+                                      echo         "--TMP$SQL$CODE" = left( cast('now' as timestamp^)
                                       echo                     ^|^| ' SID=1. Completed pause between gathering data from mon$ tables, s: '
                                       echo                     ^|^| session1_delay_before_mon_query,
                                       echo                     !MSG_WID!^)
@@ -2471,14 +2593,14 @@ goto:eof
               @rem ==========
               set MSG_WID=255
               @rem ==========
-              echo execute block returns(" " varchar(!MSG_WID!^)^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
+              echo execute block returns("--TMP$SQL$CODE" varchar(!MSG_WID!^)^) as -- !MSG_WID!: see 'MSG_WID' in routine ':gen_working_sql' of 1run_oltp_emul.bat scenario
               echo     declare v_dts_beg timestamp;
               echo     declare v_dts_end timestamp;
               echo begin
               echo     select test_time_dts_beg, test_time_dts_end
               echo     from sp_get_test_time_dts -- this SP uses session-level context variables since its 2nd call and until reconnect
               echo     into v_dts_beg, v_dts_end;
-              echo     " " = left( 'Current value of ''stop''-flag: g_stop_test = ' ^|^| gen_id(g_stop_test, 0^)
+              echo     "--TMP$SQL$CODE" = left( 'Current value of ''stop''-flag: g_stop_test = ' ^|^| gen_id(g_stop_test, 0^)
               echo                 ^|^| ', test_time: '
               echo                 ^|^| coalesce( v_dts_beg, 'null' ^)
               echo                 ^|^| ' ... '
@@ -2684,9 +2806,9 @@ goto:eof
               echo -- in case of extremely high workload when number of attachments is ~1000 or more.
               echo set heading off;
               echo set term ^^;
-              echo execute block returns(" " varchar(150^)^) as
+              echo execute block returns("--TMP$SQL$CODE" varchar(150^)^) as
               echo begin
-              echo     " " = lpad('',50,'+'^) ^|^| ' Action # %%i of %lim% ' ^|^| rpad('',50,'+'^) ;
+              echo     "--TMP$SQL$CODE" = lpad('',50,'+'^) ^|^| ' Action # %%i of %lim% ' ^|^| rpad('',50,'+'^) ;
               echo     suspend;
               echo end^^
               echo set term ;^^
@@ -3220,7 +3342,6 @@ goto:eof
     @rem                    1     2       3     4       5          6                 7
 
     call :sho "Leaving routine: prepare." %log4tmp%
-
    
     endlocal
 goto:eof
@@ -3264,28 +3385,19 @@ goto:eof
     call :sho "fbb=!fbb!" !log4tmp!
 
     set fbv=UNKNOWN
-    echo !fbb! | findstr /i /r /c:"[V,T]2.5.[0-9]" > nul
-    if NOT errorlevel 1 (
-        set fbv=25
-    )
-    if /i .!fbv!.==.UNKNOWN. (
-        echo !fbb! | findstr /i /r /c:"[V,T]3.[0-9].[0-9]" > nul
-        if NOT errorlevel 1 (
-            set fbv=30
+    set major_digit_list=2.5,3,4,5,6
+    for /d %%x in (!major_digit_list!) do (
+        if /i "!fbv!"=="UNKNOWN" (
+            set major_digit_i=%%x
+            echo !fbb! | findstr /i /r /c:"[V,T]!major_digit_i!.[0-9]" > nul
+            if NOT errorlevel 1 (
+                set fbv=!major_digit_i!0
+                set fbv=!fbv:.=!
+                set fbv=!fbv:~0,2%!
+            )
         )
     )
-    if /i .!fbv!.==.UNKNOWN. (
-        echo !fbb! | findstr /i /r /c:"[V,T]4.[0-9].[0-9]" > nul
-        if NOT errorlevel 1 (
-            set fbv=40
-        )
-    )
-    if /i .!fbv!.==.UNKNOWN. (
-        echo !fbb! | findstr /i /r /c:"[V,T]5.[0-9].[0-9]" > nul
-        if NOT errorlevel 1 (
-            set fbv=50
-        )
-    )
+    
     if /i .!fbv!.==.UNKNOWN. (
         call :sho "Could not get FB major version from string !fbb!" %log4tmp%
         goto :final
@@ -3302,12 +3414,12 @@ goto:eof
 
     set check_fs_via_sql=0
     if !fbv! GTR 40 (
-       @rem Future major FB versions: config must be always checked via SQL:
-       set check_fs_via_sql=1
+        @rem Future major FB versions: config must be always checked via SQL:
+        set check_fs_via_sql=1
     ) else if !fbv! GEQ 40 (
-       if !fb_build_no! GEQ !FB4_BUILD_WITH_RDB_CONF! (
-           set check_fs_via_sql=1
-       )
+        if !fb_build_no! GEQ !FB4_BUILD_WITH_RDB_CONF! (
+            set check_fs_via_sql=1
+        )
     )
     
     if .!check_fs_via_sql!.==.0. (
@@ -4339,7 +4451,12 @@ goto:eof
     @rem -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
     call :sync_settings_with_conf %fb% %log4tmp%
-   
+
+    
+    @rem Generate temporary .sql with code that reflects value of 'create_with_split_heavy_tabs' parameter.
+    @rem 31.07.2025: every line in generated .sql will start with "--TMP$SQL$CODE" (without quotes) because
+    @rem empty names are prohibited in FB 6.x
+    @rem We have to remove this "prefix" further (before applying generted sql)
     (
    
         @rem Value of %tmpdir% can be enclosed, so we have to 'inject' name of temporary file
@@ -4362,18 +4479,6 @@ goto:eof
         echo -- Close current output:
         echo out;
         echo.
-
-        @rem result: SQL script '!tmpdir!\oltp_split_heavy_tabs_1_30.tmp' will be created at this point, its name here: !post_handling_out!
-        @rem put here 'echo q_uit;' if d_ebug is needed 
-
-
-        echo -- Applying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=%create_with_split_heavy_tabs%':
-        echo in !post_handling_out!;
-        echo.
-
-        echo -- Finish building process: insert custom data to lookup tables:
-        echo in "%~dp0oltp_data_filling.sql";
-
     ) >> !tmpsql!
 
 
@@ -4389,14 +4494,17 @@ goto:eof
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c !cc_pages! -i %tmpsql%
     echo %time%. Run: %run_isql% 1^>%tmplog% 2^>%tmperr% >>%log4tmp%
 
-    echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
-    echo :::    c r e a t i n g     d a t a b a s e     o b j e c t s    ::::
-    echo ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    (
+        echo :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+        echo :::    t e m p    .s q l:   s p l i t    h e a v y    t a b s   :::
+        echo :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    ) > %tmplog%
+    call :bulksho %tmplog% %log4tmp%
 
     %run_isql% 1>%tmplog% 2>%tmperr%
 
+    echo %time%. Result of generating temp SQL for adjusting DDLs with 'create_with_split_heavy_tabs' value: > %log4tmp%
     (
-        echo %time%. Got:
         for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" /c:"add_info" %tmplog%') do echo STDOUT: %%a
         for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
     ) 1>>%log4tmp% 2>&1
@@ -4404,6 +4512,42 @@ goto:eof
     @rem operation was cancelled in 2.5: SQLSTATE = HY008 or `^C`
     @rem operation was cancelled in 3.0: SQLSTATE = HY008
 
+    call :catch_err run_isql !tmperr! n/a failed_bld_sql
+
+    @rem Remove prefix "--TMP$SQL$CODE" in each line of !tmpsql! (prefix needed in 6.x because no empty columns allowed there):
+    call :remove_lines_prefix !post_handling_out! !tmplog! !log4tmp!
+
+    (
+
+        @rem result: SQL script '!tmpdir!\oltp_split_heavy_tabs_1_30.tmp' will be created at this point, its name here: !post_handling_out!
+        @rem put here 'echo q_uit;' if d_ebug is needed 
+
+        echo -- Applying temp file with SQL statements for change DDL according to 'create_with_split_heavy_tabs=%create_with_split_heavy_tabs%':
+        echo in !post_handling_out!;
+        echo.
+
+        echo -- Finish building process: insert custom data to lookup tables:
+        echo in "%~dp0oltp_data_filling.sql";
+
+    ) > !tmpsql!
+
+    (
+        echo :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+        echo :::   a p p l y i n g    g e n e r a t e d    t e m p    s q l  :::
+        echo :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::
+    ) > %tmplog%
+    call :bulksho %tmplog% %log4tmp%
+
+    %run_isql% 1>%tmplog% 2>%tmperr%
+
+    echo %time%. Result of APPLYING temp SQL for adjusting DDLs with 'create_with_split_heavy_tabs' value: > %log4tmp%
+    (
+        for /f "delims=" %%a in ('findstr /i /c:".sql start" /c:".sql finish" /c:"add_info" %tmplog%') do echo STDOUT: %%a
+        for /f "delims=" %%a in ('type %tmperr%') do echo STDERR: %%a
+    ) 1>>%log4tmp% 2>&1
+
+    @rem operation was cancelled in 2.5: SQLSTATE = HY008 or `^C`
+    @rem operation was cancelled in 3.0: SQLSTATE = HY008
 
     call :catch_err run_isql !tmperr! n/a failed_bld_sql
 
@@ -4819,12 +4963,12 @@ goto:eof
           echo "set width setting_name 40;"
           echo "set width setting_value 20;"
           echo "set heading off;"
-          echo "select 'Workload level settings (see definitions in oltp_main_filling.sql):' as " " from rdb$database;"
+          echo "select 'Workload level settings (see definitions in oltp_main_filling.sql):' as msg from rdb$database;"
           echo "set heading on;"
           echo "select * from z_settings_pivot;"
 
           echo "set heading off;"
-          echo "select 'Current launch settings:' as " " from rdb$database;"
+          echo "select 'Current launch settings:' as msg from rdb$database;"
           echo "set heading on;"
           echo "select z.setting_name, z.setting_value from z_current_test_settings z;"
 
@@ -4833,11 +4977,11 @@ goto:eof
           echo "set width idx_key 65;"
           echo "-- NORMALLY MUST BE DISABLED. ENABLE FOR DEBUG OR BENCHMARK PURPOSES."
           echo "-- set heading off;"
-          echo "-- select 'Index(es) for heavy-loaded tables:' as " " from rdb$database;"
+          echo "-- select 'Index(es) for heavy-loaded tables:' as msg from rdb$database;"
           echo "-- set heading on;"
           echo "-- select * from z_qd_indices_ddl;"
           echo "set heading off;"
-          echo "select 'Table(s) WITHOUT primary and unique constrains:' as " " from rdb$database;"
+          echo "select 'Table(s) WITHOUT primary and unique constrains:' as msg from rdb$database;"
           echo "set heading on;"
           echo "set count on;"
           echo "set width tab_name 32;"
@@ -5713,6 +5857,7 @@ goto:eof
     )
     for /f "tokens=*" %%a in (!input_file!) do (
         set val=%%a
+        set val=!val:^&=$LOGICAL$AND$!
         set val=!val:^>=$GREATER$THEN$!
         set val=!val:^<=$LESS$THEN$!
 
@@ -5721,6 +5866,7 @@ goto:eof
         for /f "useback tokens=*" %%x in ('!val!') do (
                 set val=%%~x
         )
+        set val=!val:$LOGICAL$AND$=^&!
         set val=!val:$GREATER$THEN$=^>!
         set val=!val:$LESS$THEN$=^<!
         echo !val!>>!tmp_output!
@@ -6070,8 +6216,10 @@ goto:eof
     for /f "usebackq tokens=*" %%a in ('!tmpsql!') do set size=%%~za
     call :sho "Size of generated file !tmpsql!: !size!" !log4tmp!
 
-    call :sho "    Step-2: apply temporary SQL." !log4tmp!
+    @rem Remove prefix "--TMP$SQL$CODE" in each line of !tmpsql! (prefix needed in 6.x because no empty columns allowed there):
+    call :remove_lines_prefix !tmpsql! !tmpclg! !log4tmp!
 
+    call :sho "    Step-2: apply temporary SQL." !log4tmp!
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i !tmpsql!
 
     cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
@@ -6088,6 +6236,7 @@ goto:eof
     endlocal
 
 goto:eof
+@rem end of :adjust_sep_wrk_count
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
@@ -6126,6 +6275,9 @@ goto:eof
     cmd /c !run_isql! 1>!tmpsql! 2>!tmperr!
     call :catch_err run_isql !tmperr! n/a
 
+    @rem Remove prefix "--TMP$SQL$CODE" in each line of !tmpsql! (prefix needed in 6.x because no empty columns allowed there):
+    call :remove_lines_prefix !tmpsql! !tmpclg! !log4tmp!
+
     call :sho "    Step-2: apply temporary SQL." !log4tmp!
 
     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i !tmpsql!
@@ -6142,6 +6294,7 @@ goto:eof
 
 
 goto:eof
+@rem end of :adjust_replication
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
@@ -6225,14 +6378,18 @@ goto:eof
 
                     call :sho "    Step-1: generate temporary SQL." !logname!
                     cmd /c !run_isql! 1>!tmpsql! 2>!tmperr!
-                    
                     call :catch_err run_isql !tmperr! n/a
 
-                    call :sho "    Step-2: apply temporary SQL." !logname!
+                    call :remove_lines_prefix !tmpsql! !tmpclg! !logname!
+
+                    call :sho "    Step-2: apply temporary SQL !run_isql!" !logname!
                     set run_isql=!isql_exe! %dbconn% %dbauth% -q -nod -c 512 -i !tmpsql!
 
                     cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
                     call :catch_err run_isql !tmperr! n/a
+
+                    call :sho "Completed OK. Check result:" !logname!
+                    call :bulksho !tmpclg! !logname!
 
                     @rem Result: temp users with names like: 'TMP$OLTP$USER_nnnn' have been created.
 
@@ -6243,7 +6400,7 @@ goto:eof
         @rem -.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-.-
 
         for /d %%f in (!tmpsql!,!tmpclg!) do (
-            del %%f
+            if exist %%f del %%f
         )
 
     ) else (
@@ -6255,9 +6412,54 @@ goto:eof
     endlocal
 
 goto:eof
+@rem end of :adjust_grants
 
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
+:remove_lines_prefix
+    setlocal
+
+    @rem file which has lines starting with '--TMP$SQL$CODE' // need for 6.x because empty icolumns not allowed anymore
+    set tmpsql=%1
+
+    @rem temp log for accumulating lines without prefix
+    set tmpclg=%2
+
+    @rem common job log
+    set logname=%3
+
+    call :sho "Internal routine: remove_lines_prefix. File to be processed: !tmpsql!" !logname!
+
+    @rem use VBS in order to preserve source formatting ("for /f ... set line=..." - kills leading spaces):
+    call :vbs_replace_in_file !logname! !tmpsql! --TMP$SQL$CODE
+
+    @rem (
+    @rem     @rem ::: ACHTUNG :::
+    @rem     @rem By default, "for /f" command used semicolon as delimiter when parsing lines.
+    @rem     @rem This means that if line contains only ";" then it will be skipped and not appear in output.
+    @rem     @rem To avoid this, we have to use "eol=<some_other_character>" in the "for /f" command.
+    @rem     @rem It was decided to use backquote (@rem ) for that.
+    @rem     @rem See also: https://ss64.com/nt/for_f.html
+    @rem     for /f "eol=@rem  tokens=*" %%a in (!tmpsql!) do (
+    @rem         set "line=%%a"
+    @rem         if not "!line!"=="" (
+    @rem             set "line=!line:--TMP$SQL$CODE=!"
+    @rem             echo.!line!
+    @rem         )
+    @rem     )
+    @rem ) > !tmpclg!
+    @rem move !tmpclg! !tmpsql! 1>>!logname! 2>&1
+
+    call :sho "Leaving routine: remove_lines_prefix. File !tmpsql! now must NOT contain prefixed lines." !logname!
+
+    endlocal
+
+goto:eof
+@rem end of :remove_lines_prefix
+
+@rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
+
 
 :declare_sleep_UDF
 
@@ -6394,7 +6596,7 @@ goto:eof
             echo drop procedure sp_ext_stoptest;
             echo commit;
         )
-        echo -- ##########################
+        echo -- ++++++++++++++++++++++++++
 
     ) >>!tmpsql!
 
@@ -6404,6 +6606,9 @@ goto:eof
 
     call :display_intention "Adjusting SETTINGS table with config, step-2: apply temporary script." "!run_isql!" !tmpclg! !tmperr!
 
+    @rem #########################################
+    @rem ###   a d j u s t    s e t t i n g s  ###
+    @rem #########################################
     cmd /c !run_isql! 1>!tmpclg! 2>!tmperr!
     
     call :catch_err run_isql !tmperr! n/a failed_bld_sql
@@ -6447,6 +6652,11 @@ goto:eof
     @rem 13 use_es, host, port, usr, pwd // 20.11.2020
     @rem 14 conn_pool_support // 12.12.2020
     @rem 15 resetting_support // 12.12.2020
+
+    @rem 16 create_with_debug_objects // 31.07.2025
+    @rem 17 create_with_split_heavy_tabs // 31.07.2025
+    @rem 18 create_with_separate_qdistr_idx // 31.07.2025
+    @rem 19 create_with_compound_columns_order // 31.07.2025
 
   
     (
@@ -6547,6 +6757,11 @@ goto:eof
             call :inject_actual_setting %fb% init conn_pool_support '!conn_pool_support!' 1
             call :inject_actual_setting %fb% init resetting_support '!resetting_support!' 1
 
+            @rem Added 31.07.2025: save info related to qdistr,qstorno or xqd*/xqs*  tables:
+            call :inject_actual_setting %fb% init create_with_debug_objects '!create_with_debug_objects!' 1
+            call :inject_actual_setting %fb% init create_with_split_heavy_tabs '!create_with_split_heavy_tabs!' 1
+            call :inject_actual_setting %fb% init create_with_separate_qdistr_idx '!create_with_separate_qdistr_idx!' 1
+            call :inject_actual_setting %fb% init create_with_compound_columns_order '!create_with_compound_columns_order!' 1
 
         echo end
         echo ^^
@@ -6704,73 +6919,83 @@ goto:eof
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 
-:remove_CR_from_file
-@rem https://www.computing.net/answers/windows-xp/removing-carriage-returns-from-a-textfile/197677.html
-setLocal
+:vbs_replace_in_file
+    @rem https://www.computing.net/answers/windows-xp/removing-carriage-returns-from-a-textfile/197677.html
+    setlocal
 
-set in_place=0
+    set logname=%1
+    set sourfile=%2
+    set what_to_find=%3
+    set replace_with=%4
 
-set sourfile=%1
-if .%2.==.. (
-   set in_place=1
-   set targfile=!sourfile!.!random!.tmp
-) else (
-    set targfile=%2
-)
+    set targfile=!sourfile!.!random!.tmp
 
-@rem 05.03.2020: remove excessive CR symbols using VBS:
-@rem ==================================================
-for /f %%a in ("!sourfile!") do (
-    set remove_extra_cr_vbs=%%~dparemove_excessive_CR.vbs.tmp
-    if NOT exist !remove_extra_cr_vbs! (
-        (
-            echo ' Generated auto by %~f0 at !date! !time!
-            echo ' Open STDIN, read it content line-by-line and for every line:
-            echo ' #   remove all duplicates of carrige return character;
-            echo ' #   add line feed character to the end if needed;
-            echo ' #   write changed line to STDOUT.
-            echo ' Usefult for processing result of miscelaneous utilities: handle, psexec et al.
-            echo ' Usage: %systemroot%\system32\cscript.exe //nologo //e:vbscript !remove_extra_cr_vbs! ^< C:\temp\input_file.txt ^> C:\temp\output_file.txt
-            echo ' https://stackoverflow.com/questions/41232510/remove-all-carriage-return-and-line-feed-from-file
-            echo set inp = wscript.stdin
-            echo set outp = wscript.stdout
-            echo do until inp.atendofstream
-            echo     text = inp.readline
-            echo     do while instr( text, vbcr ^& vbcr ^) ^> 0
-            echo         text = replace( text, vbcr ^& vbcr, vbcr ^)
-            echo     loop
-            echo     if instr( text, vblf ^) = 0 then
-            echo         if instr( text, vbcr ^) ^> 0 then
-            echo             text = replace( text, vbcr, vbcr ^& vblf ^)
-            echo         else
-            echo             text = text ^& vbcr ^& vblf
-            echo         end if
-            echo     end if
-            echo     text = replace( text, vblf ^& vblf, vblf ^)
-            echo     outp.write text
-            echo loop
-        ) >!remove_extra_cr_vbs!
+    for /f %%a in ("!logname!") do (
+        set tmperr=%%~dpatmp_replace_in_file.vbs.err
     )
-)
 
-%systemroot%\system32\cscript.exe //nologo //e:vbscript !remove_extra_cr_vbs! < !sourfile! > !targfile!
+    for /f %%a in ("!sourfile!") do (
+        set tmp_replace_in_file_vbs=%%~dpatmp_replace_in_file.vbs.tmp
+        if NOT exist !tmp_replace_in_file_vbs! (
+            (
+                echo "' Generated auto by %~f0 at !date! !time!"
+                echo "' Open STDIN, read it content line-by-line and for every line:"
+                echo "' #   remove all duplicates of carrige return character;"
+                echo "' #   add line feed character to the end if needed;"
+                echo "' #   write changed line to STDOUT."
+                echo "' Usefult for processing result of miscelaneous utilities: handle, psexec et al."
+                echo "' Usage: %systemroot%\system32\cscript.exe //nologo //e:vbscript !tmp_replace_in_file_vbs! < C:\temp\input_file.txt > C:\temp\output_file.txt"
+                echo "' https://stackoverflow.com/questions/41232510/remove-all-carriage-return-and-line-feed-from-file"
 
-if !in_place! EQU 1 (
-    move !targfile! !sourfile! 1>nul
+                echo "option explicit"
+                echo "dim inp, outp, what_to_find, replace_with"
+                echo "if (wscript.arguments.count = 0) then"
+                echo "    wscript.stdout.writeline("missed arg #1: string to be searched.")"
+                echo "    wscript.quit 1"
+                echo "else"
+                echo "    what_to_find = wscript.arguments(0)"
+                echo "end if"
+                echo "replace_with="""
+                echo "if wscript.arguments.count >= 2 Then"
+                echo "    replace_with=wscript.arguments(1)"
+                echo "end if"
+                echo "set inp = wscript.stdin"
+                echo "set outp = wscript.stdout"
+                echo "do until inp.atendofstream"
+                echo "    ' NB: WScript.StdIn.ReadLine removes the CR and LF characters."
+                echo "    outp.write replace(inp.readline, what_to_find, replace_with, 1, -1, vbTextCompare) &  vbcr & vblf"
+                echo "loop"
+            ) >!tmp_replace_in_file_vbs!
+            call :remove_enclosing_quotes !tmp_replace_in_file_vbs!
+        )
+    )
+
+    set run_cmd="%systemroot%\system32\cscript.exe //nologo //e:vbscript !tmp_replace_in_file_vbs! !what_to_find! !replace_with! ^< !sourfile! 1^>!targfile! 2^>!tmperr!"
+    echo Command: !run_cmd!
+    echo Command: !run_cmd!>>!logname!
+
+    cmd /c !run_cmd!
     set elev=!errorlevel!
     if !elev! NEQ 0 (
-        set msg=### ERROR ### in 'remove_CR_from_file' routine when move !targfile! !sourfile!: errorlevel = !elev!
-        echo !msg!
-        if not "!log!"=="" (
-            echo !msg! >>!log!
-        )
-        exit
+        call :sho "### ERROR ### in '!tmp_replace_in_file_vbs!' script: errorlevel = !elev!" !logname!
+        type !tmperr!
+        type !tmperr!>>!logname!
+        goto :final
     )
-)
-endlocal 
+
+    move !targfile! !sourfile! 1>nul 2>!tmperr!
+    set elev=!errorlevel!
+    if !elev! NEQ 0 (
+        call :sho "### ERROR ### in 'vbs_replace_in_file' routine when move !targfile! !sourfile!: errorlevel = !elev!" !logname!
+        type !tmperr!
+        type !tmperr!>>!logname!
+        goto :final
+    )
+    del !tmperr!
+
+    endlocal 
 goto:eof
-@rem ^
-@rem end of ':remove_CR_from_file'
+@rem end of ':vbs_replace_in_file'
 
 @rem #+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#+=#
 

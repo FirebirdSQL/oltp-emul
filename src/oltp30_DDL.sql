@@ -380,9 +380,13 @@ recreate exception ex_update_operation_forbidden 'update operation not allowed o
 recreate exception ex_delete_operation_forbidden 'delete operation not allowed on table @1 when user-data exists';
 recreate exception ex_debug_forbidden_operation 'debug: operation not allowed';
 
--- 23.11.2020: will be raised when use_es=2 and failed check for equality of worker_id in th "parent" connection and EDS.
+-- 23.11.2020: will be raised when use_es=2 and failed check for equality of worker_id in the "parent" connection and EDS.
 -- See temporary .sql that is generated in oltp_isql_run_worker scenario before each ISQL launch.
 recreate exception ex_further_work_forbidden 'Incompatible config parameters or test settings. Further operations not allowed.';
+
+-- 01.08.2025, https://github.com/FirebirdSQL/firebird/issues/8681 (affects on 6.x)
+-- Fixed in https://github.com/FirebirdSQL/firebird/pull/8685/commits/6c0c7a2938328c29917e7a9aeebc4cf4d259686c
+recreate exception ex_empty_input_str 'Empty strings encountered among input arguments: @1. Further operations not allowed.';
 commit;
 
 
@@ -2241,7 +2245,7 @@ begin
     if ( rdb$get_context('USER_SESSION', 'MSG_MAX_OCTET_LEN') is null ) then
         begin
             -- Obtain max allowed octet_length for exception text: get field length of rdb$exceptions.rdb$message.
-            -- For all versions of FB up to 4.0 it is 1023 octets, but it will be better avoid hard coding of it.
+            -- For all FB versions up to 4.0 it is 1023 octets, but it will be better avoid its hardcoding.
             select c.rdb$bytes_per_character * f.rdb$field_length as field_octet_len
             from rdb$relation_fields rf
             join rdb$fields f on rf.rdb$field_source = f.rdb$field_name
@@ -2871,7 +2875,7 @@ end
 ^ -- z_remember_view_usage (STUB!)s
 
 create or alter procedure sp_get_random_id (
-    a_view_for_search dm_dbobj,
+    a_view_for_search dm_dbobj NOT null,
     a_view_for_min_id dm_dbobj default null,
     a_view_for_max_id dm_dbobj default null,
     a_raise_exc dm_sign default 1, -- raise exc`eption if no record will be found
@@ -2925,6 +2929,17 @@ begin
 
     a_view_for_min_id = coalesce( a_view_for_min_id, a_view_for_search );
     a_view_for_max_id = coalesce( a_view_for_max_id, a_view_for_min_id, a_view_for_search );
+
+    -- https://github.com/FirebirdSQL/firebird/issues/8681
+    if ( trim(a_view_for_min_id) = '' ) then
+    begin
+        exception ex_empty_input_str using('a_view_for_min_id');
+    end
+
+    if ( trim(a_view_for_max_id) = '' ) then
+    begin
+        exception ex_empty_input_str using('a_view_for_max_id');
+    end
 
     if ( rdb$get_context('USER_TRANSACTION', upper(:a_view_for_min_id)||'_ID_MIN' ) is null
        or
@@ -4264,7 +4279,7 @@ as
     declare v_gen_inc_iter_nt int; -- increments from 1  up to c_gen_inc_step_nt and then restarts again from 1
     declare v_gen_inc_last_nt dm_idb; -- last got value after call gen_id (..., c_gen_inc_step_nt)
     declare v_this dm_dbobj = 'sp_kill_qstorno_ret_qs2qd';
-    declare v_call dm_unit; -- do NOT use `dm_dbobj`! This caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
+    declare v_call dm_unit; -- do NOT use `dm_dbobj`: this caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
     declare v_halt_on_pk_viol smallint;
     declare v_info dm_info;
     declare v_suffix dm_info;
@@ -8041,7 +8056,7 @@ as
     declare v_rcv_optype_id type of dm_idb;
     declare v_next_rcv_op type of dm_idb;
     declare v_this dm_dbobj = 'sp_make_qty_storno';
-    declare v_call dm_unit; -- do NOT use `dm_dbobj`! This caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
+    declare v_call dm_unit; -- do NOT use `dm_dbobj`: this caused string overflow in 4.0, since 16-jul-2016; see letter from hvlad 06-jan-2017 01:59
     declare v_halt_on_pk_viol smallint;
     declare v_info dm_info;
     declare v_rows int = 0;
