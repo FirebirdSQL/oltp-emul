@@ -1,11 +1,11 @@
-RemoteServicePort = 3676
+RemoteServicePort = 3600
 
 ServerMode=Super
 BugCheckAbort = 1
 
-# 25% of total phys memory = 4Gb:
-# (0.25*4)*1024*1024*1024/8192 --> 131072
-DefaultDbCachePages = 128K
+# 25% of total phys memory = 12Gb:
+# (0.25*12)*1024*1024*1024/8192 --> 384K
+DefaultDbCachePages = 384K
 
 # deprecated in FB 4.x since 12-nov-2020, see:
 # https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca

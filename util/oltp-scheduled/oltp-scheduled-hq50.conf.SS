@@ -1,4 +1,4 @@
-RemoteServicePort = 3500
+RemoteServicePort = 30500
 
 ServerMode=Super
 BugCheckAbort = 1
@@ -23,4 +23,4 @@ LockMemSize = 10M
 TempCacheLimit = 512M
 
 UDFAccess = Restrict UDF
-IpcName = oemul_fb50SS
+IpcName = oemul_hq50SS

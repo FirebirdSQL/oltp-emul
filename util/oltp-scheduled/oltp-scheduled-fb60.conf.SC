@@ -1,11 +1,8 @@
-RemoteServicePort = 3500
+RemoteServicePort = 3555
 
-ServerMode=Super
+ServerMode=SuperClassic
 BugCheckAbort = 1
-
-# 25% of total phys memory = 12Gb:
-# (0.25*12)*1024*1024*1024/8192 --> 384K
-DefaultDbCachePages = 384K
+DefaultDbCachePages = 2048
 
 # deprecated in FB 4.x since 12-nov-2020, see:
 # https://github.com/FirebirdSQL/firebird/commit/7e61b9f6985934cd84108549be6e2746475bb8ca
@@ -17,10 +14,11 @@ DefaultDbCachePages = 384K
 
 UseFileSystemCache = true
 
-LockHashSlots = 30011
-LockMemSize = 10M
 
-TempCacheLimit = 512M
+LockHashSlots =  49999
+LockMemSize = 50M
 
-UDFAccess = Restrict UDF
-IpcName = oemul_fb50SS
+TempCacheLimit = 256M
+
+UdfAccess = Restrict UDF
+IpcName = oemul_fb50SC
