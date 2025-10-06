@@ -1004,10 +1004,14 @@ commit;
 
 set term ^;
 
+-- ::: NB :::
+-- We have to avoid declaration of SP parameters in form 'type of column <some_view>.<col>'
+-- otherwise extracted metadata will be invalid.
+-- See: https://github.com/FirebirdSQL/firebird/issues/6862 (still not fixed, 29.08.2025).
 create or alter procedure srv_diag_fk_uk
 returns(
     checked_constraint type of column rdb$relation_constraints.rdb$constraint_name,
-    type_of_constraint type of column v_diag_fk_uk.type_of_constraint,
+    type_of_constraint varchar(2), -- prev (bad): v_diag_fk_uk.type_of_constraint,
     failed_rows int
 )
 as
@@ -1042,7 +1046,7 @@ as
     declare v_checked_qry varchar(8190);
     declare v_nat_stt varchar(255);
     declare rn bigint;
-    declare v_prev_tab type of column v_diag_idx_entries.tab_name = '';
+    declare v_prev_tab type of column rdb$relations.rdb$relation_name = '';
 begin
     for
         select v.tab_name, v.idx_name, v.checked_qry

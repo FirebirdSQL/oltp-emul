@@ -9,7 +9,21 @@
         border: 2px solid black;
     }
 
+    table tr td {
+        color: #800000;
+    }
     tr:hover td {
+        color: #00008B;
+        background-color: #E0FFFF;
+    }
+
+    table tr:hover td.null_cell {
+        color: #00008B;
+        background-color: #E0FFFF;
+    }
+
+    /*
+    table tr:hover td.fb3x_font {
         color: #00008B;
         background-color: #E0FFFF;
     }
@@ -27,12 +41,6 @@
         background-color: #E0FFFF;
     }
 
-    table tr:hover td.null_cell {
-        color: #00008B;
-        background-color: #E0FFFF;
-    }
-
-
     table tr td.fb3x_font {
         color: #800000;
     }
@@ -40,6 +48,7 @@
     table tr td.fb4x_font {
         color: #000080;
     }
+    */
 
     table tr td.perf_score_column {
         background-color: #FFE4B5;
@@ -162,8 +171,6 @@
        white-space: pre;
     }
 
-    
-
     th {
         padding: 3px; 
         background: #E6E6FA;
@@ -174,7 +181,6 @@
         min-width:30px;
         /* font-style: italic; */
     }
-
 
     .v_dir {
         writing-mode: vertical-rl;
@@ -226,7 +232,7 @@
        background-color: #f2c9cc;
        white-space: pre;
     }
-    
+
     table tr td.t_error {
        color: black;
        /* background-color:  #ffff99; */

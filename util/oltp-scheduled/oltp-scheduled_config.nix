@@ -4,7 +4,7 @@
 #
 ###################################### CAUTION ###########################################
 #
-# By default, Firebird instance will be stopped and replaced when ths script works!
+# By default, Firebird instance will be stopped and replaced when this script works.
 # Be sure that parameter <fbc> from every OLTP-EMUL config file DOES NOT point
 # to some FB instance that is important for you!
 # NEVER set value of this parameter to the folder where crusial FB instance lives.
@@ -29,32 +29,62 @@
 #
 # oltp-scheduled.sh <FB_MAJOR> <NUM_OF_SESSIONS>  <MODE>  0
 
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1247-6ad5971-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1255-037e187-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1259-66b1c44-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1261-8d5bb71-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1262-984aa12-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1264-6a321bb-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1265-ba248d8-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1266-1a0af0c-linux-x64.tar.gz
+#DEBUG_SNAPSHOT_TO_CHECK=/mnt/hdd/oltp-emul/fb6x-snapshots/Firebird-6.0.0.1267-6441f08-linux-x64.tar.gz
 
-# Root URL where daily updated Firebird snapshots live:
-# OLD, NOT USED: FB_SNAPSHOTS_URL=http://web.firebirdsql.org/download/snapshot_builds/linux
-# OLD, NOT USED: FB_SNAPSHOTS_URL=https://firebirdsql.org/en/snapshot-builds/
+CRITICAL_LABEL=@@@ CRITICAL @@@
+#PROXY_DATA="--proxy' 'http://172.16.210.203:8080"
+
+FB40_LOCK_DIR=/dev/shm/fb40_lock
+FB50_LOCK_DIR=/dev/shm/fb50_lock
+FB60_LOCK_DIR=/dev/shm/fb60_lock
+HQ30_LOCK_DIR=/dev/shm/hq30_lock
+HQ40_LOCK_DIR=/dev/shm/hq40_lock
+HQ50_LOCK_DIR=/dev/shm/hq50_lock
 
 # Page with FB 3.x Linux snapshots:
 # Firebird-3.0.11.33675-0.amd64.tar.gz
 # Firebird-debuginfo-3.0.11.33675-0.amd64.tar.gz
-FB3X_SNAPSHOT_URL=https://web.firebirdsql.org/download/snapshot_builds/linux/fb3.0
+# DISABLED. FB3X_SNAPSHOT_URL=https://web.firebirdsql.org/download/snapshot_builds/linux/fb3.0
 
-# Page with FB 4.x Linux snapshots:
-# Firebird-4.0.3.2923-0.amd64.tar.gz 
-# Firebird-debuginfo-4.0.3.2923-0.amd64.tar.gz 
+# Pages Linux snapshots for apppriate major versions:
 FB4X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-v4.0
+FB5X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-v5.0-release
+FB6X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-master
 
-# Page with snapshots for both Windows and Linux:
-# Firebird-5.0.0.1009-Beta2-linux-x64.tar.gz
-# Firebird-5.0.0.1009-Beta2-linux-x64-debugSymbols.tar.gz 
-FB5X_SNAPSHOT_URL=https://github.com/FirebirdSQL/snapshots/releases/expanded_assets/snapshot-master
+HQ3X_SNAPSHOT_URL=ftp://fbdownloader:masterkey@217.17.120.138:12221/linux/3.0
+HQ4X_SNAPSHOT_URL=ftp://fbdownloader:masterkey@217.17.120.138:12221/linux/4.0
+HQ5X_SNAPSHOT_URL=ftp://fbdownloader:masterkey@217.17.120.138:12221/linux/5.0
 
 
 # Extension of snapshot files:
-FB_SNAPSHOT_SUFFIX=.amd64.tar.gz
+#FB_SNAPSHOT_SUFFIX=.amd64.tar.gz
+FB_SNAPSHOT_SUFFIX=.tar.gz
+
+# Since 07-sep-2022:
+# Suffixes of snapshot files, separately for each major version:
+# Firebird-3.0.11.33621-0.amd64.tar.gz
+# Firebird-4.0.3.2832-0.amd64.tar.gz
+# Firebird-5.0.0.714-Initial-linux-x64.tar.gz
+#
+FB30_SNAPSHOT_SUFFIX=.amd64.tar.gz
+FB40_SNAPSHOT_SUFFIX=.amd64.tar.gz
+FB50_SNAPSHOT_SUFFIX=.tar.gz
+FB60_SNAPSHOT_SUFFIX=.tar.gz
+
+HQ30_SNAPSHOT_SUFFIX=.amd64.tar.gz
+HQ40_SNAPSHOT_SUFFIX=.amd64.tar.gz
+HQ50_SNAPSHOT_SUFFIX=linux-x64.tar.gz
 
 # Should we also download .debug package ?
-GET_DEBUG_PACKAGE=0
+GET_DEBUG_PACKAGE=1
 
 # Optional. Setting for download using proxy.
 # From man curl:
@@ -66,10 +96,27 @@ GET_DEBUG_PACKAGE=0
 # Path to root directory of OLTP-EMUL, relatively current folder:
 OLTP_ROOT_DIR=../..
 
+PYTHON_BIN=/usr/bin/python3
+
+P7Z_BIN=/usr/bin/7za
+
+# Max number of seconds to wait until firebird process:
+# either starts to listening to port (when it is launched by issuing 'fbguard -daemon')
+# or is terminated (after we send signal SIGTERM to fbguard and firebird) and releases port.
+# Max limit described in TCP doc is 4 minutes (when socket has TIME_WAIT state after kill with SIGTERM).
+# https://stackoverflow.com/questions/5106674/error-address-already-in-use-while-binding-socket-with-address-but-the-port-num
+# http://www.softlab.ntua.gr/facilities/documentation/unix/unix-socket-faq/unix-socket-faq-4.html#ss4.2
+# http://www.softlab.ntua.gr/facilities/documentation/unix/unix-socket-faq/unix-socket-faq-2.html#time_wait
+#
+SECONDS_WAIT_FOR_PORT=241
+
 
 ###########################################################################
 ###   S E T T I N G S    F O R    S E N D I N G    T O    E - M A I L   ###
 ###########################################################################
+SEND_MAIL=0
+SHOW_PRIVATE_INFO=1
+CURL_BIN=/usr/bin/curl
 
 # Downloaded FB snapshot will be sent to e-mail using curl console utility
 # which will be extracted by this scenario from <CURL_ZIP> file.
@@ -90,8 +137,6 @@ OLTP_ROOT_DIR=../..
 #
 #
 mail_smtp_url=smtps://smtp.yandex.ru:465
-mail_pwd_from=CHANGE
-mail_hdr_to=fb-builds@yandex.ru
 mail_hdr_subj=FB_daily_build
 curl_verb=--verbose
 curl_insec=--insecure
@@ -116,6 +161,9 @@ mail_delay_seconds=15
 # If 1 then command $FB_HOME/bin/nbackup -L $dbnm will be applied to working DB:
 BACKUP_LOCK=0
 
+# Should a new DB be created instead of usage of 'etalone DB' ?
+CREATE_EMPTY_DB=1
+
 # Folder where script for start FB daemon will be created after install.sh finish.
 # NOTE: following will be always added to the script which starts FB daemon:
 # LimitNOFILE=10000
@@ -129,7 +177,7 @@ SYSDIR_UBUNTU=/lib/systemd/system
 # 1. Do NOT enclose into any kind of quotes;
 # 2. Names are separated by PIPE sign with TWO backslash characters before it;
 # 3. Every name of executable process must ends with dollar sign.
-FB_BIN_PATTERN=\\|fb_inet_server\\|fb_smp_server\\|fbserver\\|firebird\\|isql\\|gstat\\|gfix\\|gbak\\|fbsvcmgr\\|fb_lock_print\\|
+FB_BIN_PATTERN=\\|firebird\\|isql\\|gstat\\|gfix\\|gbak\\|fbsvcmgr\\|fb_lock_print\\|
 
 #######################################################
 ###  L O G S    R O T A T I O N    S E T T I N G S  ###
@@ -139,15 +187,15 @@ FB_BIN_PATTERN=\\|fb_inet_server\\|fb_smp_server\\|fbserver\\|firebird\\|isql\\|
 # they will be deleted, starting from oldest.
 # 1. Limit for logs of this script runs:
 #
-MAX_LOG_FILES=200
+MAX_LOG_FILES=1000
 
 # 2. Limit for .txt and .html files (separately for each of them) of OLTP-EMUL results.
 # Value 0 means no limit, all files will be preserved.
 #
-MAX_RPT_FILES=100
+MAX_RPT_FILES=1000
 
 # 3. Limit for compressed lock_print and stack traces files ($tmpdir/*.gz) which can be created
 # if new run encounters that DB is opened by previously launched test and its sessions
 # could not be terminated (hang) by some reason:
 #
-MAX_ZIP_FILES=100
+MAX_ZIP_FILES=50

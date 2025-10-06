@@ -1360,7 +1360,7 @@ maxerr=25000000
 cfg=$1
 sql=$2
 prf=$3 # prefix for temp files name which will be created by every ISQL session; based on $HOSTNAME value, sample: '/var/tmp/logs.oltp30/oltp30_some_box.our_firm.ru'
-sid=$4 # ISQL window (session) sequential number
+sid=$4 # ISQL window (session) sequential number (1,2,...winq)
 rpt=$5 # final report where SID=1 has to ADD info about performance ($tmpdir/oltp30.report.txt)
 fname=$6 # config parameter 'file_name_with_test_params': regular | benchmark
 build=$7
@@ -1370,6 +1370,7 @@ ainfo=$9 # file_name_this_host_info: 'cpu_2x4_ram_16' etc
 #echo build=$build
 
 # 26.10.2018: number of ISQL sessions can be greater than 999.
+
 prf=$prf-$(echo `printf "%04d" $sid`)
 
 # log where current acitvity of this ISQL will be:
@@ -1425,7 +1426,6 @@ fi
 isql_name=$fbc/$clu
 
 sho "SID=$sid. Config file $cfg parsed OK." $log
-
 
 if [ $is_embed = 1 ]; then
   dbauth=
@@ -1782,14 +1782,22 @@ do
     fi
   fi
 
+  if [ -s $sts ]; then
+    if [ $(stat -c%s $sts) -gt $maxlog ]; then
+      sho "SID=$sid. Size of $sts = $(stat -c%s $sts) - exceeds limit $maxlog, remove it." $log
+      rm -f $sts
+    fi
+  fi
+
+
   echo "########################################"
   sho "SID=$sid. Starting packet $packet." $sts
   echo "########################################"
-	cat <<- EOF >$tmpsidlog
+cat <<- EOF >$tmpsidlog
 		RUNCMD: $run_isql
 		STDLOG: $log
 		STDERR: $err
-	EOF
+EOF
 
   cat $tmpsidlog
   cat $tmpsidlog>>$sts
@@ -1806,12 +1814,34 @@ do
 
   sho "SID=$sid. Finish isql, packet No. $packet" $sts
 
-  echo ------ last lines in isql STDOUT log: ------------>>$sts
-  tail -15 $log | grep . | sed -e 's/^/    /' >>$sts
-  echo ------ last lines in isql STDERR log: ------------>>$sts
-  tail -15 $err | grep . | sed -e 's/^/    /' >>$sts
-  echo -------------------------------------------------->>$sts
+cat <<-EOF >>$sts
+	------ last lines in isql STDOUT log: ------------
+	File: $log
+	$(tail -50 $log | grep . | sed -e 's/^/    /')
 
+	------ last lines in isql STDERR log: ------------
+	File: $err
+	$(tail -50 $err | grep . | sed -e 's/^/    /')
+	--------------------------------------------------
+EOF
+  if grep -q -i "Unable to open" $err; then
+      sho "SID=$sid. Script ${sid_starter_sql} has been unexpectedly removed, session has finished its job." $sts
+      remove_isql_logs=never
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      break
+  fi
+
+  if grep -q -i "Expected end of statement" $err; then
+      sho "SID=$sid. Script ${sid_starter_sql} is invalid or can not be executed, session has finished its job." $sts
+      remove_isql_logs=never
+      ###################################################
+      # ....................  e x i t ...................
+      ###################################################
+      break
+  fi
+  
   if grep -E "database.*shutdown" $err > /dev/null ; then
       sho "SID=$sid. DATABASE SHUTDOWN DETECTED, session has finished its job." $sts
       ###################################################
@@ -4605,9 +4635,10 @@ else
     rm -f $log $err $sts $sid_starter_sql
 fi
 
-if [ $sid -eq 1 ]; then
-    if [ -s $plog ]; then
+if [[ $sid -eq 1 ]]; then
+    if [[ -s ${plog} ]]; then
         sho "SID=$sid. Final point of $shname. Bye-bye." $plog
+        touch $plog
 	cat <<- EOF
 
 		$(date +'%d.%m.%y %H:%M:%S'). SID=1. Final report see in: 
@@ -4617,9 +4648,6 @@ if [ $sid -eq 1 ]; then
 
 	EOF
 	sleep 1
-	if [[ -f "$plog" ]]; then
-	    touch $plog
-	fi
     else
 	cat <<- EOF
 

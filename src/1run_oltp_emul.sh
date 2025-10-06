@@ -1717,45 +1717,11 @@ create_results_storage_fbk() {
 
   if [[ -s $results_storage_fbk ]]; then
       sho "Backup of results storage already EXISTS, skip its recreation. Check access rights." $log4all
-      if [ $EUID -eq 0 ];  then
-        sho "Current user has root privilege. Access rights to $results_storage_fbk can be SKIPPED.." $log4all
-      else
-        sho "Check access rights to $results_storage_fbk." $log4all
-	if [[ $(stat --format '%U' "$results_storage_fbk") == "firebird" ]]; then
-		cat <<-EOF >$tmplog
-		System user 'firebird' is the owner of $results_storage_fbk.
-		Backup using FB Services API to this file will be possible.
-		EOF
-	    cat $tmplog
-	    cat $tmplog >> $log4all
-	    rm -f $tmplog
-        else
-	    # If the owner of $results_storage_fbk is different than firebird' then
-	    # attempt to make backup to this file will fail with:
-    	    # gbak: ERROR:cannot open backup file ....fbk
-	    # gbak: ERROR:    Exiting before completion due to errors
-	    # gbak:Exiting before completion due to errors
-		cat <<-EOF >$tmperr
-		ACCESS PROBLEM possible.
-
-		Owner of $results_storage_fbk is: '$(stat --format '%U' "$results_storage_fbk")'.
-		Error can raise when test will try to backup resultst to $results_storage_fbk.
-		
-		Either this file must be removed or its owner must to be changed to 'firebird'.
-
-		EOF
-	    cat $tmperr
-	    cat $tmperr >> $log4all
-	    rm -f $tmperr
-  	    exit 1
-        fi
-      fi # $EUIR -eq 0 ==> true / false
-
       rm -f $tmpfdb
       # NB: directory of $results_storage_fbk must be avaliable for 'firebird' system user
       # because we make backup using FB services:
-      run_cmd="$fbc/gbak -se $host/$port:service_mgr -c -v -user ${usr} -pas ${pwd} $results_storage_fbk $tmpfdb"
-      display_intention "Check ability to restore from results storage backup." "$run_cmd" "$tmplog" "$tmperr"
+      run_cmd="$fbc/gbak -se $host/$port:service_mgr -c -m -v -user ${usr} -pas ${pwd} $results_storage_fbk $tmpfdb"
+      display_intention "Check ability to restore metadata from $results_storage_fbk" "$run_cmd" "$tmplog" "$tmperr"
       eval "$run_cmd" 1>$tmplog 2>$tmperr
       catch_err $? $log4all $tmperr "Could not restore from $results_storage_fbk. Make sure it was created in apropriate FB major version."
   else
@@ -1793,17 +1759,19 @@ create_results_storage_fbk() {
 
 cat <<-EOF >$tmpsql
     set bail on;
+    set list on;
     set echo on;
     connect '$host/$port:$tmpfdb' user '${usr}' password '$pwd';
     select mon\$database_name from mon\$database;
     commit;
     drop database;
 EOF
- 
+
   run_cmd="$isql_name -q -i $tmpsql"
   echo $run_cmd
   eval "$run_cmd" 1>$tmplog 2>$tmperr
   catch_err $? $log4all $tmperr "Could not drop temporsry database '$host/$port:$tmpfdb' that used to check ability to use results storage."
+  bulksho $tmplog $log4all
   rm -f $tmpsql $tmplog $tmperr
   sho "Routine $FUNCNAME: finish." $log4all
 
@@ -3004,6 +2972,7 @@ if  [ "$mode" = "init_pop" ] ; then
     fi
 
   done
+  # i=1..$lim
 
   echo -- SQL script generation finished at $(date +'%d.%m.%Y %H:%M:%S') >> $sql
 
@@ -3012,9 +2981,9 @@ if  [ "$mode" = "init_pop" ] ; then
   #################################################################################################
   sed 's/--TMP_SQL_CODE //g' $sql | sed 's/[ \t]*$//' | cat -s 1>$tmplog 2>$tmperr
   catch_err $? $log4all $tmperr "Check line that was specified in error message."
-  mv $tmplog $tmpsql
+  # ?! 31.08.2025 mv $tmplog $tmpsql
+  rm -f $tmplog $tmpsql
 
-  # i=1..$lim
   sho "Routine $FUNCNAME: finish." $log4all
   echo
 
@@ -3526,13 +3495,18 @@ export can_stop
 export shname=$(cd `dirname "${BASH_SOURCE[0]}"` && pwd)/`basename "${BASH_SOURCE[0]}"`
 export shdir=$(cd "$(dirname "$0")" && pwd)
 
-#echo shname=$shname
-#echo shdir=$shdir
 cd $shdir
 
-export cfg=$shdir/oltp$fb"_config.nix"
+if [[ ${fb} =~ ^[0-9]+$ ]]; then
+    export cfg=$shdir/oltp$fb"_config.nix"
+    echo arg N1 represents an integer for FB major version. Config file to be parsed: ${cfg}
+else
+    echo arg N1 is not an integer. Supposed to be the name of config file.
+    export cfg=${fb}
+fi
 
 [[ -s $cfg ]] && echo "Config file '$cfg' found and not empty." || msg_nocfg $cfg
+
 
 # stackoverflow.com/questions/4434797/read-a-config-file-in-bash-without-using-source
 echo -e "Config file '$cfg' parsing results:"
@@ -3572,12 +3546,51 @@ else
     exit 1
 fi
 
+export tmplog=$tmpdir/tmp_get_fb_db_info.log
+export tmperr=$tmpdir/tmp_get_fb_db_info.err
+
+##########################################
+
+# Attempt to get server version together with OS: WIndows or LInux
+sho "Getting Firebird info. . ." $tmplog
+if [ $is_embed -eq 1 ];then
+  $fbc/fbsvcmgr localhost:service_mgr info_server_version 
+else 
+  $fbc/fbsvcmgr $host/$port:service_mgr user $usr password $pwd info_server_version 1>$tmplog 2>$tmperr
+fi
+[[ -s $tmperr ]] && msg_noserv
+
+# Server version: LI-V5.0.3.1683 Firebird 5.0 HQbird
+# Server version: LI-T6.0.0.1246 Firebird 6.0 5cad620
+#    0      1           2            3      4    5
+while read -r line; do
+    IFS='= ' read -r -a arr <<< $line
+    fbb=${arr[2]}
+    fbm=${arr[4]}
+    # OS where Firebird is running ($host not always must be local on LInux, it can be on Windows!): 'LI' or 'WI'
+    fbo=$(echo -n $fbb | cut -c1-2)
+
+    # Exact build number: LI-V2.5.9.27119 --> 27119
+    bld_no=$(echo -n $fbb | cut -d"." -f4)
+done  < <(cat $tmplog)
+
+# Adjust value of 'fb': 25|30|40|50|60
+if [[ "${fbm}" == "2.5" ]]; then
+    export fb="25"
+else
+    export fb="${fbm:0:1}0"
+fi
+
+sho "Firebird engine version: $fbb, adjusted value of 'fb': $fb" $tmplog
+
+##########################################
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # INITIATE REPORT FILE "oltpNN.report.txt"
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-log4all=$tmpdir/oltp$1.report.txt
-log4tmp=$tmpdir/oltp$1.report.tmp
+log4all=$tmpdir/oltp${fb}.report.txt
+log4tmp=$tmpdir/oltp${fb}.report.tmp
+
 rm -f $log4all
 
 this_sh="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -3588,7 +3601,7 @@ sho "Starting script $this_sh at host $file_name_this_host_info with logging in 
 # stackoverflow.com/questions/1921279/how-to-get-a-variable-value-if-variable-name-is-stored-as-string
 
 # Use command:
-# sed -e 's/^[ \t]*//' ./oltp25_config.nix  | grep "^[^#;]" | sort | awk '{print $1}'
+# sed -e 's/^[ \t]*//' ./oltp25_config.nix  | grep "^[^#;]" | sort | awk '{print [$1}'
 # - in order to get all uncommented parameters from config
 vars=(
     create_with_compound_columns_order
@@ -3644,6 +3657,7 @@ for i in ${vars[@]}; do
   [[ -z ${!i} ]] && msg_novar $i $cfg $log4all && exit 1
 done
 
+
 # 04.05.2020 do NOT ever leave this parametyer undefined!
 [[ -z "$sleep_min" ]] && sleep_min=0
 
@@ -3658,7 +3672,6 @@ else
 fi
 isql_name=$fbc/$clu
 
-echo
 if [ $sleep_max -gt 0 ]; then
     if [ -z "$sleep_min" ]; then
         sho "Parameter 'sleep_min' was not defined in config and is assigned to 1." $log4all
@@ -3803,9 +3816,6 @@ else
         echo
         #exit 1
 fi
-export tmplog=$tmpdir/tmp_get_fb_db_info.log
-export tmperr=$tmpdir/tmp_get_fb_db_info.err
-
 vars=($clu fbsvcmgr)
 sho "Check that all necessary Firebird console utilities exist in directory '$fbc'. . ." $log4all
 
@@ -3830,7 +3840,8 @@ else
 fi
 [[ -s $tmperr ]] && msg_noserv
 
-# Server version: LI-V2.5.9.27119 Firebird 2.5 HQbird
+# Server version: LI-V5.0.3.1683 Firebird 5.0 HQbird
+# Server version: LI-T6.0.0.1246 Firebird 6.0 5cad620
 #    a      b            c            d     e     f        
 while read a b c d
 do
@@ -4134,8 +4145,7 @@ else
 		$(cat $tmperr)
 		
 	EOF
-        cat $log4tmp
-        cat $log4tmp >>$log4all
+	bulksho $log4tmp $log4all
     else
         # open log and parse it as config with 'param = value' string:
         if grep -q -i "all_dbo_exists" $tmpclg; then
@@ -4660,7 +4670,7 @@ fi # $init_docs -gt 0
 #               w o r k i n g     p h a s e
 ##############################################################
 
-export mode=oltp$1
+export mode=oltp${fb}
 
 # winq = number of opening isqls
 export winq=$2
@@ -4720,6 +4730,18 @@ export prf="$tmpdir/$mode"_"${HOSTNAME// /}"
 echo Main SQL script: $sql
 #rm -f $tmpsql $tmplog
 
+echo ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${file_name_this_host_info}
+echo 1: ${cfg}
+echo 2: ${sql}
+echo 3: ${prf}
+echo 4: ${i}
+echo 5: ${log4all} 
+echo 6: ${file_name_with_test_params} 
+echo 7: ${fbb} 
+echo 8: conn_pool_support=$conn_pool_support
+echo 9: ${file_name_this_host_info}
+#exit
+
 echo -e '#######################'
 echo Launch $winq isqls. . .
 echo -e '#######################'
@@ -4741,16 +4763,6 @@ if [ 1 -eq 0 ]; then
     exit
 fi
 
-#echo ./oltp_isql_run_worker.sh ${cfg} ${sql} ${prf} ${i} ${log4all} ${file_name_with_test_params} ${fbb} ${file_name_this_host_info}
-#echo 1: ${cfg} 
-#echo 2: ${sql} 
-#echo 3: ${prf} 
-#echo 4: ${i} 
-#echo 5: ${log4all} 
-#echo 6: ${file_name_with_test_params} 
-#echo 7: ${fbb} 
-#echo 8: ${file_name_this_host_info}
-#exi
 
 for i in `seq $winq`
 do

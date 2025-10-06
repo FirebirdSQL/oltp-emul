@@ -68,7 +68,6 @@ def generate_html_head( css_page ):
          https://stackoverflow.com/questions/12042592/decoding-url-parameters-with-javascript
     -->
 
-
     <script>
         // Parsing URL of this document and extract from there value for 'page_title' key.
         urlp = [];
@@ -81,8 +80,7 @@ def generate_html_head( css_page ):
                 urlp[ u[0] ] = u[1];
                 // console.log( 'urlp[ u[0] ]=' + urlp[ u[0] ] + ': '  + u[1] );
             }
-            
-            top.document.title = decodeURIComponent( (urlp['page_title']+'').replace(/\+/g, '%%20') );
+            top.document.title = decodeURIComponent( (urlp['page_title']+'').replace(/\\+/g, '%%20') );
         }
     </script>
 
@@ -122,7 +120,7 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
         detl_ext = '.html'
         decode_from_b64 = True
     else:
-        
+
         #print("rec[ fb_prefix+'compress_cmd' ]=",rec[ fb_prefix+'compress_cmd' ])
 
         if '/' in rec[ fb_prefix+'compress_cmd' ]:
@@ -133,7 +131,6 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
             # Test ran on Windows, report was compressed by one of folowing:
             # c:\...\7z.exe ; c:\...\zstd.exe ; cscript <vbs_for_ZIP>
             compress_base = os.path.splitext(rec[ fb_prefix+'compress_cmd'].split('\\')[-1])[0].lower()
-        
 
         if compress_base in ('7z', '7za', 'gzip'):
             # NB: 'gzip' not present as standalone utility for Windows.
@@ -147,7 +144,7 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
         else:
             detl_ext = '.zip'
 
-        # NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh.sh/.bat) will search
+        # NB do not change extension '.b64'! main batch scenario (oltp_overall_report.sh/.bat) will search
         # for all files that have this extension and run decoding of them to readable text!
         detl_ext += '.b64'
 
@@ -170,7 +167,8 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
     #for k,v in detl_rows.items():
     #    print(k,':::',v)
     #print('$$$$$$$$$$$$$$$$$$$$$$$$')
-    
+    print(f'{len(detl_rows)=}')
+
     html_file = None
     if detl_rows:
         file_pref = 'oltp-report_build_' +build_no + '_run_' + run_id
@@ -188,6 +186,7 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
             # and uses built-in ability to compress text/html to .zip format.
 
             # Do this from 'txt' field directly to .html-file:
+            print(f'field fbNN_compress_cmd is NULL, output from TXT to {detl_file=}')
             with codecs.open( detl_file, 'w', encoding='utf-8') as f:
                 for t in [ t for t in detl_rows if t['TXT'] ]:
                     f.write( base64.b64decode( t['TXT'] ).decode("utf-8") )
@@ -203,13 +202,15 @@ def extract_detailed_report( con, rec, fb_prefix, html_path ):
             # Windows: for /f %%a in ('dir /b !DETAILS_DIR!\*.b64') do ...
             # POSIX:   b64list=$DETAILS_DIR/*.b64 ; for b in $b64list do ...
             #####################################################################################
+            print(f'field fbNN_compress_cmd is NOT null, output from ZIP2B64 to {detl_file=}')
             with codecs.open( detl_file, 'w') as f:
                 for t in [t for t in detl_rows if  t['ZIP2B64'] ]:
                     f.write( t['ZIP2B64'] + '\n' )
 
             #print('created file ', f.name)
-    
-    # We return name of HTML file in order to have link to open it when click on some cell with performance value in the table:
+
+    # We return name of HTML file in order to have link to open it
+    # when click on some cell with performance value in the table:
     return html_file
 
 # end of extract_detailed_report
@@ -362,33 +363,57 @@ def write_chart_script_beg( main_html_file, attrib_map ):
         var data = google.visualization.arrayToDataTable([
     ''' % locals()
 
-    main_html_file.write( chart_script_beg )
+    main_html_file.write( '\n'.join([x.rstrip() for x in chart_script_beg.splitlines()]) )
 
 # end of write_chart_script_beg
 
 #-------------------------------------
-def write_chart_data( main_html_file, chart_data, points_limit, fb3x_field_name, fb4x_field_name, fb5x_field_name, values_fmt, values_descr ):
+def write_chart_data( main_html_file, chart_data, points_limit, brand_mnemona, checked_major_vers_lst, this_chart_fields_lst, values_fmt, values_descr ):
+    # checked_major_vers_lst = '6x,5x,4x'
+    # this_chart_fields_lst:
+    #     ['fb6x_perf_score', 'fb5x_perf_score', 'fb4x_perf_score']
     i=0
     # values_descr = 'peak memory used by statements';
+    print(f'{checked_major_vers_lst=}')
+    print(f'{this_chart_fields_lst=}')
     for r in chart_data:
         if i==0:
-            main_html_file.write("\n" + " "*12 + "[ '','FB3x %(values_descr)s', 'FB4x %(values_descr)s', 'FB5x %(values_descr)s', ]"  % locals() )
+            col_hints = [ "''" ] # no title in the chart for 'run_date' column
+            print(f'{checked_major_vers_lst=}')
+            for major_vers_suffix in [x for x in checked_major_vers_lst.split(',') if x]: # ['6x','5x','4x'] etc
+                # NOTE: if all values for some column are nulls then we have to specify its type in form
+                # {label: '....', type: 'number'} -- otherwise google charts raise
+                # "All series on a given axis must be of the same data"
+                # Possible solution for this:
+                # https://stackoverflow.com/questions/13216377/google-chart-api-error-all-series-on-a-given-axis-must-be-of-the-same-data-type
+                # {label: 'FB-5x peak memory used for DB level', type: 'number'}
+                col_hints.append(f"{{label: '{brand_mnemona.upper()}-{major_vers_suffix} {values_descr}', type: 'number'}}") # we have to specify '{' and '}' twise if use f-notation!
 
-        fb3x_field_value, fb4x_field_value, fb5x_field_value = 'null', 'null', 'null'
+            main_html_file.write( " "*12 + '[' + ','.join(col_hints) + ', ]\n' )
 
-        if r[fb3x_field_name]:
-            fb3x_field_value = values_fmt.format( r[fb3x_field_name] )
-        if r[fb4x_field_name]:
-            fb4x_field_value = values_fmt.format( r[fb4x_field_name] )
-        if r[fb5x_field_name]:
-            fb5x_field_value = values_fmt.format( r[fb5x_field_name] )
+        col_vals = []
+        for fld_i in this_chart_fields_lst:
+            if r[fld_i]:
+                col_vals.append( values_fmt.format( r[fld_i] ) )
+            else:
+                col_vals.append( 'null' )
 
-        main_html_file.write( "\n" + " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
-        print( " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
+        main_html_file.write( " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + ','.join(col_vals) + "]\n" )
+        print('col_vals=',col_vals)
+
+        #fb3x_field_value, fb4x_field_value, fb5x_field_value = 'null', 'null', 'null'
+        #if r[fb3x_field_name]:
+        #    fb3x_field_value = values_fmt.format( r[fb3x_field_name] )
+        #if r[fb4x_field_name]:
+        #    fb4x_field_value = values_fmt.format( r[fb4x_field_name] )
+        #if r[fb5x_field_name]:
+        #    fb5x_field_value = values_fmt.format( r[fb5x_field_name] )
+
+        #main_html_file.write( "\n" + " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
+        #print( " "*12 + ",[ '" +  r['run_date'].strftime("%d.%m.%y") + "', " + fb3x_field_value + "," + fb4x_field_value + "," + fb5x_field_value + "]" )
         i += 1
         if ( i>= points_limit):
             break
-
 # end of write_chart_data
 
 #------------------------------------
@@ -400,7 +425,7 @@ def write_chart_script_end( main_html_file, attrib_map ):
 
     curveType = attrib_map.get('curveType') # optional
     fractionDigits = attrib_map.get('fractionDigits', 2)
-    
+
     GROUPING_DIGITS_CHAR = ' '
 
     # 05.10.2020
@@ -413,12 +438,18 @@ def write_chart_script_end( main_html_file, attrib_map ):
 
     #fmt_command = "fmt = new google.visualization.NumberFormat({  pattern:'0' });"
     # https://developers.google.com/chart/interactive/docs/reference?hl=en#numberformatter
-    fmt_command = "fmt = new google.visualization.NumberFormat( {fractionDigits: %d, groupingSymbol: '%s'} );" % (fractionDigits, GROUPING_DIGITS_CHAR)
+    fmt_command = "fmt = new google.visualization.NumberFormat( {fractionDigits: %d, groupingSymbol: '%s'} );\n" % (fractionDigits, GROUPING_DIGITS_CHAR)
 
     # https://developers.google.com/chart/interactive/docs/reference?hl=en#formatters
     # Formatters only affect one column at a time; to reformat multiple columns, apply a formatter to each column that you want to change.
     # NOTE: we assume that data with memory consumption occupies columns 1,2 and 3 (for FB 3.x, 4.x and 5.x):
-    fmt_command += '\n'.join ( [ f'fmt.format(data, {i+1});' for i,x in enumerate(colorList) ] )
+    fmt_command += '\n'.join ( [ ' '*8 + f'fmt.format(data, {i+1});' for i,x in enumerate(colorList) ] )
+    
+    #print(attrib_map)
+    #print('colorList=',colorList)
+    #print('fmt_command=',fmt_command)
+    #print('HHHHHHHHHHHHHH')
+
     # Result:
     #    fmt.format(data, 1);
     #    fmt.format(data, 2);
@@ -427,8 +458,7 @@ def write_chart_script_end( main_html_file, attrib_map ):
     # 19.08.2020: added 'chartArea:{left:N, top:M}'in order to adjust chart to the left margin of page.
     # NB do not set 'left' in chartArea less than 100 otherwise number on vertical axis will be hidden.
     chart_script_end=\
-    '''
-        ]);
+    '''        ]);
         %(fmt_command)s
         var options = {
                     title: '',
@@ -451,7 +481,7 @@ def write_chart_script_end( main_html_file, attrib_map ):
                     },
                     vAxis: {
                          title: '',
-                         // minValue: 0,
+                         minValue: 0,
                          textStyle: {
                            color: 'DarkBlue',
                            bold: false,
@@ -504,6 +534,7 @@ DETLPATH=os.environ['DETAILS_DIR']
 DETLPREF=DETLPATH.split(os.sep)[-1]
 
 FB_HOME=os.path.dirname(os.path.abspath(FB_CLNT))
+MAJOR_VERSIONS_LST=os.environ['MAJOR_VERSIONS_LST'] # 6x,5x,4x
 
 MAX_ROWS_IN_REPORT=int(os.environ['MAX_ROWS_IN_REPORT'])
 MAX_POINTS_IN_CHART=int(os.environ['MAX_POINTS_IN_CHART'])
@@ -524,10 +555,9 @@ CHART_COLORS_MEMO_STM=os.environ['CHART_COLORS_MEMO_STM']
 
 MAIN_RPT_FILE=os.environ['MAIN_RPT_FILE']
 
-#######################################
+BRAND_MNEMONA=os.environ['BRAND_MNEMONA'] # 'fb' or 'hq'
 
-#con = fdb.connect( dsn = 'localhost:'+DB_NAME, user = DB_USER, password = DB_PSWD, fb_library_name = FB_CLNT, no_gc=1, no_db_triggers=1, no_linger=1, charset='utf8')
-#print(showtime(), con.firebird_version )
+#######################################
 
 driver_config.fb_client_library.value = FB_CLNT
 srv_config = driver_config.register_server(name = 'qa_overall_report_srv', config = '')
@@ -544,8 +574,7 @@ db_cfg_object.password.value = DB_PSWD
 
 with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db_cfg_object.password.value, charset = db_cfg_object.charset.value, no_gc=1, no_db_triggers=1) as con, \
      codecs.open( os.path.join(TMPPATH, MAIN_RPT_FILE), 'w', encoding='utf-8') as main_html_file:
-    print(con.info)
-
+    print('Established connection to',con.info.firebird_version)
     main_html_file = codecs.open( os.path.join(TMPPATH, MAIN_RPT_FILE), 'w', encoding='utf-8')
 
     main_css_file = os.path.join(TMPPATH, os.path.splitext(MAIN_RPT_FILE)[0]+'.css' )
@@ -570,78 +599,98 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     '''
     main_html_file.write(href_lst)
 
-    stm=\
-    '''
+    print('html report see in: ',os.path.join(TMPPATH, MAIN_RPT_FILE))
+    fb_vers_cols = []
+    fb_perf_cols = []
+    fb_mem_all_suff = []
+    fb_mem_all_cols = []
+
+    fb_mem_att_suff = []
+    fb_mem_att_cols = []
+
+    fb_mem_trn_suff = []
+    fb_mem_trn_cols = []
+
+    fb_mem_stm_suff = []
+    fb_mem_stm_cols = []
+
+    fb_outcome_suff = []
+    fb_outcome_cols = []
+
+    fb_run_hhmm_suff = []
+    fb_run_hhmm_cols = []
+
+    fb_run_id_cols = []
+    fb_compress_cols = []
+
+    for v in [x for x in MAJOR_VERSIONS_LST.split(',') if x]:
+        fb_vers_cols.append( f'"fb{v}_vers"' )
+        fb_perf_cols.append( f'"fb{v}_perf_score"' )
+
+        fb_mem_all_suff.append(f'"fb{v} mem, ALL"')
+        fb_mem_all_cols.append( f'cast("fb{v}_used_all" / (1024.00*1024) as numeric(12,2)) as {fb_mem_all_suff[-1]}' )
+
+        fb_mem_att_suff.append(f'"fb{v} mem, att"')
+        fb_mem_att_cols.append( f'cast("fb{v}_used_by_att" / (1024.00*1024) as numeric(12,2)) as {fb_mem_att_suff[-1]}' )
+
+        fb_mem_trn_suff.append(f'"fb{v} mem, trn"')
+        fb_mem_trn_cols.append( f'cast("fb{v}_used_by_trn" / (1024.00*1024) as numeric(12,2)) as {fb_mem_trn_suff[-1]}' )
+
+        fb_mem_stm_suff.append(f'"fb{v} mem, stm"')
+        fb_mem_stm_cols.append( f'cast("fb{v}_used_by_stm" / (1024.00*1024) as numeric(12,2)) as {fb_mem_stm_suff[-1]}' )
+
+        fb_outcome_suff.append(f'"fb{v} result"')
+        fb_outcome_cols.append( f'"fb{v}_outcome" as {fb_outcome_suff[-1]}')
+
+        fb_run_hhmm_suff.append(f'"fb{v}_run_hhmm"')
+        fb_run_hhmm_cols.append( f'"fb{v}_run_hhmm" as {fb_run_hhmm_suff[-1]}')
+
+        fb_run_id_cols.append( f'"fb{v}_run_id"' )
+        fb_compress_cols.append( f'"fb{v}_compress_cmd"' )
+
+    stm = f'''
         select
             "run_date"
             ,"run_seqn"
-            ,"fb3x_vers"
-            ,"fb4x_vers"
-            ,"fb5x_vers"
-            ,"fb3x_perf_score"
-            ,"fb4x_perf_score"
-            ,"fb5x_perf_score"
-            ,cast("fb3x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, ALL"
-            ,cast("fb4x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, ALL"
-            ,cast("fb5x_used_all" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, ALL"
-            ,cast("fb3x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, att"
-            ,cast("fb4x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, att"
-            ,cast("fb5x_used_by_att" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, att"
-            ,cast("fb3x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, trn"
-            ,cast("fb4x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, trn"
-            ,cast("fb5x_used_by_trn" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, trn"
-            ,cast("fb3x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb3x mem, stm"
-            ,cast("fb4x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb4x mem, stm"
-            ,cast("fb5x_used_by_stm" / (1024.00*1024) as numeric(12,2)) as "fb5x mem, stm"
-            --,"fb3x_run_hhmm"
-            --,"fb4x_run_hhmm"
-            --,"fb5x_run_hhmm"
-            ,"fb3x_outcome" as "fb3x result"
-            ,"fb4x_outcome" as "fb4x result"
-            ,"fb5x_outcome" as "fb5x result"
-            ,"fb3x_run_id"
-            ,"fb4x_run_id"
-            ,"fb5x_run_id"
-            ,"fb3x_compress_cmd"
-            ,"fb4x_compress_cmd"
-            ,"fb5x_compress_cmd"
-        from sp_show_results(%(MAX_POINTS_IN_CHART)s) -- returns data in order: run_date desc, run_seqn asc
-    ''' % locals()
+            ,{'\n,'.join(fb_vers_cols)}
+            ,{'\n,'.join(fb_perf_cols)}
+            ,{'\n,'.join(fb_mem_all_cols)}
+            ,{'\n,'.join(fb_mem_att_cols)}
+            ,{'\n,'.join(fb_mem_trn_cols)}
+            ,{'\n,'.join(fb_mem_stm_cols)}
+            ,{'\n,'.join(fb_outcome_cols)}
+            ,{'\n,'.join(fb_run_hhmm_cols)}
+            ,{'\n,'.join(fb_run_id_cols)}
+            ,{'\n,'.join(fb_compress_cols)}
+        from sp_show_results( {MAX_POINTS_IN_CHART} ) -- returns data in order: run_date desc, run_seqn asc
+    '''
+    print('stm=',stm)
 
     #if MAX_ROWS_IN_REPORT > 0:
     #    stm += ' rows ' + str( MAX_ROWS_IN_REPORT )
 
-    perf_score_hint='number of successfully completed business actions per minute, average for <test_time> interval'
-    memo_used_hint='maximal value of mon$memory_usage.mon$memory_used during <test_time> interval'
+    perf_score_hint='number of successfully completed business actions per minute, average for test_time interval'
+    memo_used_hint='maximal value of mon$memory_usage.mon$memory_used during test_time interval'
 
     col_hints={
             "run_date" : "date of test run"
             ,"run_seqn" : "sequential number of this launch within date"
-            ,"fb3x_vers" : "FB 3.x snapshot version"
-            ,"fb4x_vers" : "FB 4.x snapshot version"
-            ,"fb5x_vers" : "FB 5.x snapshot version"
-            ,"fb3x_perf_score" : "FB 3.x, %(perf_score_hint)s" % locals()
-            ,"fb4x_perf_score" : "FB 4.x, %(perf_score_hint)s" % locals()
-            ,"fb5x_perf_score" : "FB 5.x, %(perf_score_hint)s" % locals()
-            ,"fb3x mem, ALL" : "FB 3.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb4x mem, ALL"  : "FB 4.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb5x mem, ALL"  : "FB 5.x, %(memo_used_hint)s, for DB level" % locals()
-            ,"fb3x mem, att" : "FB 3.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb4x mem, att" : "FB 4.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb5x mem, att" : "FB 5.x, %(memo_used_hint)s, for ATTACHMENT level" % locals()
-            ,"fb3x mem, trn" : "FB 3.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb4x mem, trn" : "FB 4.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb5x mem, trn" : "FB 5.x, %(memo_used_hint)s, for TRANSACTION level" % locals()
-            ,"fb3x mem, stm" : "FB 3.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-            ,"fb4x mem, stm" : "FB 4.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-            ,"fb5x mem, stm" : "FB 5.x, %(memo_used_hint)s, for STATEMENT level" % locals()
-            ,"fb3x_run_hhmm" : "FB 3.x, start of phase defined by <test_time> minutes"
-            ,"fb4x_run_hhmm" : "FB 4.x, start of phase defined by <test_time> minutes"
-            ,"fb5x_run_hhmm" : "FB 5.x, start of phase defined by <test_time> minutes"
-            ,"fb3x result" : "FB 3.x, result of test"
-            ,"fb4x result" : "FB 4.x, result of test"
-            ,"fb5x result" : "FB 5.x, result of test"
     }
+    for v in [x for x in MAJOR_VERSIONS_LST.split(',') if x]:
+        # Define tooltips for table columns:
+        # <th title="HQ-5x, number of successfully completed business actions... ">fb5x perf score</th>
+        # <th title="HQ-5x, maximal value of mon$memory_usage.mon$memory_used ... ">fb5x mem, ALL</th>
+        col_hints[ f'fb{v}_vers' ] = f'{BRAND_MNEMONA.upper()}-{v} snapshot version'
+        col_hints[ f'fb{v}_perf_score' ] = f'{BRAND_MNEMONA.upper()}-{v}, {perf_score_hint}'
+        col_hints[ f'fb{v} mem, ALL' ] = f'{BRAND_MNEMONA.upper()}-{v}, {memo_used_hint}, for DATABASE level'
+        col_hints[ f'fb{v} mem, att' ] = f'{BRAND_MNEMONA.upper()}-{v}, {memo_used_hint}, for ATTACHMENTS level'
+        col_hints[ f'fb{v} mem, trn' ] = f'{BRAND_MNEMONA.upper()}-{v}, {memo_used_hint}, for TRANSACTIONS level'
+        col_hints[ f'fb{v} mem, stm' ] = f'{BRAND_MNEMONA.upper()}-{v}, {memo_used_hint}, for STATEMENTS level'
+        col_hints[ f'fb{v} result' ] = f'{BRAND_MNEMONA.upper()}-{v}, test outcome'
+
+    print('col_hints:')
+    for k,v in col_hints.items():
+        print(k,':::',v)
 
     data_in_descending_order = []
     with con.cursor() as cur:
@@ -673,16 +722,15 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     #    print('i=',i)
     #    for k,v in p.items():
     #        print(k,':::',v)
-   
+  
     # Change order of data: we have to show charts in CHRONOLOGICAL order:
     data_in_chronological_order = sorted(data_in_descending_order, key=lambda x: ( x['run_date'], -x['run_seqn'] ) )
 
-    #print('fields=',fields)
-    #print('ftypes=',ftypes)
-    #print('data_in_descending_order=',data_in_descending_order)
-    #for d in data_in_descending_order:
-    #    print(d)
-    #exit(0)
+    print('fields=',fields)
+    print('ftypes=',ftypes)
+    print('data_in_descending_order=',data_in_descending_order)
+    for d in data_in_descending_order:
+        print(d)
 
     #locale.setlocale(locale.LC_ALL, '')
     #locale._override_localeconv = {'mon_thousands_sep': ' '}
@@ -694,13 +742,12 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     main_html_file.write( '<h4> <a name="perf_score_chart">Performance score: number of successfully completed business actions per minute, in average</a> </h4>' )
 
-
     # Output head section for chart:
     # --------------------------------
-    chart_script_beg = write_chart_script_beg( 
+    chart_script_beg = write_chart_script_beg(
         main_html_file,
         {
-            'divName' : 'perf_total_chart_div'
+             'divName'  : 'perf_total_chart_div'
             ,'drawFunc' : 'perf_total_chart'
         }
     )
@@ -709,15 +756,17 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score', "{:9g}", 'performance score' )
-
-
+    #write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score', "{:9g}", 'performance score' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, BRAND_MNEMONA, MAJOR_VERSIONS_LST, [x.replace('"','') for x in fb_perf_cols], "{:9g}", 'performance score' )
     # Output tail for chart script:
     # ------------------------------
+    #print('MAJOR_VERSIONS_LST=',MAJOR_VERSIONS_LST)
+    #print( [ x.strip() for x in CHART_COLORS_PERF_SCORE.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ] )
+
     chart_script_end = write_chart_script_end(
         main_html_file, 
         {
-            'colors': [x.strip() for x in CHART_COLORS_PERF_SCORE.split(',') ],
+            'colors': [x.strip() for x in CHART_COLORS_PERF_SCORE.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ],
             'curveType': 'function',
             'chartType': 'LineChart',
             'divName' : 'perf_total_chart_div',
@@ -748,7 +797,8 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, ALL', 'fb4x mem, ALL', 'fb5x mem, ALL', "{:.2f}", 'peak memory used for DB level' )
+    #write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, ALL', 'fb4x mem, ALL', 'fb5x mem, ALL', "{:.2f}", 'peak memory used for DB level' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, BRAND_MNEMONA, MAJOR_VERSIONS_LST,  [x.replace('"','') for x in fb_mem_all_suff], "{:.2f}", 'peak memory used for DB level' )
 
 
     # Output tail for chart script:
@@ -756,7 +806,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': [x.strip() for x in CHART_COLORS_MEMO_ALL.split(',') ],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_ALL.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ],
             'curveType': 'function',
             'chartType': 'LineChart',
             'divName' : 'perf_memo_used_all_div',
@@ -787,7 +837,8 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, att', 'fb4x mem, att', 'fb5x mem, att', "{:.2f}", 'peak memory used by attachments' )
+    #write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, att', 'fb4x mem, att', 'fb5x mem, att', "{:.2f}", 'peak memory used by attachments' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, BRAND_MNEMONA, MAJOR_VERSIONS_LST,  [x.replace('"','') for x in fb_mem_att_suff], "{:.2f}", 'peak memory used by attachments' )
 
 
     # Output tail for chart script:
@@ -795,7 +846,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': [x.strip() for x in CHART_COLORS_MEMO_ATT.split(',') ],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_ATT.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ],
             'curveType': 'function',
             'chartType': 'LineChart',
             'divName' : 'perf_memo_used_att_div',
@@ -803,7 +854,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
         }
     )
 
-    print(showtime(), 'Copmpleted.')
+    print(showtime(), 'Completed.')
 
     #+-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-++-+-+-+-+-+
 
@@ -825,7 +876,8 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, trn', 'fb4x mem, trn', 'fb5x mem, trn', "{:.2f}", 'peak memory used by transactions' )
+    #write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, trn', 'fb4x mem, trn', 'fb5x mem, trn', "{:.2f}", 'peak memory used by transactions' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, BRAND_MNEMONA, MAJOR_VERSIONS_LST,  [x.replace('"','') for x in fb_mem_trn_suff], "{:.2f}", 'peak memory used by transactions' )
 
 
     # Output tail for chart script:
@@ -833,12 +885,12 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': [x.strip() for x in CHART_COLORS_MEMO_TRN.split(',') ],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_TRN.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ],
             # 'chartType': 'ScatterChart',
             'curveType': 'function',
             'chartType': 'LineChart',
             'divName' : 'perf_memo_used_trn_div',
-    	    'fractionDigits' : 2
+            'fractionDigits' : 2
         }
     )
 
@@ -864,15 +916,15 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
     # Output data for chart:
     # ----------------------
-    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, stm', 'fb4x mem, stm', 'fb5x mem, stm', "{:.2f}", 'peak memory used by statements' )
-
+    #write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, 'fb3x mem, stm', 'fb4x mem, stm', 'fb5x mem, stm', "{:.2f}", 'peak memory used by statements' )
+    write_chart_data( main_html_file, data_in_chronological_order, MAX_POINTS_IN_CHART, BRAND_MNEMONA, MAJOR_VERSIONS_LST,  [x.replace('"','') for x in fb_mem_stm_suff], "{:.2f}", 'peak memory used by statements' )
 
     # Output tail for chart script:
     # ------------------------------
     chart_script_end = write_chart_script_end(
         main_html_file, 
         { 
-            'colors': [x.strip() for x in CHART_COLORS_MEMO_STM.split(',') ],
+            'colors': [x.strip() for x in CHART_COLORS_MEMO_STM.split(',')[:len(MAJOR_VERSIONS_LST.split(','))] ],
             'curveType': 'function',
             'chartType': 'LineChart',
             'divName' : 'perf_memo_used_stm_div',
@@ -881,7 +933,6 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     )
 
     print(showtime(), 'Completed.')
-
 
     ###############
     # Output TABLE:
@@ -898,6 +949,7 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
     # output column titles:
     #######################
     if os.environ['USE_PREDEFINED_TABLE_HDR']:
+        # smth was for debug (maybe...); to be deleted later!
         with open(os.environ['USE_PREDEFINED_TABLE_HDR']) as f:
             results_table_header = f.read()
             results_table_header = results_table_header.format(**locals())
@@ -908,143 +960,125 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
         for h in fields:
             v_tooltip = col_hints.get(h)
 
-            if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd'):
+            if h.lower() == 'run_seqn' or h.lower().endswith('run_id') or h.lower().endswith('compress_cmd') or h.lower().endswith('run_hhmm'):
+                # Do not show these columns.
                 ### NOP ###
                 continue
 
-            if h.lower().endswith('run_hhmm'):
-                h = h.replace('run_hhmm', 'run hh:mm')
+            #if h.lower().endswith('run_hhmm'):
+            #    h = h.replace('run_hhmm', 'run hh:mm')
 
             # Output column title and its hint:
+            if 'perf' in h or 'vers' in h or 'mem' in h:
+                h = BRAND_MNEMONA.upper() + '-' + h[2:] # 'fb5x perf score' --> 'FB-5x perf score' or 'HQ-5x perf score'
             main_html_file.write('\n<th'+ ( ' title="'+v_tooltip+'"' if v_tooltip else '') +'>'+ h.replace('_',' ') +'</th>')
+
 
     ##############
     # output data:
     ##############
-    for r in data_in_descending_order:
+    # MAJOR_VERSIONS_LST = '6x,5x,4x'
+    print('fields=',fields)
+    print('ftypes=',ftypes)
+
+    for report_row in data_in_descending_order:
+
         main_html_file.write('\n<tr>')
+
+        fb_details_map = {}
+        for fbv in [x.replace('"','') for x in fb_vers_cols]: # ['fb6x_vers', 'fb5x_vers', 'fb4x_vers'] etc
+            fb_prefix = fbv.split('_')[0]+'_'
+            if report_row[ fb_prefix+'vers' ]:
+                # Extract report for this OLTP-EMUL run and store in DETLPATH
+                # Returns name of this .html report:
+                oltp_run_report_html = extract_detailed_report( con, report_row, fb_prefix, DETLPATH )
+
+                # Extract stack traces for all crashes that occured during this run.
+                # Return LIST of .html files with stack traces:
+                oltp_run_stk_traces = extract_stack_traces( con, report_row, fb_prefix, DETLPATH )
+
+                oltp_run_hhmm = report_row.get(fb_prefix+'run_hhmm', '') # tooltip: test phase, beg...end
+                fb_details_map[ fbv ]  = (oltp_run_report_html, oltp_run_stk_traces, oltp_run_hhmm)
+
+        print('chk fb_details_map:')
+        for k,v in fb_details_map.items():
+            print(k,':::',v)
 
         fb3x_run_id, fb3x_build_no, fb4x_run_id,fb4x_build_no, fb5x_run_id,fb5x_build_no = None,None, None,None, None,None
         fb3x_detl_file, fb4x_detl_file, fb5x_detl_file = None, None, None
         fb3x_detl_rows, fb4x_detl_rows, fb5x_detl_rows = {}, {}, {}
-        fb3x_stack_traces_list, fb4x_stack_traces_list, fb5x_stack_traces_list = [], [], []
-        if r['fb3x_vers']:
-            # Extract report for this OLTP-EMUL run and store in DETLPATH
-            fb3x_html_file = extract_detailed_report( con, r, 'fb3x_', DETLPATH )
 
-            # Extract stack traces for crashes that occured during this run:
-            fb3x_stack_traces_list = extract_stack_traces( con, r, 'fb3x_', DETLPATH )
-
-        if r['fb4x_vers']:
-            # Extract report for this OLTP-EMUL run and store in DETLPATH
-            fb4x_html_file = extract_detailed_report( con, r, 'fb4x_', DETLPATH )
-
-            # Extract stack traces for crashes that occured during this run:
-            fb4x_stack_traces_list = extract_stack_traces( con, r, 'fb4x_', DETLPATH )
-
-        if r['fb5x_vers']:
-            # Extract report for this OLTP-EMUL run and store in DETLPATH
-            fb5x_html_file = extract_detailed_report( con, r, 'fb5x_', DETLPATH )
-
-            # Extract stack traces for crashes that occured during this run:
-            fb5x_stack_traces_list = extract_stack_traces( con, r, 'fb5x_', DETLPATH )
-
-        #print('fb3x_stack_traces_list=',fb3x_stack_traces_list)
-        #print('fb4x_stack_traces_list=',fb4x_stack_traces_list)
-        
         col_idx=-1
-        for f in r:
+        for fld_name in report_row:
             v_style=''
-            v = r[f]
+            cell_value = report_row[fld_name]
             col_idx += 1
-     
-            # print('f=',f,'; col_idx=',col_idx,'; ftypes[col_idx]=',ftypes[col_idx])
 
-            if f.lower() == 'run_seqn' or f.lower().endswith('run_id') or f.lower().endswith('compress_cmd'):
+            print('fld_name=',fld_name,'; col_idx=',col_idx,'; ftypes[col_idx]=',ftypes[col_idx])
+
+            if fld_name.lower() == 'run_seqn' or fld_name.lower().endswith('run_id') or fld_name.lower().endswith('compress_cmd') or fld_name.lower().endswith('run_hhmm'):
+                # do not show these values in the report
                 ### NOP ###
                 continue
 
             v_tooltip = ''
-            if not r[f]:
-                v = '[null]'
+            if not report_row[fld_name]:
+                cell_value = '[null]'
                 v_style = ' class="null_cell"'
             else:
-                
+
                 #print('ftypes[col_idx]=',ftypes[col_idx] )
                 #print('repr: ',repr( ftypes[col_idx] ))
-                
-                c_list = ''
-                fb_vers = f.lower()[:4]
-                if 'fb3x' in f.lower():
-                    c_list = 'fb3x_font'
-                elif 'fb4x' in f.lower():
-                    c_list = 'fb4x_font'
-                elif 'fb5x' in f.lower():
-                    c_list = 'fb5x_font'
-                
-                #if fb_vers in ('fb3x', 'fb4x', 'fb5x'):
-                #    c_list = fb_vers + '_font'
 
+                css_items = ''
 
-                # c_list = 'fb3x_font' if f.lower().startswith('fb3x') else ( 'fb4x_font' if f.lower().startswith('fb4x') else  '')
+                if fld_name.lower().endswith('vers'): # ==> 'fb3x_vers', 'fb4x_vers'
 
-                if f.lower().endswith('vers'): # ==> 'fb3x_vers', 'fb4x_vers'
+                    v_tooltip = fb_details_map.get(fld_name.lower(), ('',[],''))[2]
+                    if v_tooltip:
+                        v_tooltip = 'test time: ' + v_tooltip
 
-                    detl_file_name = ''
-                    if fb_vers == 'fb3x':
-                        detl_file_name = fb3x_html_file
-                    elif fb_vers == 'fb4x':
-                        detl_file_name = fb4x_html_file
-                    elif fb_vers == 'fb5x':
-                        detl_file_name = fb5x_html_file
-
-                    # detl_file_name = fb3x_html_file if f.lower().startswith('fb3x') else fb4x_html_file
-
-                    #print('detl_file_name=',detl_file_name)
-                    #if detl_file_name and ( f.lower().startswith('fb3x') or f.lower().startswith('fb4x') ):
+                    detl_file_name = fb_details_map.get(fld_name.lower(), ('',[]))[0]
+                    #print(f'{fld_name.lower()=}, {detl_file_name=}')
                     if detl_file_name:
-                        v = '<a style="text-decoration:none" href="' + DETLPREF + '/' +  os.path.split( detl_file_name )[1] + '" target="_blank"> '+ str(v) +'</a>'
-                    
-                elif f.lower().endswith('perf_score'): # ==> 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score'
-                    c_list += ' perf_score_column'
+                        cell_value = '<a style="text-decoration:none" href="' + DETLPREF + '/' +  os.path.split( detl_file_name )[1] + '" target="_blank"> '+ str(cell_value) +'</a>'
 
+                elif fld_name.lower().endswith('perf_score'): # ==> 'fb3x_perf_score', 'fb4x_perf_score', 'fb5x_perf_score'
+                    css_items += ' perf_score_column'
                 elif repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>", "<type 'float'>", "<class 'float'>", "<class 'decimal.Decimal'>" ):
-                    # do NOT use: v = locale.format('%.0f', v, grouping=True) -- converting to string problem here.
+                    # do NOT use: cell_value = locale.format('%.0f', cell_value, grouping=True) -- converting to string problem here.
                     if repr( ftypes[col_idx] ) in ( "<class 'int'>", "<type 'long'>" ):
-                        v = '{:,d}'.format(v).replace(',',' ')
-                        c_list += ' big_numbers' # nowrap spaces!
+                        cell_value = '{:,d}'.format(cell_value).replace(',',' ')
+                        css_items += ' big_numbers' # nowrap spaces!
                     else:
-                        v = '{:.2f}'.format(v) # show memory consumption in Mb
+                        cell_value = '{:.2f}'.format(cell_value) # show memory consumption in Mb
 
-                    if f.lower().endswith(' mem, all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
-                        c_list += ' memo_used_whole_db_column'
-                    elif f.lower().endswith(' mem, att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
-                        c_list += ' memo_used_att_level_column'
-                    elif f.lower().endswith(' mem, trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
-                        c_list += ' memo_used_trn_level_column'
-                    elif f.lower().endswith(' mem, stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
-                        c_list += ' memo_used_stm_level_column'
+                    if fld_name.lower().endswith(' mem, all'):          #  ==> 'fb3x_used_all', 'fb4x_used_all'
+                        css_items += ' memo_used_whole_db_column'
+                    elif fld_name.lower().endswith(' mem, att'):     # ==> 'fb3x_used_by_att', 'fb4x_used_by_att'
+                        css_items += ' memo_used_att_level_column'
+                    elif fld_name.lower().endswith(' mem, trn'):     # ==> 'fb3x_used_by_trn', 'fb4x_used_by_trn'
+                        css_items += ' memo_used_trn_level_column'
+                    elif fld_name.lower().endswith(' mem, stm'):     # ==> 'fb3x_used_by_stm', 'fb4x_used_by_stm'
+                        css_items += ' memo_used_stm_level_column'
 
-                elif f.lower().endswith('result'): # ==> 'fb3x_outcome', 'fb4x_outcome', 'fb5x_outcome'
+                elif fld_name.lower().endswith('result'): # ==> 'fb3x_outcome', 'fb4x_outcome', 'fb5x_outcome'
 
-                    v = v.lower()
-                    if 'crash' in v:
-                        c_list += ' fbx_outcome_crash'
+                    cell_value = cell_value.lower()
+                    if 'crash' in cell_value:
+                        css_items += ' fbx_outcome_crash'
                         # 19.12.2020: extract stack-traces (which were gathered during test finish
                         # for every dumps occured within time interval from test lunch to finish)
                         # to separate .html files and provide links to it.
                         stack_trace_html_files = []
-                        if f.lower().startswith('fb3x'): # r['fb3x_vers']:
-                            stack_trace_html_files = fb3x_stack_traces_list
-                        elif f.lower().startswith('fb4x'): # r['fb4x_vers']:
-                            stack_trace_html_files = fb4x_stack_traces_list
-                        elif f.lower().startswith('fb5x'): # r['fb4x_vers']:
-                            stack_trace_html_files = fb5x_stack_traces_list
+
+                        fbvers_key = fld_name.lower().split('_')[0] + '_vers' # 'fb6x_vers'; 'fb5x_vers' etc
+                        stack_trace_html_files = fb_details_map.get(fbvers_key, ('',[]))[1]
 
                         for s in stack_trace_html_files:
                             # Get name of file, extract from it part that points to timestamp of dump (in YYYYmmDD_HHMMSS.zzz form)
                             # and provide URL to this stack trace:
-                            
+
                             # Extract name of full path+file:
                             # /var/tmp/oltp_overall_report/details/oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
                             # ==> oltp-crash-build_33400_run_3052_id_3329.20201219_094111.649.html
@@ -1055,22 +1089,22 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
                             dump_time_obj = datetime.datetime.strptime( dump_time_str, '%Y%m%d_%H%M%S.%f' )
                             # Convert to format dd.mm.YYYY HH:MM:SS.zzz
                             dump_time_url = dump_time_obj.strftime('%d.%m.%Y %H:%M:%S.%f')[:23]
-                            
-                            v += '\n<li><a style="text-decoration:none" href="' + DETLPREF + '/' + stk_file_name + '" target="_blank">' + dump_time_url +'</a></li>'
-                        
-                    elif 'abnormal' in v:
-                        c_list += ' fbx_outcome_abend'
-                    elif 'premature' in v:
-                        c_list += ' fbx_outcome_premature'
+
+                            cell_value += '\n<li><a style="text-decoration:none" href="' + DETLPREF + '/' + stk_file_name + '" target="_blank">' + dump_time_url +'</a></li>'
+
+                    elif 'abnormal' in cell_value:
+                        css_items += ' fbx_outcome_abend'
+                    elif 'premature' in cell_value:
+                        css_items += ' fbx_outcome_premature'
                     else:
-                        v_tooltip = v # "normal: test_time expired at 2023-04-08 16:42:29""
-                        v = 'normal'  # make content shorter, suggested by Vlad.
-                        c_list += ' fbx_outcome_normal'
+                        v_tooltip = cell_value # "normal: test_time expired at 2023-04-08 16:42:29""
+                        cell_value = 'normal'  # make content shorter, suggested by Vlad.
+                        css_items += ' fbx_outcome_normal'
 
                 # NB: several classes will be here:
-                v_style = ' class="' + c_list +'"' if c_list else ''
+                v_style = ' class="' + css_items +'"' if css_items else ''
 
-            main_html_file.write('\n<td' + v_style + ( ' title="'+v_tooltip+'"' if v_tooltip else '') +  '>' + str(v) + '</td>')
+            main_html_file.write('\n<td' + v_style + ( ' title="'+v_tooltip+'"' if v_tooltip else '') +  '>' + str(cell_value) + '</td>')
 
         main_html_file.write('\n</tr>')
 
@@ -1084,5 +1118,3 @@ with connect( db_cfg_object.name, user = db_cfg_object.user.value, password = db
 
 print(showtime(), 'Final report see in: ' + main_html_file.name)
 print(showtime(), 'Bye-bye from '+whoami)
-
-
