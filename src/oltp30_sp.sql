@@ -1081,10 +1081,9 @@ end
 ^ -- sp_supplier_invoice
 
 -----------------------------------------
-
 create or alter procedure sp_cancel_supplier_invoice(
     a_selected_doc_id type of dm_idb default null,
-    a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
+    a_skip_lock_attempt dm_sign default 0
 )
 returns(
     doc_list_id type of dm_idb, -- id of created invoice
@@ -1108,6 +1107,8 @@ as
     declare v_lf char(1) = x'0A';
     declare v_sttm varchar(8192);
 begin
+
+    -- a_skip_lock_attempt : 1 ==> NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 
     -- Randomly chooses invoice from supplier (NOT yet accepted) and CANCEL it
     -- by REMOVING all its data + record in docs header table. It occurs when
@@ -1699,7 +1700,7 @@ end
 
 create or alter procedure sp_cancel_customer_reserve(
     a_selected_doc_id type of dm_idb default null,
-    a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
+    a_skip_lock_attempt dm_sign default 0
 )
 returns (
     doc_list_id type of dm_idb, -- id of new created reserve doc
@@ -1723,6 +1724,8 @@ returns (
     declare v_this dm_dbobj = 'sp_cancel_customer_reserve';
     declare v_lf char(1) = x'0A';
 begin
+
+    -- a_skip_lock_attempt : 1 ==> NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 
     -- Randomly chooses customer reserve (which is NOT yet sold) and CANCEL it
     -- by REMOVING all its data + record in docs header table. It occurs when
@@ -1950,7 +1953,7 @@ end
 
 create or alter procedure sp_cancel_write_off(
     a_selected_doc_id type of dm_idb default null,
-    a_skip_lock_attempt dm_sign default 0 -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
+    a_skip_lock_attempt dm_sign default 0
 )
 returns (
     doc_list_id type of dm_idb, -- id of invoice being added to stock
@@ -1976,6 +1979,8 @@ as
     declare c_can_skip_order_clause dm_sign = 0;
     declare v_lf char(1) = x'0A';
 begin
+
+    -- a_skip_lock_attempt = 1 ==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from sp_cancel_adding_invoice)
 
     -- Randomly chooses waybill (ex. customer reserve after it was sold) and
     -- MOVES ("returns") it back to state "customer reserve" thus cancelling
@@ -2322,7 +2327,7 @@ end
 create or alter procedure sp_add_invoice_to_stock(
     a_selected_doc_id type of dm_idb default null,
     a_cancel_mode dm_sign default 0,
-    a_skip_lock_attempt dm_sign default 0, -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
+    a_skip_lock_attempt dm_sign default 0,
     dbg int default 0
 )
 returns (
@@ -2363,6 +2368,8 @@ as
     end
 
 begin
+
+    -- a_skip_lock_attempt = 1 ==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
 
     -- This SP implements TWO tasks (see parameter `a_cancel_mode`):
     -- 1) MOVES invoice to the state "ACCEPTED" after we check its content;
@@ -2547,6 +2554,8 @@ begin
             end
         end -- block for CANCELLING mode
 
+        if (dbg=1) then leave;
+
         -- Change info in doc header for INVOICE.
         -- 1. trigger d`oc_list_biud will call sp_kill_qty_storno which:
         --    update qdistr.snd_optype_id (or rcv_optype_id)
@@ -2560,7 +2569,7 @@ begin
             dts_fix = iif( :a_cancel_mode = 0, 'now', null )
         where h.id = :doc_list_id;
 
-        if (dbg=1) then leave;
+        if (dbg=2) then leave;
 
         -- build unique list of client orders which still need to reserve some wares
         -- and create for each item of this list new reserve that is linked to client_order.
@@ -2678,7 +2687,7 @@ end
 
 create or alter procedure sp_cancel_adding_invoice(
     a_selected_doc_id type of dm_idb default null,
-    a_skip_lock_attempt dm_sign default 0, -- 1==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
+    a_skip_lock_attempt dm_sign default 0,
     dbg int default 0
 )
 returns (
@@ -2701,6 +2710,8 @@ as
     declare v_stt varchar(255);
     declare v_this dm_dbobj = 'sp_cancel_adding_invoice';
 begin
+
+    -- a_skip_lock_attempt = 1 ==> do NOT call sp_lock_selected_doc because this doc is already locked (see call from s`p_cancel_supplier_order)
 
     -- MOVES invoice from state 'accepted' to state 'to be checked'.
     -- Delegates all this work to sp_add_invoice_to_stock.

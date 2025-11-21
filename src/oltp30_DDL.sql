@@ -4414,8 +4414,20 @@ begin
             open c_qd_rows_for_doc;
             while (1=1) do
             begin
+                -- temp, 19.11.2025
+                --rdb$set_context('USER_SESSION','DBG_QD_ROWS_FOR_DOC_BEFORE_FETCH',
+                --    'WHERE EXPR: '
+                --    ||' q.ware_id = '|| coalesce( :v_dd_ware_id, '<?>')
+                --    || ' and q.snd_optype_id = ' || coalesce( :a_old_optype, '<?>')
+                --    || ' and q.rcv_optype_id = ' || coalesce( :v_old_rcv_optype, '<?>')
+                --    || ' and q.worker_id is not distinct from ' || coalesce( fn_this_worker_seq_no(), 'NULL')
+                --    || ' and q.snd_id = ' || coalesce( :v_dd_id, '<?>')
+                --);
+
                 fetch c_qd_rows_for_doc into v_id;
                 if ( row_count = 0 ) then leave;
+
+                -- temp, 19.11.2025 rdb$set_context('USER_SESSION','DBG_QD_ROWS_FOR_DOC', 'v_id=' || v_id);
                 i = i+1; -- total number of processed rows
                 delete from v_qdistr_name_for_del where current of c_qd_rows_for_doc;
             end
@@ -5939,6 +5951,7 @@ begin
             -- NB:  BASE_DOC_ID,DEPENDEND_DOC_ID  ==> UNIQ index in tmp$dep_docs
             insert into tmp$dep_docs( base_doc_id, dependend_doc_id, dependend_doc_state)
             values( :a_base_doc_id, :v_dependend_doc_id, :v_dependend_doc_state );
+            --  temp, 19.11.2025 rdb$set_context('USER_SESSION','DBG_ADD_TMP_DEP_DOCS', 'a_base_doc_id=' || a_base_doc_id || ', dependend_doc_id=' || :v_dependend_doc_id);
         when any do
             -- ::: nb ::: do NOT use "wh`en gdscode <mnemona>" followed by "wh`en any":
             -- the latter ("w`hen ANY") will handle ALWAYS, even if "w`hen <mnemona>"
@@ -7147,12 +7160,22 @@ as
     declare v_msg dm_info = '';
     declare v_info dm_info = '';
     declare v_this dm_dbobj = 'doc_list_biud';
-    declare v_affects_on_inventory_balance smallint;
+    declare v_affects_on_inventory_balance dm_sign NOT NULL;
     declare v_old_op type of dm_idb;
     declare v_new_op type of dm_idb;
     declare v_lf char(1) = x'0A';
     declare v_sttm varchar(8192);
 begin
+
+    -- 18.11.2025 NB: 'v_affects_on_inventory_balance' must be NOT null.
+    -- Otherwise hard-to-detect error can occur with attempt to store
+    -- negative remainders in invnt_saldo. Found for query:
+    -- "select ... from optypes o where o.id in( :v_old_op, :v_new_op )"
+    -- when v_new_op was null.
+    -- Due to regression in 6.x, this query did not returned record and
+    -- 'v_affects_on_inventory_balance' remained null.
+    -- This, in turn, prevented execution of 'sp_kill_qty_storno'.
+    -- See https://github.com/FirebirdSQL/firebird/issues/8805
 
     if ( inserting ) then
         new.id = coalesce(new.id, gen_id(g_common,1));
@@ -7249,6 +7272,13 @@ begin
     where o.id in( :v_old_op, :v_new_op )
     into v_affects_on_inventory_balance;
     -- #ACTIVATE#IF#USE_ES_EQU_0#END# */
+
+    -- temp, 19.11.2025
+    --rdb$set_context('USER_SESSION','TRG_DOC_LIST_BIUD',
+    --    'v_old_op = ' || coalesce(v_old_op, '<NULL>')
+    --    || ', v_new_op = ' || coalesce(v_new_op, '<NULL>')
+    --    || ', RESULT: v_affects_on_inventory_balance=' || coalesce(v_affects_on_inventory_balance, '<NULL>')
+    --);
 
     -- 20.09.2014 1825: remove calls of s`p_add_invnt_log to SPs (reduce scans of doc_data)
     if ( v_affects_on_inventory_balance > 0 and (deleting or updating and new.optype_id is distinct from old.optype_id) )
@@ -8660,25 +8690,72 @@ end
 
 --------------------------------------------------------------------------------
 
-create or alter procedure srv_predictable_unit_choice returns(
+create or alter procedure srv_predictable_unit_choice(
+    a_included_modes dm_info default '',
+    a_included_kinds dm_info default '',
+    a_excluded_modes dm_info default '',
+    a_excluded_kinds dm_info default ''
+)
+returns(
     unit dm_name
 ) as
+    declare v_dts_beg timestamp;
+    declare c_unit_for_gather_mon_data dm_dbobj = 'srv_fill_mon'; -- do NOT change the name of this SP!
+    declare c_unit_for_recalc_idx_stat dm_dbobj = 'srv_recalc_idx_stat'; -- do NOT change the name of this SP!
     declare v_this dm_dbobj = 'srv_predictable_unit_choice';
     declare v_prev varchar(100);
+    declare function fn_internal_enable_mon_query  returns smallint deterministic as
+    begin
+        return ( cast(rdb$get_context('USER_SESSION', 'ENABLE_MON_QUERY') as smallint) );
+    end
 begin
+
+    a_included_modes = coalesce( a_included_modes, ''); -- business_ops.mode = one of: {stock, payments, service}
+    a_included_kinds = coalesce( a_included_kinds, ''); -- business_ops.mode = one of: {creation, removal, state_next, state_back, service}
+    a_excluded_modes = coalesce( a_excluded_modes, '');
+    a_excluded_kinds = coalesce( a_excluded_kinds, '');
+
+    if ( rdb$get_context('USER_SESSION','PERF_WATCH_BEG') is null ) then
+    begin
+        select p.dts_beg from perf_log p where p.unit = 'perf_watch_interval' order by dts_beg+0 desc rows 1 into v_dts_beg;
+        rdb$set_context( 'USER_SESSION','PERF_WATCH_BEG', v_dts_beg );
+    end
+
+    if ( cast('now' as timestamp) < cast( rdb$get_context('USER_SESSION','PERF_WATCH_BEG') as timestamp) ) then 
+    begin
+        -- 31.12.2018 We have to SKIP from removal or changing doc state 'backward'
+        -- on PREPARING phase, i.e. since 0th to <warm_time> minute of total test time.
+        -- REASON: lot of garbage will be accumulated otherwise, database "useful size" grows too slowly.
+        a_included_kinds = 'creation,state_next,service'; -- 'service' --> we can NOT skip srv_make_invnt_saldo and srv_make_money_saldo !
+        a_excluded_kinds = 'removal';
+    end
+
     v_prev = coalesce( rdb$get_context('USER_SESSION','PREV_SELECTED_INFO'), rpad('',80,' ') || cast(0 as char(11)) );
-    select cast( b.unit as char(80) ) || cast( b.predictable_selection_priority as char(11) )
-    from business_ops b
-    where b.predictable_selection_priority > cast( substring( :v_prev from 81 ) as int )
-    order by b.predictable_selection_priority
+    select cast( o.unit as char(80) ) || cast( o.predictable_selection_priority as char(11) )
+    from business_ops o
+    where
+        o.predictable_selection_priority > cast( substring( :v_prev from 81 ) as int )
+        and ( fn_internal_enable_mon_query() = 1 or o.unit <> :c_unit_for_gather_mon_data ) -- do NOT choose srv_fill_mon if mon query disabled
+        and ( :a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
+        and ( :a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
+        and ( :a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
+        and ( :a_excluded_kinds = '' or :a_excluded_kinds||',' NOT containing trim(o.kind)||',' )
+    order by o.predictable_selection_priority
     rows 1
     into v_prev;
     if (row_count = 0) then
     begin
         -- returns to first operation: sp_client_order
-        select cast( b.unit as char(80) ) || cast( b.predictable_selection_priority as char(11) )
-        from business_ops b
-        order by b.predictable_selection_priority
+        select cast( o.unit as char(80) ) || cast( o.predictable_selection_priority as char(11) )
+        from business_ops o
+        where
+            --o.unit <> :c_unit_for_recalc_idx_stat
+            ( fn_internal_enable_mon_query() = 1 or o.unit <> :c_unit_for_gather_mon_data ) -- do NOT choose srv_fill_mon if mon query disabled
+        and ( :a_included_modes = '' or :a_included_modes||',' containing trim(o.mode)||',' )
+        and ( :a_included_kinds = '' or :a_included_kinds||',' containing trim(o.kind)||',' )
+        and ( :a_excluded_modes = '' or :a_excluded_modes||',' NOT containing trim(o.mode)||',' )
+        and ( :a_excluded_kinds = '' or :a_excluded_kinds||',' NOT containing trim(o.kind)||',' )
+        order by o.predictable_selection_priority
         rows 1
         into v_prev;
         if (row_count = 0) then

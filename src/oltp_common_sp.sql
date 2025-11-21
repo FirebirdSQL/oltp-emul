@@ -1505,8 +1505,9 @@ begin
                 order by dts_beg desc
                 rows 1;
 
-                if ( row_count = 0 ) then
-                     exception ex_record_not_found;
+                -- disabled 18.11.2025: we can ignore absense of this row
+                -- if ( row_count = 0 ) then
+                --      exception ex_record_not_found;
 
                 -- This point can be achieved by only one transaction (because of serialized access
                 -- to record which was  updated by previous statement).
@@ -1520,7 +1521,10 @@ begin
                     --         negative remainder of some ware_id. NB: context var 'QMISM_VERIFY_BITSET' should
                     --         have value N for which result of bin_and( N, 2 ) will be 1 in order this checkto be done.
                     begin
-                        v_exc_info = 'ABNORMAL FINISH' ||iif( a_gdscode is null, ': gds = null, some data does not match or is missing.', ', gds = ' || coalesce(:a_gdscode,'<?>') );
+                        v_exc_info = 'ABNORMAL FINISH'
+                                     || ', gds = ' || coalesce(:a_gdscode,'<?>')
+                                     || ', a_char = ' || a_char
+                        ;
                     end
                 else if (a_char = '2') then
                     -- '2' ==> call from SP_CHECK_TO_STOP_WORK: expected test finish due to test_time expired.
@@ -1986,6 +1990,9 @@ returns(
     test_intervals int
 ) as
 begin
+
+    if ( (select result from fn_remote_process) containing 'IBExpert' ) then exit; -- 19.11.2025
+
     test_time_dts_beg = rdb$get_context('USER_SESSION','PERF_WATCH_BEG');
     test_time_dts_end = rdb$get_context('USER_SESSION','PERF_WATCH_END');
 

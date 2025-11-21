@@ -2652,7 +2652,7 @@ goto:eof
                   echo           -- or change its state to NEXT, or does service unit. But we must SKIP any cancel op:
                   echo           select p.unit
                   echo           from srv_random_unit_choice(
-                  echo                   '',
+                  echo                   '%unit_modes_to_include%', -- see optional parameter 'unit_modes_to_include' in config
                   echo                   'creation,state_next,service,',
                   echo                   '',
                   echo                   'removal'
@@ -2708,7 +2708,7 @@ goto:eof
                       echo               -- config parameter unit_selection_method = 'random'
                       echo               select p.unit
                       echo               from srv_random_unit_choice(
-                      echo                   '',
+                      echo                   '%unit_modes_to_include%', -- see optional parameter 'unit_modes_to_include' in config
                       echo                   '',
                       echo                   '',
                       echo                   ''
@@ -2717,7 +2717,12 @@ goto:eof
                   ) else (
                       echo               -- config parameter unit_selection_method = 'predictable'
                       echo               select p.unit
-                      echo               from srv_predictable_unit_choice p
+                      echo               from srv_predictable_unit_choice(
+                      echo                   '%unit_modes_to_include%', -- see optional parameter 'unit_modes_to_include' in config
+                      echo                   '',
+                      echo                   '',
+                      echo                   ''
+                      echo               ^) p
                       echo               into v_unit;
                   )
                   echo           end

@@ -1611,6 +1611,7 @@ tmperr=$tmpdir/$this_script_name_only.${dts}.err
 tmplst=$tmpdir/$this_script_name_only.${dts}.lst
 tmpsql=$tmpdir/$this_script_name_only.${dts}.sql
 
+
 ###############################################
 ###    i n i t i a l i z e    j o b l o g   ###
 ###############################################
@@ -2640,10 +2641,76 @@ if [[ $CREATE_EMPTY_DB -eq 0 ]]; then
     free -m >>$tmplog
     cat $tmplog >>$joblog
     rm -f $tmplog
+    sho "Completed." $joblog
 fi
 
-sho "Completed. Now run OLTP-EMUL test with launching $winq ISQL sessions agains FB $fb." $joblog
 
+# 16.11.25:
+trcrun=$tmpdir/1trace.${fb_mnemona}.sh
+trccfg=$tmpdir/1trace.${fb_mnemona}.cfg
+sho "Preparing optional script and config to run trace" $joblog
+cat <<-EOF > $trcrun
+#!/bin/bash
+
+trclog=$tmpdir/$(basename -- $trcrun)_\$(date +'%Y%m%d_%H%M%S').log
+echo Trace log: \$trclog
+$fbc/fbsvcmgr $host/$port:service_mgr -user $usr -password $pwd info_server_version >>\$trclog
+echo Trace config: >>\$trclog
+cat $trccfg >>\$trclog
+$fbc/fbsvcmgr $host/$port:service_mgr -user $usr -password $pwd action_trace_start trc_cfg $trccfg 2>&1 1>>\$trclog
+EOF
+
+# remove path and extenstion:
+dbfilename=$(basename -- ${dbnm%%.*})
+
+# Insert backslash before every character that must be escaped in the pattern for SIMILAR TO:
+dbfile_esc=$(echo $dbfilename | sed 's/[_\(\)^+-]/\\&/g')
+
+# Writing DB pattern to the trace config:
+echo "database = (%[\\\\/](ssecurity[[:DIGIT:]]+|${dbfile_esc}).fdb|(ssecurity.db|eemployee))"> $trccfg
+
+# Writing rest lines to the trace config:
+cat <<-"EOF" >> $trccfg
+    {
+        enabled = true
+        log_errors = true
+
+        time_threshold = 0
+        #exclude_filter = "%(execute[[:WHITESPACE:]]+block[[:WHITESPACE:]]+as)%"
+        #include_filter = "%trace_me%"
+
+        log_initfini = false
+
+        #log_connections = true
+        #log_transactions = true
+        #log_statement_prepare = true
+        #log_statement_free = true
+        #log_statement_start = true
+
+        log_statement_finish = true
+
+        #log_procedure_start = true
+        #log_procedure_finish = true
+
+        #log_function_start = true
+        #log_function_finish = true
+
+        #log_trigger_start = true
+        #log_trigger_finish = true
+
+        #log_context = true
+
+        #print_plan = true
+        #explain_plan = true
+        print_perf = true
+
+        max_sql_length = 60000
+        max_arg_length = 500
+        max_arg_count = 500
+    }
+EOF
+chmod +x $trcrun
+sho "Completed. Script to run trace: ${trcrun}" $joblog
 
 cat <<-EOF >$tmplog
 #################################################
@@ -2656,5 +2723,7 @@ cd $OLTP_SRC_DIR 1>$tmperr 2>&1
 catch_err $joblog $tmperr
 rm -f $tmperr
 sho "Current dir: ${PWD}, launch: ./1run_oltp_emul.sh ./$(basename -- $oltp_emul_conf_name) $winq" $joblog
+
+read -n 1 -s -r -p ". . .  P R E S S    A N Y    K E Y  . . ."
 
 bash ./1run_oltp_emul.sh ./$(basename -- $oltp_emul_conf_name) $winq
